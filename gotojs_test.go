@@ -163,7 +163,7 @@ func createNestedStructure(depth int) any {
 }
 
 func testValueConversion(t *testing.T, ctx *Runtime, input any, validator func(*Value)) {
-	result, err := ToJsValue(ctx, input)
+	result, err := ctx.ToValue(input)
 	require.NoError(t, err, "ToJSValue should not return error for input %T: %v", input, input)
 	require.NotNil(t, result, "ToJSValue should not return nil for input %T: %v", input, input)
 	defer result.Free()
@@ -171,7 +171,7 @@ func testValueConversion(t *testing.T, ctx *Runtime, input any, validator func(*
 }
 
 func testErrorCase(t *testing.T, ctx *Runtime, input any, expectedErrorSubstring string) {
-	result, err := ToJsValue(ctx, input)
+	result, err := ctx.ToValue(input)
 	if result != nil {
 		result.Free()
 	}
@@ -203,7 +203,7 @@ func testFloatValue(t *testing.T, ctx *Runtime, input any, expected float64, tol
 }
 
 func TestJSValueConversion(t *testing.T) {
-	runtime := must(New())
+	runtime := must(New(Config{}))
 	defer runtime.Close()
 	ctx := runtime
 
@@ -244,12 +244,12 @@ func TestJSValueConversion(t *testing.T) {
 			}
 
 			t.Run("ByteRuneComplexTypes", func(t *testing.T) {
-				jsValue, err := ToJsValue(runtime, []byte("hello world"))
+				jsValue, err := runtime.ToValue([]byte("hello world"))
 				require.NoError(t, err)
 				defer jsValue.Free()
 
 				assert.NotNil(t, jsValue)
-				assert.True(t, jsValue.IsByteArray())
+				assert.True(t, jsValue.IsArrayBuffer())
 			})
 
 			// Special handling for int32 (uses Int32() method)
@@ -413,15 +413,15 @@ func TestJSValueConversion(t *testing.T) {
 				t.Run(test.name, func(t *testing.T) {
 					testValueConversion(t, ctx, test.input, func(result *Value) {
 						assert.True(t, result.IsObject(), "Complex number should be object")
-						obj := result.toObject()
+						obj := result.Clone()
 						defer obj.Free()
 
-						realProp := obj.GetPropertyStr("real")
+						realProp := must(obj.Get("real"))
 						defer realProp.Free()
 						assert.True(t, realProp.IsNumber(), "Real part should be number")
 						assert.InDelta(t, test.real, realProp.Float64(), 1e-10)
 
-						imagProp := obj.GetPropertyStr("imag")
+						imagProp := must(obj.Get("imag"))
 						defer imagProp.Free()
 						assert.True(t, imagProp.IsNumber(), "Imaginary part should be number")
 						assert.InDelta(t, test.imag, imagProp.Float64(), 1e-10)
@@ -483,11 +483,11 @@ func TestJSValueConversion(t *testing.T) {
 				slice := []int{1, 2, 3, 4, 5}
 				testValueConversion(t, ctx, slice, func(result *Value) {
 					assert.True(t, result.IsArray(), "Int slice should be array")
-					arr := result.toObject()
+					arr := result.Clone()
 					defer arr.Free()
 
 					for i, expected := range slice {
-						elem := arr.GetPropertyIndex(int64(i))
+						elem := must(arr.Index(uint32(int64(i))))
 						defer elem.Free()
 						assert.True(t, elem.IsNumber(), "Array element should be number")
 						assert.Equal(t, int64(expected), elem.Int64())
@@ -499,11 +499,11 @@ func TestJSValueConversion(t *testing.T) {
 				slice := []string{"hello", "world", "test"}
 				testValueConversion(t, ctx, slice, func(result *Value) {
 					assert.True(t, result.IsArray(), "String slice should be array")
-					arr := result.toObject()
+					arr := result.Clone()
 					defer arr.Free()
 
 					for i, expected := range slice {
-						elem := arr.GetPropertyIndex(int64(i))
+						elem := must(arr.Index(uint32(int64(i))))
 						defer elem.Free()
 						assert.True(t, elem.IsString(), "Array element should be string")
 						assert.Equal(t, expected, elem.String())
@@ -531,11 +531,11 @@ func TestJSValueConversion(t *testing.T) {
 				arr := [3]int{1, 2, 3}
 				testValueConversion(t, ctx, arr, func(result *Value) {
 					assert.True(t, result.IsArray(), "Int array should be array")
-					jsArr := result.toObject()
+					jsArr := result.Clone()
 					defer jsArr.Free()
 
 					for i, expected := range arr {
-						elem := jsArr.GetPropertyIndex(int64(i))
+						elem := must(jsArr.Index(uint32(int64(i))))
 						defer elem.Free()
 						assert.True(t, elem.IsNumber(), "Array element should be number")
 						assert.Equal(t, int64(expected), elem.Int64())
@@ -547,11 +547,11 @@ func TestJSValueConversion(t *testing.T) {
 				arr := [2]string{"hello", "world"}
 				testValueConversion(t, ctx, arr, func(result *Value) {
 					assert.True(t, result.IsArray(), "String array should be array")
-					jsArr := result.toObject()
+					jsArr := result.Clone()
 					defer jsArr.Free()
 
 					for i, expected := range arr {
-						elem := jsArr.GetPropertyIndex(int64(i))
+						elem := must(jsArr.Index(uint32(int64(i))))
 						defer elem.Free()
 						assert.True(t, elem.IsString(), "Array element should be string")
 						assert.Equal(t, expected, elem.String())
@@ -576,11 +576,11 @@ func TestJSValueConversion(t *testing.T) {
 				}
 				testValueConversion(t, ctx, m, func(result *Value) {
 					assert.True(t, result.IsObject(), "Map should be object")
-					obj := result.toObject()
+					obj := result.Clone()
 					defer obj.Free()
 
 					for key, expectedValue := range m {
-						prop := obj.GetPropertyStr(key)
+						prop := must(obj.Get(key))
 						defer prop.Free()
 						assert.True(t, prop.IsNumber(), "Map value should be number")
 						assert.Equal(t, int64(expectedValue), prop.Int64())
@@ -596,12 +596,12 @@ func TestJSValueConversion(t *testing.T) {
 				}
 				testValueConversion(t, ctx, m, func(result *Value) {
 					assert.True(t, result.IsObject(), "Map should be object")
-					obj := result.toObject()
+					obj := result.Clone()
 					defer obj.Free()
 
 					for key, expectedValue := range m {
 						keyStr := fmt.Sprintf("%d", key)
-						prop := obj.GetPropertyStr(keyStr)
+						prop := must(obj.Get(keyStr))
 						defer prop.Free()
 						assert.True(t, prop.IsString(), "Map value should be string")
 						assert.Equal(t, expectedValue, prop.String())
@@ -630,15 +630,15 @@ func TestJSValueConversion(t *testing.T) {
 			s := SimpleStruct{Name: "John", Age: 30}
 			testValueConversion(t, ctx, s, func(result *Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
-				obj := result.toObject()
+				obj := result.Clone()
 				defer obj.Free()
 
-				nameProp := obj.GetPropertyStr("Name")
+				nameProp := must(obj.Get("Name"))
 				defer nameProp.Free()
 				assert.True(t, nameProp.IsString(), "Name field should be string")
 				assert.Equal(t, "John", nameProp.String())
 
-				ageProp := obj.GetPropertyStr("Age")
+				ageProp := must(obj.Get("Age"))
 				defer ageProp.Free()
 				assert.True(t, ageProp.IsNumber(), "Age field should be number")
 				assert.Equal(t, int64(30), ageProp.Int64())
@@ -649,21 +649,21 @@ func TestJSValueConversion(t *testing.T) {
 			s := StructWithMethods{Value: 10}
 			testValueConversion(t, ctx, s, func(result *Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
-				obj := result.toObject()
+				obj := result.Clone()
 				defer obj.Free()
 
 				// Check field
-				valueProp := obj.GetPropertyStr("Value")
+				valueProp := must(obj.Get("Value"))
 				defer valueProp.Free()
 				assert.True(t, valueProp.IsNumber(), "Value field should be number")
 				assert.Equal(t, int64(10), valueProp.Int64())
 
 				// Check methods
-				getValueProp := obj.GetPropertyStr("GetValue")
+				getValueProp := must(obj.Get("GetValue"))
 				defer getValueProp.Free()
 				assert.True(t, getValueProp.IsFunction(), "GetValue should be function")
 
-				getDoubleValueProp := obj.GetPropertyStr("GetDoubleValue")
+				getDoubleValueProp := must(obj.Get("GetDoubleValue"))
 				defer getDoubleValueProp.Free()
 				assert.True(t, getDoubleValueProp.IsFunction(), "GetDoubleValue should be function")
 			})
@@ -675,26 +675,26 @@ func TestJSValueConversion(t *testing.T) {
 			s2 := &s1
 			testValueConversion(t, ctx, s2, func(result *Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
-				obj := result.toObject()
+				obj := result.Clone()
 				defer obj.Free()
 
 				// Check field
-				valueProp := obj.GetPropertyStr("Value")
+				valueProp := must(obj.Get("Value"))
 				defer valueProp.Free()
 				assert.True(t, valueProp.IsNumber(), "Value field should be number")
 				assert.Equal(t, int64(20), valueProp.Int64())
 
 				// Check value receiver method
-				getValueProp := obj.GetPropertyStr("GetValue")
+				getValueProp := must(obj.Get("GetValue"))
 				defer getValueProp.Free()
 				assert.True(t, getValueProp.IsFunction(), "GetValue should be function")
 
 				// Check pointer receiver methods
-				setValueProp := obj.GetPropertyStr("SetValue")
+				setValueProp := must(obj.Get("SetValue"))
 				defer setValueProp.Free()
 				assert.True(t, setValueProp.IsFunction(), "SetValue should be function")
 
-				getValuePlusOneProp := obj.GetPropertyStr("GetValuePlusOne")
+				getValuePlusOneProp := must(obj.Get("GetValuePlusOne"))
 				defer getValuePlusOneProp.Free()
 				assert.True(t, getValuePlusOneProp.IsFunction(), "GetValuePlusOne should be function")
 			})
@@ -711,28 +711,28 @@ func TestJSValueConversion(t *testing.T) {
 			}
 			testValueConversion(t, ctx, s, func(result *Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
-				obj := result.toObject()
+				obj := result.Clone()
 				defer obj.Free()
 
 				// Check renamed field
-				renamedProp := obj.GetPropertyStr("renamed")
+				renamedProp := must(obj.Get("renamed"))
 				defer renamedProp.Free()
 				assert.True(t, renamedProp.IsNumber(), "Renamed field should be accessible")
 				assert.Equal(t, int64(42), renamedProp.Int64())
 
 				// Check public field
-				publicProp := obj.GetPropertyStr("public_field")
+				publicProp := must(obj.Get("public_field"))
 				defer publicProp.Free()
 				assert.True(t, publicProp.IsString(), "Public field should be accessible")
 				assert.Equal(t, "public", publicProp.String())
 
 				// Check omitted field (should not exist)
-				omittedProp := obj.GetPropertyStr("OmittedField")
+				omittedProp := must(obj.Get("OmittedField"))
 				defer omittedProp.Free()
 				assert.True(t, omittedProp.IsUndefined(), "Omitted field should not exist")
 
 				// Check default field (uses struct field name)
-				defaultProp := obj.GetPropertyStr("DefaultField")
+				defaultProp := must(obj.Get("DefaultField"))
 				defer defaultProp.Free()
 				assert.True(t, defaultProp.IsBool(), "Default field should be accessible")
 				assert.True(t, defaultProp.Bool())
@@ -746,22 +746,22 @@ func TestJSValueConversion(t *testing.T) {
 			}
 			testValueConversion(t, ctx, s, func(result *Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
-				obj := result.toObject()
+				obj := result.Clone()
 				defer obj.Free()
 
 				// Check embedded fields are accessible at top level
-				nameProp := obj.GetPropertyStr("Name")
+				nameProp := must(obj.Get("Name"))
 				defer nameProp.Free()
 				assert.True(t, nameProp.IsString(), "Embedded Name field should be accessible")
 				assert.Equal(t, "embedded", nameProp.String())
 
-				ageProp := obj.GetPropertyStr("Age")
+				ageProp := must(obj.Get("Age"))
 				defer ageProp.Free()
 				assert.True(t, ageProp.IsNumber(), "Embedded Age field should be accessible")
 				assert.Equal(t, int64(25), ageProp.Int64())
 
 				// Check new field
-				newFieldProp := obj.GetPropertyStr("NewField")
+				newFieldProp := must(obj.Get("NewField"))
 				defer newFieldProp.Free()
 				assert.True(t, newFieldProp.IsString(), "New field should be accessible")
 				assert.Equal(t, "new", newFieldProp.String())
@@ -775,16 +775,16 @@ func TestJSValueConversion(t *testing.T) {
 			}
 			testValueConversion(t, ctx, s, func(result *Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
-				obj := result.toObject()
+				obj := result.Clone()
 				defer obj.Free()
 
 				// Check embedded pointer fields are not accessible at top level
-				nameProp := obj.GetPropertyStr("Name")
+				nameProp := must(obj.Get("Name"))
 				defer nameProp.Free()
 				assert.True(t, nameProp.IsUndefined(), "Embedded pointer Name field should not be accessible")
 
 				// Check extra field
-				extraFieldProp := obj.GetPropertyStr("ExtraField")
+				extraFieldProp := must(obj.Get("ExtraField"))
 				defer extraFieldProp.Free()
 				assert.True(t, extraFieldProp.IsString(), "Extra field should be accessible")
 				assert.Equal(t, "extra", extraFieldProp.String())
@@ -798,22 +798,22 @@ func TestJSValueConversion(t *testing.T) {
 			}
 			testValueConversion(t, ctx, s, func(result *Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
-				obj := result.toObject()
+				obj := result.Clone()
 				defer obj.Free()
 
 				// Check embedded pointer fields are accessible at top level
-				nameProp := obj.GetPropertyStr("Name")
+				nameProp := must(obj.Get("Name"))
 				defer nameProp.Free()
 				assert.True(t, nameProp.IsString(), "Embedded pointer Name field should be accessible")
 				assert.Equal(t, "pointer_embedded", nameProp.String())
 
-				ageProp := obj.GetPropertyStr("Age")
+				ageProp := must(obj.Get("Age"))
 				defer ageProp.Free()
 				assert.True(t, ageProp.IsNumber(), "Embedded pointer Age field should be accessible")
 				assert.Equal(t, int64(30), ageProp.Int64())
 
 				// Check extra field
-				extraFieldProp := obj.GetPropertyStr("ExtraField")
+				extraFieldProp := must(obj.Get("ExtraField"))
 				defer extraFieldProp.Free()
 				assert.True(t, extraFieldProp.IsString(), "Extra field should be accessible")
 				assert.Equal(t, "extra", extraFieldProp.String())
@@ -833,53 +833,53 @@ func TestJSValueConversion(t *testing.T) {
 			}
 			testValueConversion(t, ctx, s, func(result *Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
-				obj := result.toObject()
+				obj := result.Clone()
 				defer obj.Free()
 
-				customIntProp := obj.GetPropertyStr("CustomInt")
+				customIntProp := must(obj.Get("CustomInt"))
 				defer customIntProp.Free()
 				assert.True(t, customIntProp.IsNumber(), "Embedded CustomInt field should be accessible")
 				assert.Equal(t, int64(42), customIntProp.Int64())
 
-				customUintProp := obj.GetPropertyStr("CustomUint")
+				customUintProp := must(obj.Get("CustomUint"))
 				defer customUintProp.Free()
 				assert.True(t, customUintProp.IsNumber(), "Embedded CustomUint field should be accessible")
 				assert.Equal(t, int64(100), customUintProp.Int64())
 
-				customUint64Prop := obj.GetPropertyStr("CustomUint64")
+				customUint64Prop := must(obj.Get("CustomUint64"))
 				defer customUint64Prop.Free()
 				assert.True(t, customUint64Prop.IsNumber(), "Embedded CustomUint64 field should be accessible")
 				assert.Equal(t, float64(math.MaxUint64), customUint64Prop.Float64())
 
-				customFloat32Prop := obj.GetPropertyStr("CustomFloat32")
+				customFloat32Prop := must(obj.Get("CustomFloat32"))
 				defer customFloat32Prop.Free()
 				assert.True(t, customFloat32Prop.IsNumber(), "Embedded CustomFloat32 field should be accessible")
 				assert.InDelta(t, 3.14159, customFloat32Prop.Float64(), 0.0001)
 
-				customBoolProp := obj.GetPropertyStr("CustomBool")
+				customBoolProp := must(obj.Get("CustomBool"))
 				defer customBoolProp.Free()
 				assert.True(t, customBoolProp.IsBool(), "Embedded CustomBool field should be accessible")
 				assert.True(t, customBoolProp.Bool())
 
-				customStringProp := obj.GetPropertyStr("CustomString")
+				customStringProp := must(obj.Get("CustomString"))
 				defer customStringProp.Free()
 				assert.True(t, customStringProp.IsString(), "Embedded CustomString field should be accessible")
 				assert.Equal(t, "embedded_string", customStringProp.String())
 
-				getValueProp := obj.GetPropertyStr("GetValue")
+				getValueProp := must(obj.Get("GetValue"))
 				defer getValueProp.Free()
 				assert.True(t, getValueProp.IsFunction(), "GetValue method should be accessible")
 
-				stringMethodProp := obj.GetPropertyStr("String")
+				stringMethodProp := must(obj.Get("String"))
 				defer stringMethodProp.Free()
 				assert.True(t, stringMethodProp.IsFunction(), "String method should be accessible")
 
-				customIntPtrProp := obj.GetPropertyStr("CustomIntPtr")
+				customIntPtrProp := must(obj.Get("CustomIntPtr"))
 				defer customIntPtrProp.Free()
 				assert.True(t, customIntPtrProp.IsNumber(), "Embedded CustomIntPtr field should be accessible")
 				assert.Equal(t, int64(0), customIntPtrProp.Int64())
 
-				extraFieldProp := obj.GetPropertyStr("ExtraField")
+				extraFieldProp := must(obj.Get("ExtraField"))
 				defer extraFieldProp.Free()
 				assert.True(t, extraFieldProp.IsString(), "Extra field should be accessible")
 				assert.Equal(t, "extra", extraFieldProp.String())
@@ -894,20 +894,20 @@ func TestJSValueConversion(t *testing.T) {
 			}
 			testValueConversion(t, ctx, s, func(result *Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
-				obj := result.toObject()
+				obj := result.Clone()
 				defer obj.Free()
 
-				aliasIntProp := obj.GetPropertyStr("AliasInt")
+				aliasIntProp := must(obj.Get("AliasInt"))
 				defer aliasIntProp.Free()
 				assert.True(t, aliasIntProp.IsNumber(), "Embedded AliasInt field should be accessible")
 				assert.Equal(t, int64(100), aliasIntProp.Int64())
 
-				aliasStringProp := obj.GetPropertyStr("AliasString")
+				aliasStringProp := must(obj.Get("AliasString"))
 				defer aliasStringProp.Free()
 				assert.True(t, aliasStringProp.IsString(), "Embedded AliasString field should be accessible")
 				assert.Equal(t, "alias_test", aliasStringProp.String())
 
-				extraFieldProp := obj.GetPropertyStr("ExtraField")
+				extraFieldProp := must(obj.Get("ExtraField"))
 				defer extraFieldProp.Free()
 				assert.True(t, extraFieldProp.IsString(), "Extra field should be accessible")
 				assert.Equal(t, "extra", extraFieldProp.String())
@@ -922,28 +922,28 @@ func TestJSValueConversion(t *testing.T) {
 			}
 			testValueConversion(t, ctx, s, func(result *Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
-				obj := result.toObject()
+				obj := result.Clone()
 				defer obj.Free()
 
-				defIntProp := obj.GetPropertyStr("DefInt")
+				defIntProp := must(obj.Get("DefInt"))
 				defer defIntProp.Free()
 				assert.True(t, defIntProp.IsNumber(), "Embedded DefInt field should be accessible")
 				assert.Equal(t, int64(200), defIntProp.Int64())
 
-				defStringProp := obj.GetPropertyStr("DefString")
+				defStringProp := must(obj.Get("DefString"))
 				defer defStringProp.Free()
 				assert.True(t, defStringProp.IsString(), "Embedded DefString field should be accessible")
 				assert.Equal(t, "def_test", defStringProp.String())
 
-				getValueProp := obj.GetPropertyStr("GetValue")
+				getValueProp := must(obj.Get("GetValue"))
 				defer getValueProp.Free()
 				assert.True(t, getValueProp.IsFunction(), "GetValue method should be accessible")
 
-				upperProp := obj.GetPropertyStr("Upper")
+				upperProp := must(obj.Get("Upper"))
 				defer upperProp.Free()
 				assert.True(t, upperProp.IsFunction(), "Upper method should be accessible")
 
-				extraFieldProp := obj.GetPropertyStr("ExtraField")
+				extraFieldProp := must(obj.Get("ExtraField"))
 				defer extraFieldProp.Free()
 				assert.True(t, extraFieldProp.IsString(), "Extra field should be accessible")
 				assert.Equal(t, "extra", extraFieldProp.String())
@@ -1001,16 +1001,16 @@ func TestJSValueConversion(t *testing.T) {
 
 			testValueConversion(t, ctx, s, func(result *Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
-				obj := result.toObject()
+				obj := result.Clone()
 				defer obj.Free()
 
 				// Public field should exist
-				publicProp := obj.GetPropertyStr("PublicField")
+				publicProp := must(obj.Get("PublicField"))
 				defer publicProp.Free()
 				assert.True(t, publicProp.IsString(), "Public field should exist")
 
 				// Private field should not exist
-				privateProp := obj.GetPropertyStr("privateField")
+				privateProp := must(obj.Get("privateField"))
 				defer privateProp.Free()
 				assert.True(t, privateProp.IsUndefined(), "Private field should not exist")
 			})
@@ -1038,7 +1038,7 @@ func TestJSValueConversion(t *testing.T) {
 
 // Additional specific error path tests
 func TestToJSValue_ErrorHandling(t *testing.T) {
-	runtime := must(New())
+	runtime := must(New(Config{}))
 	defer runtime.Close()
 	ctx := runtime
 
@@ -1122,7 +1122,7 @@ func TestToJSValue_ErrorHandling(t *testing.T) {
 		const maxDepth = 10
 		root := createNestedStructure(maxDepth)
 
-		jsValue, err := ToJsValue(runtime, root)
+		jsValue, err := runtime.ToValue(root)
 		require.NoError(t, err)
 		defer jsValue.Free()
 		assert.True(t, jsValue.IsObject())

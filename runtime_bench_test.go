@@ -1,13 +1,13 @@
 package qngg
 
 import (
+	"context"
 	"testing"
-	"time"
 )
 
 func BenchmarkRuntimeNew(b *testing.B) {
 	for b.Loop() {
-		rt, err := New()
+		rt, err := New(Config{})
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -15,21 +15,21 @@ func BenchmarkRuntimeNew(b *testing.B) {
 	}
 }
 
-// timeLimit enables MaxExecutionTime, which arms a timer on every call into
-// wasm and turns on epoch interruption in the generated code.
-var timeLimit = Option{MaxExecutionTime: time.Minute}
+// noInterrupt compiles QuickJS without the epoch checks that make calls
+// interruptible.
+var noInterrupt = Config{DisableInterruption: true}
 
-func BenchmarkEvalFactorial(b *testing.B) { benchEvalFactorial(b) }
+func BenchmarkEvalFactorial(b *testing.B) { benchEvalFactorial(b, Config{}) }
 
-func BenchmarkEvalFactorialWithTimeLimit(b *testing.B) { benchEvalFactorial(b, timeLimit) }
+func BenchmarkEvalFactorialNoInterrupt(b *testing.B) { benchEvalFactorial(b, noInterrupt) }
 
-func benchEvalFactorial(b *testing.B, options ...Option) {
-	rt, _ := New(options...)
+func benchEvalFactorial(b *testing.B, config Config) {
+	rt, _ := New(config)
 	defer rt.Close()
 	for b.Loop() {
-		v, err := rt.Eval("f.js", Code(`(() => {
+		v, err := rt.Eval(context.Background(), "f.js", `(() => {
 			function f(n) { return n <= 1 ? 1 : n * f(n - 1) }
-			let s = 0; for (let i = 0; i < 100000; i++) s += f(10); return s })()`))
+			let s = 0; for (let i = 0; i < 100000; i++) s += f(10); return s })()`)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -38,15 +38,13 @@ func benchEvalFactorial(b *testing.B, options ...Option) {
 }
 
 func BenchmarkGoFunctionCall(b *testing.B) {
-	rt, _ := New()
+	rt, _ := New(Config{})
 	defer rt.Close()
-	ctx := rt
-	ctx.SetFunc("add", func(this *This) (*Value, error) {
-		a := this.Args()
-		return ctx.NewInt32(a[0].Int32() + a[1].Int32()), nil
-	})
+	noErr(rt.SetFunc("add", func(call *FunctionCall) (*Value, error) {
+		return rt.NewInt32(call.Arg(0).Int32() + call.Arg(1).Int32()), nil
+	}))
 	for b.Loop() {
-		v, err := rt.Eval("g.js", Code(`(() => { let s = 0; for (let i = 0; i < 10000; i++) s = add(s, 1); return s })()`))
+		v, err := rt.Eval(context.Background(), "g.js", `(() => { let s = 0; for (let i = 0; i < 10000; i++) s = add(s, 1); return s })()`)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -54,19 +52,23 @@ func BenchmarkGoFunctionCall(b *testing.B) {
 	}
 }
 
-func BenchmarkValueProperties(b *testing.B) { benchValueProperties(b) }
+func BenchmarkValueProperties(b *testing.B) { benchValueProperties(b, Config{}) }
 
-func BenchmarkValuePropertiesWithTimeLimit(b *testing.B) { benchValueProperties(b, timeLimit) }
+func BenchmarkValuePropertiesNoInterrupt(b *testing.B) { benchValueProperties(b, noInterrupt) }
 
-func benchValueProperties(b *testing.B, options ...Option) {
-	rt, _ := New(options...)
+func benchValueProperties(b *testing.B, config Config) {
+	rt, _ := New(config)
 	defer rt.Close()
-	ctx := rt
 	for b.Loop() {
-		o := ctx.NewObject()
-		for i := 0; i < 100; i++ {
-			o.SetPropertyStr("k", ctx.NewString("hello world"))
-			_ = o.GetPropertyStr("k").String()
+		o := rt.NewObject()
+		for range 100 {
+			s := rt.NewString("hello world")
+			noErr(o.Set("k", s))
+			s.Free()
+
+			v := must(o.Get("k"))
+			_ = v.String()
+			v.Free()
 		}
 		o.Free()
 	}

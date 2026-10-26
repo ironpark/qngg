@@ -2,14 +2,11 @@ package qngg
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
-	"time"
 	"weak"
 
 	"github.com/ironpark/qngg/internal/atomicfile"
@@ -138,31 +135,16 @@ func writeModuleCache(module *wasmtime.Module, cacheFile string) error {
 
 // instantiate creates the store, links WASI and the JS function proxy, and
 // instantiates the QuickJS module.
-func (r *Runtime) instantiate(engine *wasmtime.Engine, module *wasmtime.Module, proxy jsFunctionProxy) error {
-	r.store = wasmtime.NewStore(engine)
+func (r *Runtime) instantiate(module *wasmtime.Module) error {
+	r.store = wasmtime.NewStore(r.engine)
 
-	if r.option.CloseOnContextDone || r.option.MaxExecutionTime > 0 {
-		// Wasm is interrupted at its next epoch check after the deadline. Any
-		// context cancellation or expired time limit bumps the shared engine
-		// epoch; stores with nothing to stop push their deadline forward and
-		// keep running.
-		limit := &execLimit{maxTime: r.option.MaxExecutionTime}
-		if r.option.CloseOnContextDone {
-			limit.ctx = r.option.Context
-			r.stopWatch = context.AfterFunc(limit.ctx, engine.IncrementEpoch)
-		}
-
-		if limit.maxTime > 0 {
-			limit.timer = time.AfterFunc(limit.maxTime, func() {
-				limit.armed.Store(false)
-				engine.IncrementEpoch()
-			})
-			limit.timer.Stop()
-			r.limit = limit
-		}
-
+	if !r.config.DisableInterruption {
+		// Wasm reaches its epoch deadline whenever the shared engine epoch is
+		// bumped, which happens when the context of a call in any runtime is
+		// done. The interrupter then stops this store only if its own call's
+		// context is done, and otherwise lets it run until the next bump.
 		r.store.SetEpochDeadline(1)
-		r.store.SetEpochDeadlineCallback(limit.check)
+		r.store.SetEpochDeadlineCallback(r.interrupt.check)
 	}
 
 	wasi, err := r.newWasiConfig()
@@ -172,12 +154,12 @@ func (r *Runtime) instantiate(engine *wasmtime.Engine, module *wasmtime.Module, 
 
 	r.store.SetWasi(wasi)
 
-	r.linker = wasmtime.NewLinker(engine)
+	r.linker = wasmtime.NewLinker(r.engine)
 	if err := r.linker.DefineWasi(); err != nil {
 		return fmt.Errorf("failed to instantiate WASI: %w", err)
 	}
 
-	if err := r.defineProxy(proxy); err != nil {
+	if err := r.defineProxy(); err != nil {
 		return fmt.Errorf("failed to setup host module: %w", err)
 	}
 
@@ -186,61 +168,6 @@ func (r *Runtime) instantiate(engine *wasmtime.Engine, module *wasmtime.Module, 
 	}
 
 	return nil
-}
-
-// execLimit decides, at each epoch deadline, whether running wasm must stop.
-// It is kept apart from Runtime so the store's callback does not keep the
-// runtime alive.
-//
-// Arming a timer on every call would dominate short calls, so the timer is
-// left running across calls: it may fire before the current deadline, in
-// which case check re-arms it for the remaining time.
-type execLimit struct {
-	ctx      context.Context // checked for cancellation when set
-	maxTime  time.Duration
-	timer    *time.Timer // bumps the engine epoch when it fires
-	armed    atomic.Bool // timer is pending
-	deadline time.Time   // end of the current call, zero outside calls
-	timedOut bool
-}
-
-// start sets the deadline of an outermost call into wasm.
-func (l *execLimit) start() {
-	l.deadline = time.Now().Add(l.maxTime)
-	l.arm(l.maxTime)
-}
-
-// stop clears the deadline once the outermost call returns.
-func (l *execLimit) stop() {
-	l.deadline = time.Time{}
-}
-
-// arm makes sure the timer fires within d.
-func (l *execLimit) arm(d time.Duration) {
-	if l.armed.CompareAndSwap(false, true) {
-		l.timer.Reset(d)
-	}
-}
-
-func (l *execLimit) check() (uint64, error) {
-	if l.ctx != nil {
-		if err := l.ctx.Err(); err != nil {
-			return 0, fmt.Errorf("interrupted: %w", err)
-		}
-	}
-
-	if !l.deadline.IsZero() {
-		remaining := time.Until(l.deadline)
-		if remaining <= 0 {
-			l.timedOut = true
-
-			return 0, ErrExecutionTimeout
-		}
-
-		l.arm(remaining)
-	}
-
-	return 1, nil
 }
 
 // newWasiConfig grants the capabilities configured in the options: the CWD
@@ -254,13 +181,13 @@ func (r *Runtime) newWasiConfig() (wasi *wasmtime.WasiConfig, err error) {
 		}
 	}()
 
-	if cwd := r.option.CWD; cwd != "" {
-		if err := wasi.PreopenDir(cwd, "/", r.option.WritableCWD); err != nil {
+	if cwd := r.config.CWD; cwd != "" {
+		if err := wasi.PreopenDir(cwd, "/", r.config.WritableCWD); err != nil {
 			return nil, fmt.Errorf("failed to mount %s: %w", cwd, err)
 		}
 	}
 
-	switch out := r.option.Stdout; out {
+	switch out := r.config.Stdout; out {
 	case nil:
 	case os.Stdout:
 		wasi.InheritStdout()
@@ -270,7 +197,7 @@ func (r *Runtime) newWasiConfig() (wasi *wasmtime.WasiConfig, err error) {
 		}
 	}
 
-	switch out := r.option.Stderr; out {
+	switch out := r.config.Stderr; out {
 	case nil:
 	case os.Stderr:
 		wasi.InheritStderr()
@@ -287,7 +214,7 @@ func (r *Runtime) newWasiConfig() (wasi *wasmtime.WasiConfig, err error) {
 // functions:
 //
 //	extern JSValue jsFunctionProxy(JSContext *ctx, JSValueConst this, int argc, JSValueConst *argv);
-func (r *Runtime) defineProxy(proxy jsFunctionProxy) error {
+func (r *Runtime) defineProxy() error {
 	i32 := wasmtime.NewValType(wasmtime.KindI32)
 	i64 := wasmtime.NewValType(wasmtime.KindI64)
 	ty := wasmtime.NewFuncType([]*wasmtime.ValType{i32, i64, i32, i32}, []*wasmtime.ValType{i64})
@@ -302,14 +229,11 @@ func (r *Runtime) defineProxy(proxy jsFunctionProxy) error {
 			return wasmtime.NewTrap("qjs runtime has been released")
 		}
 
-		rs := proxy(
-			rt.goCtx,
-			rt.mem,
-			uint32(vals[0].I32()),
-			uint64(vals[1].I64()),
-			uint32(vals[2].I32()),
-			uint32(vals[3].I32()),
-		)
+		rs, err := rt.callGoFunction(uint64(vals[1].I64()), uint32(vals[2].I32()), uint32(vals[3].I32()))
+		if err != nil {
+			return wasmtime.NewTrap(err.Error())
+		}
+
 		vals[0] = wasmtime.ValRawI64(int64(rs))
 
 		return nil
@@ -327,15 +251,6 @@ func (r *Runtime) defineProxy(proxy jsFunctionProxy) error {
 func (r *Runtime) release() {
 	if r == nil {
 		return
-	}
-
-	if r.stopWatch != nil {
-		r.stopWatch()
-		r.stopWatch = nil
-	}
-
-	if r.limit != nil {
-		r.limit.timer.Stop()
 	}
 
 	if r.store != nil {

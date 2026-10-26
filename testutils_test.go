@@ -1,6 +1,7 @@
 package qngg
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path"
@@ -14,7 +15,7 @@ import (
 )
 
 func setupTestContext(_ *testing.T) (*Runtime, *Runtime) {
-	runtime := must(New())
+	runtime := must(New(Config{}))
 	ctx := runtime
 	// t.Cleanup(runtime.Close)
 	return runtime, ctx
@@ -162,12 +163,12 @@ func genModeGlobalTests(t *testing.T) []modeGlobalTest {
 			file: "09_result_object.js",
 			expect: func(val *Value, err error) {
 				assert.True(t, val.IsObject())
-				obj := val.toObject()
+				obj := val.Clone()
 				defer obj.Free()
-				assert.Equal(t, int32(1), obj.GetPropertyStr("a").Int32())
-				assert.Equal(t, "2", obj.GetPropertyStr("b").String())
-				assert.True(t, obj.GetPropertyStr("c").Bool())
-				assert.True(t, obj.GetPropertyStr("d").IsUndefined())
+				assert.Equal(t, int32(1), must(obj.Get("a")).Int32())
+				assert.Equal(t, "2", must(obj.Get("b")).String())
+				assert.True(t, must(obj.Get("c")).Bool())
+				assert.True(t, must(obj.Get("d")).IsUndefined())
 			},
 		},
 		{
@@ -197,11 +198,11 @@ func genModeGlobalTests(t *testing.T) []modeGlobalTest {
 			expect: func(val *Value, err error) {
 				// Assuming arrays are returned as objects with numeric keys.
 				assert.True(t, val.IsArray())
-				arrObj := val.toObject()
+				arrObj := val.Clone()
 				defer arrObj.Free()
-				assert.Equal(t, int32(1), arrObj.GetPropertyStr("0").Int32())
-				assert.Equal(t, int32(2), arrObj.GetPropertyStr("1").Int32())
-				assert.Equal(t, int32(3), arrObj.GetPropertyStr("2").Int32())
+				assert.Equal(t, int32(1), must(arrObj.Get("0")).Int32())
+				assert.Equal(t, int32(2), must(arrObj.Get("1")).Int32())
+				assert.Equal(t, int32(3), must(arrObj.Get("2")).Int32())
 			},
 		},
 	}
@@ -212,7 +213,7 @@ func genModeGlobalTests(t *testing.T) []modeGlobalTest {
 func runModeGlobalTests(t *testing.T, tests []modeGlobalTest, isScript bool) {
 	for _, test := range tests {
 		t.Run(test.file, func(t *testing.T) {
-			runtime := must(New(Option{CWD: ".", MaxStackSize: 512 * 1024}))
+			runtime := must(New(Config{CWD: ".", MaxStackSize: 512 * 1024}))
 			defer runtime.Close()
 			var val *Value
 			var err error
@@ -220,12 +221,9 @@ func runModeGlobalTests(t *testing.T, tests []modeGlobalTest, isScript bool) {
 			fileName := path.Join("./testdata/01_global", test.file)
 			if isScript {
 				script := fileContent(fileName)
-				val, err = runtime.Eval(
-					fileName,
-					Code(script),
-				)
+				val, err = runtime.Eval(context.Background(), fileName, script)
 			} else {
-				val, err = runtime.Eval(fileName)
+				val, err = runtime.EvalFile(context.Background(), fileName)
 			}
 
 			defer val.Free()
@@ -308,15 +306,12 @@ func genModeModuleTests(t *testing.T) []modeModuleTest {
 func runModeModuleTests(t *testing.T, tests []modeModuleTest, isScript bool) {
 	for _, test := range tests {
 		t.Run(test.moduleDir, func(t *testing.T) {
-			runtime := must(New(Option{CWD: "."}))
+			runtime := must(New(Config{CWD: "."}))
 			defer runtime.Close()
 
 			if !isScript {
 				moduleMainFile := filepath.Join("./testdata/02_module", test.moduleDir, "999_index.js")
-				val, err := runtime.Eval(
-					moduleMainFile,
-					TypeModule(),
-				)
+				val, err := runtime.EvalFile(context.Background(), moduleMainFile, AsModule())
 				defer val.Free()
 				if !test.wantError {
 					require.NoError(t, err)
@@ -335,22 +330,12 @@ func runModeModuleTests(t *testing.T, tests []modeModuleTest, isScript bool) {
 			depPaths := moduleFiles[:len(moduleFiles)-1]
 			for _, depPath := range depPaths {
 				depScript := fileContent(depPath)
-				val, err := runtime.Load(
-					depPath,
-					Code(depScript),
-					TypeModule(),
-				)
-				defer val.Free()
-				assert.NoError(t, err)
+				assert.NoError(t, runtime.LoadModule(context.Background(), depPath, depScript))
 			}
 
 			// Evaluate the main module.
 			mainScript := fileContent(mainPath)
-			val, err := runtime.Eval(
-				mainPath,
-				Code(mainScript),
-				TypeModule(),
-			)
+			val, err := runtime.Eval(context.Background(), mainPath, mainScript, AsModule())
 			defer val.Free()
 
 			// Check error expectations.
@@ -360,4 +345,18 @@ func runModeModuleTests(t *testing.T, tests []modeModuleTest, isScript bool) {
 			test.expect(val, err)
 		})
 	}
+}
+
+func noErr(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
+// setupRuntime creates a new runtime for testing, closed at the end of the test.
+func setupRuntime(t *testing.T) (*Runtime, *Runtime) {
+	t.Helper()
+	rt := must(New(Config{}))
+	t.Cleanup(func() { _ = rt.Close() })
+	return rt, rt
 }

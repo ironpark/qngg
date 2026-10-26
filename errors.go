@@ -4,53 +4,60 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"runtime/debug"
-	"strings"
 )
 
 var (
-	errRType                   = reflect.TypeFor[error]()
-	errZeroRValue              = reflect.Zero(errRType)
-	ErrCallFuncOnNonObject     = errors.New("cannot call function on non-object")
-	ErrNotAnObject             = errors.New("value is not an object")
-	ErrObjectNotAConstructor   = errors.New("object not a constructor")
-	ErrInvalidFileName         = errors.New("file name is required")
-	ErrMissingProperties       = errors.New("value has no properties")
-	errInvalidPointer          = errors.New("null pointer dereference")
-	errIndexOutOfRange         = errors.New("index out of range")
-	errNoNullTerminator        = errors.New("no NUL terminator")
-	ErrInvalidContext          = errors.New("invalid context")
-	ErrNotANumber              = errors.New("js value is not a number")
-	ErrAsyncFuncRequirePromise = errors.New("jsFunctionProxy: async function requires a promise")
-	ErrEmptyStringToNumber     = errors.New("empty string cannot be converted to number")
-	ErrJsFuncDeallocated       = errors.New("js function context has been deallocated")
-	ErrNotByteArray            = errors.New("invalid TypedArray: buffer is not a byte array")
-	ErrNotArrayBuffer          = errors.New("input is not an ArrayBuffer")
-	ErrMissingBufferProperty   = errors.New("invalid TypedArray: missing buffer property")
-	ErrRuntimeClosed           = errors.New("runtime is closed")
-	ErrExecutionTimeout        = errors.New("execution time limit exceeded")
-	ErrNilModule               = errors.New("WASM module is nil")
-	ErrNilHandle               = errors.New("handle is nil")
-	ErrChanClosed              = errors.New("channel is closed")
-	ErrChanSend                = errors.New("channel send would block: buffer full or no receiver ready")
-	ErrChanReceive             = errors.New("channel receive would block: buffer empty or no sender ready")
-	ErrChanCloseReceiveOnly    = errors.New("cannot close receive-only channel")
+	// ErrRuntimeClosed is returned when a closed runtime, or a value that
+	// belongs to one, is used.
+	ErrRuntimeClosed = errors.New("runtime is closed")
+	// ErrInterrupted is returned when the context of a call is done while
+	// JavaScript is running. The runtime is left in an undefined state:
+	// every later call fails with this error, and it must be closed.
+	ErrInterrupted = errors.New("javascript interrupted")
+	// ErrFreed is returned when a value is used after Free.
+	ErrFreed = errors.New("value is freed")
+	// ErrInvalidFileName is returned when an empty name is evaluated.
+	ErrInvalidFileName = errors.New("file name is required")
+
+	errRType                 = reflect.TypeFor[error]()
+	errZeroRValue            = reflect.Zero(errRType)
+	errCallFuncOnNonObject   = errors.New("cannot call function on non-object")
+	errObjectNotAConstructor = errors.New("object not a constructor")
+	errInvalidPointer        = errors.New("null pointer dereference")
+	errIndexOutOfRange       = errors.New("index out of range")
+	errNoNullTerminator      = errors.New("no NUL terminator")
+	errEmptyStringToNumber   = errors.New("empty string cannot be converted to number")
+	errNotByteArray          = errors.New("invalid TypedArray: buffer is not a byte array")
+	errNotArrayBuffer        = errors.New("input is not an ArrayBuffer")
+	errMissingBufferProperty = errors.New("invalid TypedArray: missing buffer property")
+	errChanClosed            = errors.New("channel is closed")
+	errChanSend              = errors.New("channel send would block: buffer full or no receiver ready")
+	errChanReceive           = errors.New("channel receive would block: buffer empty or no sender ready")
+	errChanCloseReceiveOnly  = errors.New("cannot close receive-only channel")
 )
 
-func combineErrors(errs ...error) error {
-	if len(errs) == 0 {
-		return nil
+// Error is a JavaScript exception. Evaluation returns it when JavaScript
+// throws, and a Function that returns it throws an error with its Name, such
+// as "TypeError", into JavaScript.
+type Error struct {
+	// Name is the error's constructor name, such as "TypeError", or empty
+	// if a non-Error value was thrown.
+	Name    string
+	Message string
+	Stack   string
+}
+
+func (e *Error) Error() string {
+	msg := e.Message
+	if e.Name != "" {
+		msg = e.Name + ": " + msg
 	}
 
-	var errStr strings.Builder
-
-	for _, err := range errs {
-		if err != nil {
-			errStr.WriteString(err.Error() + "\n")
-		}
+	if e.Stack != "" {
+		msg += "\n" + e.Stack
 	}
 
-	return errors.New(errStr.String())
+	return msg
 }
 
 func newMaxLengthExceededErr(request uint, maxLen int64, index int) error {
@@ -85,7 +92,7 @@ func newJsToGoErr(kind *Value, err error, details ...string) error {
 	var kindErr error
 
 	if kind != nil {
-		kindStr, kindErr = kind.JSONStringify()
+		kindStr, kindErr = kind.jsonStringify()
 		if kindErr != nil {
 			kindStr = fmt.Errorf("(%w), %s", kindErr, kind.String()).Error()
 		}
@@ -116,7 +123,7 @@ func newInvalidGoTypeErr(expect string, got any) error {
 
 func newInvalidJsInputErr(kind string, input *Value) (err error) {
 	var detail string
-	if detail, err = input.JSONStringify(); err != nil {
+	if detail, err = input.jsonStringify(); err != nil {
 		detail = fmt.Sprintf("(JSONStringify failed: %v), (.String()) %s", err, input.String())
 	}
 
@@ -125,18 +132,6 @@ func newInvalidJsInputErr(kind string, input *Value) (err error) {
 
 func newJsStringifyErr(kind string, err error) error {
 	return fmt.Errorf("js %s: %w", kind, err)
-}
-
-func newProxyErr(id uint64, r any) error {
-	if err, ok := r.(error); ok {
-		return fmt.Errorf("functionProxy [%d]: %w\n%s", id, err, debug.Stack())
-	}
-
-	if str, ok := r.(string); ok {
-		return fmt.Errorf("functionProxy [%d]: %s\n%s", id, str, debug.Stack())
-	}
-
-	return fmt.Errorf("functionProxy [%d]: %v\n%s", id, r, debug.Stack())
 }
 
 func newInvokeErr(input *Value, err error) error {

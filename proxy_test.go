@@ -1,10 +1,10 @@
 package qngg
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,7 +27,7 @@ type proxyErrorTestCase struct {
 
 // setupTestRuntime creates a runtime with cleanup for proxy tests
 func setupProxyTestRuntime(t *testing.T) *Runtime {
-	runtime := must(New())
+	runtime := must(New(Config{}))
 	t.Cleanup(func() { runtime.Close() })
 	return runtime
 }
@@ -36,9 +36,9 @@ func setupProxyTestRuntime(t *testing.T) *Runtime {
 func TestBasicFunctionCall(t *testing.T) {
 	runtime := setupProxyTestRuntime(t)
 
-	runtime.SetFunc("add", func(this *This) (*Value, error) {
+	runtime.SetFunc("add", func(this *FunctionCall) (*Value, error) {
 		if len(this.Args()) != 2 {
-			return this.newUndefined(), errors.New("add requires 2 arguments")
+			return this.Runtime().NewUndefined(), errors.New("add requires 2 arguments")
 		}
 
 		a := this.Args()[0].Int32()
@@ -46,10 +46,10 @@ func TestBasicFunctionCall(t *testing.T) {
 		return this.Runtime().NewInt32(a + b), nil
 	})
 
-	val, err := runtime.Eval("test.js", Code(`
+	val, err := runtime.Eval(context.Background(), "test.js", `
         const result = add(5, 7);
         result;
-    `))
+    `)
 	defer val.Free()
 
 	require.NoError(t, err)
@@ -62,9 +62,9 @@ func TestBasicFunctionCalls(t *testing.T) {
 		{
 			name: "simple_addition_function",
 			setupFn: func(ctx *Runtime) {
-				ctx.SetFunc("add", func(this *This) (*Value, error) {
+				ctx.SetFunc("add", func(this *FunctionCall) (*Value, error) {
 					if len(this.Args()) != 2 {
-						return this.newUndefined(), errors.New("add requires 2 arguments")
+						return this.Runtime().NewUndefined(), errors.New("add requires 2 arguments")
 					}
 					a := this.Args()[0].Int32()
 					b := this.Args()[1].Int32()
@@ -80,9 +80,9 @@ func TestBasicFunctionCalls(t *testing.T) {
 		{
 			name: "string_number_concatenation",
 			setupFn: func(ctx *Runtime) {
-				ctx.SetFunc("concat", func(this *This) (*Value, error) {
+				ctx.SetFunc("concat", func(this *FunctionCall) (*Value, error) {
 					if len(this.Args()) != 2 {
-						return this.newUndefined(), errors.New("concat requires 2 arguments")
+						return this.Runtime().NewUndefined(), errors.New("concat requires 2 arguments")
 					}
 					str := this.Args()[0].String()
 					num := this.Args()[1].Int32()
@@ -99,7 +99,7 @@ func TestBasicFunctionCalls(t *testing.T) {
 		{
 			name: "no_arguments_function",
 			setupFn: func(ctx *Runtime) {
-				ctx.SetFunc("getConstant", func(this *This) (*Value, error) {
+				ctx.SetFunc("getConstant", func(this *FunctionCall) (*Value, error) {
 					return this.Runtime().NewString("constant value"), nil
 				})
 			},
@@ -116,7 +116,7 @@ func TestBasicFunctionCalls(t *testing.T) {
 			runtime := setupProxyTestRuntime(t)
 			tc.setupFn(runtime)
 
-			val, err := runtime.Eval("test.js", Code(tc.testCode))
+			val, err := runtime.Eval(context.Background(), "test.js", tc.testCode)
 			defer func() {
 				if val != nil {
 					val.Free()
@@ -133,26 +133,26 @@ func TestArgumentValidation(t *testing.T) {
 	runtime := setupProxyTestRuntime(t)
 
 	// Setup validation function
-	runtime.SetFunc("validateArgs", func(this *This) (*Value, error) {
+	runtime.SetFunc("validateArgs", func(this *FunctionCall) (*Value, error) {
 		args := this.Args()
 
 		if len(args) < 2 {
-			return this.newUndefined(), errors.New("requires at least 2 arguments")
+			return this.Runtime().NewUndefined(), errors.New("requires at least 2 arguments")
 		}
 
 		if !args[0].IsString() {
-			return this.newUndefined(), errors.New("first argument must be a string")
+			return this.Runtime().NewUndefined(), errors.New("first argument must be a string")
 		}
 
 		if !args[1].IsNumber() {
-			return this.newUndefined(), errors.New("second argument must be a number")
+			return this.Runtime().NewUndefined(), errors.New("second argument must be a number")
 		}
 
 		return this.Runtime().NewBool(true), nil
 	})
 
 	t.Run("valid_arguments", func(t *testing.T) {
-		val, err := runtime.Eval("test.js", Code(`validateArgs("test", 123)`))
+		val, err := runtime.Eval(context.Background(), "test.js", `validateArgs("test", 123)`)
 		defer val.Free()
 
 		require.NoError(t, err)
@@ -160,19 +160,19 @@ func TestArgumentValidation(t *testing.T) {
 	})
 
 	t.Run("insufficient_arguments", func(t *testing.T) {
-		_, err := runtime.Eval("test.js", Code(`validateArgs("test")`))
+		_, err := runtime.Eval(context.Background(), "test.js", `validateArgs("test")`)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "requires at least 2 arguments")
 	})
 
 	t.Run("wrong_argument_type", func(t *testing.T) {
-		_, err := runtime.Eval("test.js", Code(`validateArgs("test", "not a number")`))
+		_, err := runtime.Eval(context.Background(), "test.js", `validateArgs("test", "not a number")`)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "second argument must be a number")
 	})
 
 	t.Run("missing_first_argument", func(t *testing.T) {
-		_, err := runtime.Eval("test.js", Code(`validateArgs()`))
+		_, err := runtime.Eval(context.Background(), "test.js", `validateArgs()`)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "requires at least 2 arguments")
 	})
@@ -189,7 +189,7 @@ func TestReturnValueTypes(t *testing.T) {
 		{
 			name: "return_string",
 			setupFn: func(ctx *Runtime) {
-				ctx.SetFunc("getString", func(this *This) (*Value, error) {
+				ctx.SetFunc("getString", func(this *FunctionCall) (*Value, error) {
 					return this.Runtime().NewString("hello world"), nil
 				})
 			},
@@ -201,7 +201,7 @@ func TestReturnValueTypes(t *testing.T) {
 		{
 			name: "return_number",
 			setupFn: func(ctx *Runtime) {
-				ctx.SetFunc("getNumber", func(this *This) (*Value, error) {
+				ctx.SetFunc("getNumber", func(this *FunctionCall) (*Value, error) {
 					return this.Runtime().NewInt32(42), nil
 				})
 			},
@@ -213,7 +213,7 @@ func TestReturnValueTypes(t *testing.T) {
 		{
 			name: "return_boolean_true",
 			setupFn: func(ctx *Runtime) {
-				ctx.SetFunc("getBoolTrue", func(this *This) (*Value, error) {
+				ctx.SetFunc("getBoolTrue", func(this *FunctionCall) (*Value, error) {
 					return this.Runtime().NewBool(true), nil
 				})
 			},
@@ -225,7 +225,7 @@ func TestReturnValueTypes(t *testing.T) {
 		{
 			name: "return_boolean_false",
 			setupFn: func(ctx *Runtime) {
-				ctx.SetFunc("getBoolFalse", func(this *This) (*Value, error) {
+				ctx.SetFunc("getBoolFalse", func(this *FunctionCall) (*Value, error) {
 					return this.Runtime().NewBool(false), nil
 				})
 			},
@@ -237,7 +237,7 @@ func TestReturnValueTypes(t *testing.T) {
 		{
 			name: "return_null",
 			setupFn: func(ctx *Runtime) {
-				ctx.SetFunc("getNull", func(this *This) (*Value, error) {
+				ctx.SetFunc("getNull", func(this *FunctionCall) (*Value, error) {
 					return this.Runtime().NewNull(), nil
 				})
 			},
@@ -249,7 +249,7 @@ func TestReturnValueTypes(t *testing.T) {
 		{
 			name: "return_undefined",
 			setupFn: func(ctx *Runtime) {
-				ctx.SetFunc("getUndefined", func(this *This) (*Value, error) {
+				ctx.SetFunc("getUndefined", func(this *FunctionCall) (*Value, error) {
 					return this.Runtime().NewUndefined(), nil
 				})
 			},
@@ -265,7 +265,7 @@ func TestReturnValueTypes(t *testing.T) {
 			runtime := setupProxyTestRuntime(t)
 			tc.setupFn(runtime)
 
-			val, err := runtime.Eval("test.js", Code(tc.testCode))
+			val, err := runtime.Eval(context.Background(), "test.js", tc.testCode)
 			defer val.Free()
 
 			require.NoError(t, err)
@@ -279,75 +279,75 @@ func TestComplexReturnTypes(t *testing.T) {
 	runtime := setupProxyTestRuntime(t)
 
 	t.Run("return_object", func(t *testing.T) {
-		_, err := runtime.Eval("setup.js", Code(`
+		_, err := runtime.Eval(context.Background(), "setup.js", `
 			function returnObject() {
 				return {name: "test", id: 123};
 			}
-		`))
+		`)
 		require.NoError(t, err)
 
-		val, err := runtime.Eval("test.js", Code("returnObject()"))
+		val, err := runtime.Eval(context.Background(), "test.js", "returnObject()")
 		defer val.Free()
 
 		require.NoError(t, err)
 		assert.True(t, val.IsObject())
 
-		obj := val.toObject()
+		obj := val.Clone()
 		defer obj.Free()
-		assert.Equal(t, "test", obj.GetPropertyStr("name").String())
-		assert.Equal(t, int32(123), obj.GetPropertyStr("id").Int32())
+		assert.Equal(t, "test", must(obj.Get("name")).String())
+		assert.Equal(t, int32(123), must(obj.Get("id")).Int32())
 	})
 
 	t.Run("return_array", func(t *testing.T) {
-		_, err := runtime.Eval("setup.js", Code(`
+		_, err := runtime.Eval(context.Background(), "setup.js", `
 			function returnArray() {
 				return [1, 2, 3];
 			}
-		`))
+		`)
 		require.NoError(t, err)
 
-		val, err := runtime.Eval("test.js", Code("returnArray()"))
+		val, err := runtime.Eval(context.Background(), "test.js", "returnArray()")
 		defer val.Free()
 
 		require.NoError(t, err)
 		assert.True(t, val.IsArray())
 
-		arr := val.toObject()
+		arr := val.Clone()
 		defer arr.Free()
-		assert.Equal(t, int32(1), arr.GetPropertyStr("0").Int32())
-		assert.Equal(t, int32(2), arr.GetPropertyStr("1").Int32())
-		assert.Equal(t, int32(3), arr.GetPropertyStr("2").Int32())
+		assert.Equal(t, int32(1), must(arr.Get("0")).Int32())
+		assert.Equal(t, int32(2), must(arr.Get("1")).Int32())
+		assert.Equal(t, int32(3), must(arr.Get("2")).Int32())
 	})
 
 	t.Run("return_nested_object", func(t *testing.T) {
-		_, err := runtime.Eval("setup.js", Code(`
+		_, err := runtime.Eval(context.Background(), "setup.js", `
 			function returnNestedObject() {
 				return {
 					user: {name: "john", age: 30},
 					meta: {created: true, version: 1}
 				};
 			}
-		`))
+		`)
 		require.NoError(t, err)
 
-		val, err := runtime.Eval("test.js", Code("returnNestedObject()"))
+		val, err := runtime.Eval(context.Background(), "test.js", "returnNestedObject()")
 		defer val.Free()
 
 		require.NoError(t, err)
 		assert.True(t, val.IsObject())
 
-		obj := val.toObject()
+		obj := val.Clone()
 		defer obj.Free()
 
-		user := obj.GetPropertyStr("user").toObject()
+		user := must(obj.Get("user")).Clone()
 		defer user.Free()
-		assert.Equal(t, "john", user.GetPropertyStr("name").String())
-		assert.Equal(t, int32(30), user.GetPropertyStr("age").Int32())
+		assert.Equal(t, "john", must(user.Get("name")).String())
+		assert.Equal(t, int32(30), must(user.Get("age")).Int32())
 
-		meta := obj.GetPropertyStr("meta").toObject()
+		meta := must(obj.Get("meta")).Clone()
 		defer meta.Free()
-		assert.True(t, meta.GetPropertyStr("created").Bool())
-		assert.Equal(t, int32(1), meta.GetPropertyStr("version").Int32())
+		assert.True(t, must(meta.Get("created")).Bool())
+		assert.Equal(t, int32(1), must(meta.Get("version")).Int32())
 	})
 }
 
@@ -357,8 +357,8 @@ func TestProxyErrorHandling(t *testing.T) {
 		{
 			name: "function_returns_error",
 			setupFn: func(ctx *Runtime) {
-				ctx.SetFunc("failingFunction", func(this *This) (*Value, error) {
-					return this.newUndefined(), errors.New("this function fails")
+				ctx.SetFunc("failingFunction", func(this *FunctionCall) (*Value, error) {
+					return this.Runtime().NewUndefined(), errors.New("this function fails")
 				})
 			},
 			testCode:    "failingFunction()",
@@ -370,8 +370,8 @@ func TestProxyErrorHandling(t *testing.T) {
 		{
 			name: "function_throws_error",
 			setupFn: func(ctx *Runtime) {
-				ctx.SetFunc("throwingFunction", func(this *This) (*Value, error) {
-					return this.Runtime().ThrowError(errors.New("thrown error")), nil
+				ctx.SetFunc("throwingFunction", func(this *FunctionCall) (*Value, error) {
+					return nil, &Error{Name: "TypeError", Message: "thrown error"}
 				})
 			},
 			testCode:    "throwingFunction()",
@@ -383,8 +383,8 @@ func TestProxyErrorHandling(t *testing.T) {
 		{
 			name: "custom_error_message",
 			setupFn: func(ctx *Runtime) {
-				ctx.SetFunc("customError", func(this *This) (*Value, error) {
-					return this.newUndefined(), fmt.Errorf("custom error with code: %d", 404)
+				ctx.SetFunc("customError", func(this *FunctionCall) (*Value, error) {
+					return this.Runtime().NewUndefined(), fmt.Errorf("custom error with code: %d", 404)
 				})
 			},
 			testCode:    "customError()",
@@ -400,7 +400,7 @@ func TestProxyErrorHandling(t *testing.T) {
 			runtime := setupProxyTestRuntime(t)
 			tc.setupFn(runtime)
 
-			_, err := runtime.Eval("test.js", Code(tc.testCode))
+			_, err := runtime.Eval(context.Background(), "test.js", tc.testCode)
 
 			if tc.expectError {
 				assert.Error(t, err)
@@ -418,35 +418,35 @@ func TestPanicRecovery(t *testing.T) {
 	runtime := setupProxyTestRuntime(t)
 
 	t.Run("panic_with_string", func(t *testing.T) {
-		runtime.SetFunc("panicFunction", func(this *This) (*Value, error) {
+		runtime.SetFunc("panicFunction", func(this *FunctionCall) (*Value, error) {
 			panic("this function panics")
 		})
 
-		_, err := runtime.Eval("test.js", Code(`
+		_, err := runtime.Eval(context.Background(), "test.js", `
 			try {
 				panicFunction();
 			} catch (e) {
 				throw new Error("Caught: " + e.message);
 			}
-		`))
+		`)
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "this function panics")
 	})
 
 	t.Run("panic_with_error", func(t *testing.T) {
-		runtime.SetFunc("panicWithError", func(this *This) (*Value, error) {
+		runtime.SetFunc("panicWithError", func(this *FunctionCall) (*Value, error) {
 			panic(errors.New("panic error"))
 		})
 
-		_, err := runtime.Eval("test.js", Code("panicWithError()"))
+		_, err := runtime.Eval(context.Background(), "test.js", "panicWithError()")
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "panic error")
 	})
 
 	t.Run("panic_recovery_continues_execution", func(t *testing.T) {
-		runtime.SetFunc("sometimesPanics", func(this *This) (*Value, error) {
+		runtime.SetFunc("sometimesPanics", func(this *FunctionCall) (*Value, error) {
 			if len(this.Args()) > 0 && this.Args()[0].Bool() {
 				panic("intentional panic")
 			}
@@ -454,10 +454,10 @@ func TestPanicRecovery(t *testing.T) {
 		})
 
 		// Test that after a panic, we can still call functions
-		_, err1 := runtime.Eval("test1.js", Code("sometimesPanics(true)"))
+		_, err1 := runtime.Eval(context.Background(), "test1.js", "sometimesPanics(true)")
 		assert.Error(t, err1)
 
-		val2, err2 := runtime.Eval("test2.js", Code("sometimesPanics(false)"))
+		val2, err2 := runtime.Eval(context.Background(), "test2.js", "sometimesPanics(false)")
 		defer val2.Free()
 		require.NoError(t, err2)
 		assert.Equal(t, "success", val2.String())
@@ -469,19 +469,17 @@ func TestAsyncFunctions(t *testing.T) {
 	runtime := setupProxyTestRuntime(t)
 
 	t.Run("async_function_success", func(t *testing.T) {
-		runtime.SetAsyncFunc("asyncSuccess", func(this *This) {
-			if this.IsAsync() {
-				this.Promise().Resolve(this.Runtime().NewString("async success"))
-			}
-		})
+		noErr(runtime.SetAsyncFunc("asyncSuccess", func(this *FunctionCall) (*Value, error) {
+			return this.Runtime().NewString("async success"), nil
+		}))
 
-		val, err := runtime.Eval("test.js", Code(`
+		val, err := runtime.Eval(context.Background(), "test.js", `
 			async function test() {
 				const result = await asyncSuccess();
 				return result;
 			}
 			await test();
-		`), FlagAsync())
+		`, TopLevelAwait())
 		defer val.Free()
 
 		require.NoError(t, err)
@@ -489,81 +487,46 @@ func TestAsyncFunctions(t *testing.T) {
 	})
 
 	t.Run("async_function_failure", func(t *testing.T) {
-		runtime.SetAsyncFunc("asyncFailure", func(this *This) {
-			if this.IsAsync() {
-				this.Promise().Reject(this.Runtime().NewError(errors.New("async failure")))
-			}
-		})
+		noErr(runtime.SetAsyncFunc("asyncFailure", func(*FunctionCall) (*Value, error) {
+			return nil, errors.New("async failure")
+		}))
 
-		_, err := runtime.Eval("test.js", Code(`
-			async function test() {
-				const result = await asyncFailure();
-				return result;
-			}
-			await test();
-		`), FlagAsync())
-
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "async failure")
+		_, err := runtime.Eval(context.Background(), "test.js", `await asyncFailure();`, TopLevelAwait())
+		assert.ErrorContains(t, err, "async failure")
 	})
 
 	t.Run("async_function_with_data", func(t *testing.T) {
-		runtime.SetAsyncFunc("asyncWithData", func(this *This) {
-			if this.IsAsync() {
-				if len(this.Args()) > 0 {
-					data := this.Args()[0].String()
-					result := fmt.Sprintf("processed: %s", data)
-					this.Promise().Resolve(this.Runtime().NewString(result))
-				} else {
-					this.Promise().Reject(this.Runtime().NewError(errors.New("no data provided")))
-				}
+		noErr(runtime.SetAsyncFunc("asyncWithData", func(this *FunctionCall) (*Value, error) {
+			if len(this.Args()) == 0 {
+				return nil, errors.New("no data provided")
 			}
-		})
+			return this.Runtime().NewString(fmt.Sprintf("processed: %s", this.Arg(0).String())), nil
+		}))
 
-		val, err := runtime.Eval("test.js", Code(`
-			await asyncWithData("test data");
-		`), FlagAsync())
+		val, err := runtime.Eval(context.Background(), "test.js", `await asyncWithData("test data");`, TopLevelAwait())
 		defer val.Free()
 
 		require.NoError(t, err)
 		assert.Equal(t, "processed: test data", val.String())
+
+		_, err = runtime.Eval(context.Background(), "test.js", `await asyncWithData();`, TopLevelAwait())
+		assert.ErrorContains(t, err, "no data provided")
 	})
 
-	t.Run("async_function_with_goroutine", func(t *testing.T) {
-		_, ctx := setupTestContext(t)
-		done := make(chan struct{})
-		evalDone := make(chan struct{})
+	t.Run("async_function_returns_promise", func(t *testing.T) {
+		noErr(runtime.SetAsyncFunc("later", func(this *FunctionCall) (*Value, error) {
+			return this.Runtime().NewString("async result"), nil
+		}))
 
-		ctx.SetAsyncFunc("testAsyncFunc", func(this *This) {
-			// Simulate async work and resolve with a value
-			go func() {
-				defer close(done)
-				// A runtime must not be used from multiple goroutines
-				// concurrently, so only resolve once Eval has returned.
-				<-evalDone
-				val := this.Runtime().NewString("async result")
-				this.Promise().Resolve(val)
-			}()
-		})
-
-		result := must(ctx.Eval("test.js", Code(`({
-			promise: testAsyncFunc()
-		})`)))
-		close(evalDone)
+		result := must(runtime.Eval(context.Background(), "test.js", `({ promise: later() })`))
 		defer result.Free()
 
-		// Wait for the goroutine to complete before touching the context again:
-		// a runtime must not be used from multiple goroutines concurrently.
-		select {
-		case <-done:
-		case <-time.After(1 * time.Second):
-			t.Fatal("Timeout waiting for async goroutine to complete")
-		}
-
-		promise := result.GetPropertyStr("promise")
+		promise := must(result.Get("promise"))
+		defer promise.Free()
 		assert.True(t, promise.IsPromise())
 
-		a := must(promise.Await())
+		a := must(promise.Await(context.Background()))
+		defer a.Free()
 		assert.Equal(t, "async result", a.String())
 	})
 }
@@ -573,21 +536,21 @@ func TestThisContext(t *testing.T) {
 	runtime := setupProxyTestRuntime(t)
 
 	t.Run("this_object_property_access", func(t *testing.T) {
-		runtime.SetFunc("getThisProperty", func(this *This) (*Value, error) {
-			thisValue := this.Value
+		runtime.SetFunc("getThisProperty", func(this *FunctionCall) (*Value, error) {
+			thisValue := this.This()
 			if !thisValue.IsObject() {
-				return this.newUndefined(), errors.New("'this' is not an object")
+				return this.Runtime().NewUndefined(), errors.New("'this' is not an object")
 			}
 
-			prop := thisValue.GetPropertyStr("name")
+			prop := must(thisValue.Get("name"))
 			return prop, nil
 		})
 
-		val, err := runtime.Eval("test.js", Code(`
+		val, err := runtime.Eval(context.Background(), "test.js", `
 			const obj = { name: "test object" };
 			const result = getThisProperty.call(obj);
 			result;
-		`))
+		`)
 		defer val.Free()
 
 		require.NoError(t, err)
@@ -595,22 +558,22 @@ func TestThisContext(t *testing.T) {
 	})
 
 	t.Run("this_context_modification", func(t *testing.T) {
-		runtime.SetFunc("modifyThis", func(this *This) (*Value, error) {
-			thisValue := this.Value
+		runtime.SetFunc("modifyThis", func(this *FunctionCall) (*Value, error) {
+			thisValue := this.This()
 			if !thisValue.IsObject() {
-				return this.newUndefined(), errors.New("'this' is not an object")
+				return this.Runtime().NewUndefined(), errors.New("'this' is not an object")
 			}
 
 			// Modify the this object
-			thisValue.SetPropertyStr("modified", this.Runtime().NewBool(true))
+			noErr(thisValue.Set("modified", this.Runtime().NewBool(true)))
 			return this.Runtime().NewString("modified"), nil
 		})
 
-		val, err := runtime.Eval("test_modify.js", Code(`
+		val, err := runtime.Eval(context.Background(), "test_modify.js", `
 			const testObj = { name: "test" };
 			modifyThis.call(testObj);
 			testObj.modified;
-		`))
+		`)
 		defer val.Free()
 
 		require.NoError(t, err)
@@ -618,12 +581,12 @@ func TestThisContext(t *testing.T) {
 	})
 
 	t.Run("this_global_context", func(t *testing.T) {
-		runtime.SetFunc("checkGlobalThis", func(this *This) (*Value, error) {
+		runtime.SetFunc("checkGlobalThis", func(this *FunctionCall) (*Value, error) {
 			// When called without explicit this, should be global object
-			return this.Runtime().NewBool(this.Value.IsObject()), nil
+			return this.Runtime().NewBool(this.This().IsObject()), nil
 		})
 
-		val, err := runtime.Eval("test.js", Code("checkGlobalThis()"))
+		val, err := runtime.Eval(context.Background(), "test.js", "checkGlobalThis()")
 		defer val.Free()
 
 		require.NoError(t, err)
@@ -636,26 +599,26 @@ func TestMultipleFunctionInteraction(t *testing.T) {
 	runtime := setupProxyTestRuntime(t)
 
 	// Setup multiple interacting functions
-	runtime.SetFunc("setGlobalValue", func(this *This) (*Value, error) {
+	runtime.SetFunc("setGlobalValue", func(this *FunctionCall) (*Value, error) {
 		if len(this.Args()) != 1 {
-			return this.newUndefined(), errors.New("requires 1 argument")
+			return this.Runtime().NewUndefined(), errors.New("requires 1 argument")
 		}
 
 		value := this.Args()[0]
 		global := this.Runtime().Global()
-		global.SetPropertyStr("testValue", value)
+		noErr(global.Set("testValue", value))
 
-		return this.newUndefined(), nil
+		return this.Runtime().NewUndefined(), nil
 	})
 
-	runtime.SetFunc("getGlobalValue", func(this *This) (*Value, error) {
+	runtime.SetFunc("getGlobalValue", func(this *FunctionCall) (*Value, error) {
 		global := this.Runtime().Global()
-		return global.GetPropertyStr("testValue"), nil
+		return must(global.Get("testValue")), nil
 	})
 
-	runtime.SetFunc("processGlobalValue", func(this *This) (*Value, error) {
+	runtime.SetFunc("processGlobalValue", func(this *FunctionCall) (*Value, error) {
 		global := this.Runtime().Global()
-		value := global.GetPropertyStr("testValue")
+		value := must(global.Get("testValue"))
 
 		if value.IsUndefined() {
 			return this.Runtime().NewString("no value set"), nil
@@ -666,15 +629,15 @@ func TestMultipleFunctionInteraction(t *testing.T) {
 	})
 
 	t.Run("function_chain_interaction", func(t *testing.T) {
-		_, err := runtime.Eval("test.js", Code(`setGlobalValue("global test value")`))
+		_, err := runtime.Eval(context.Background(), "test.js", `setGlobalValue("global test value")`)
 		require.NoError(t, err)
 
-		val, err := runtime.Eval("test.js", Code(`getGlobalValue()`))
+		val, err := runtime.Eval(context.Background(), "test.js", `getGlobalValue()`)
 		defer val.Free()
 		require.NoError(t, err)
 		assert.Equal(t, "global test value", val.String())
 
-		processedVal, err := runtime.Eval("test.js", Code(`processGlobalValue()`))
+		processedVal, err := runtime.Eval(context.Background(), "test.js", `processGlobalValue()`)
 		defer processedVal.Free()
 		require.NoError(t, err)
 		assert.Equal(t, "processed: global test value", processedVal.String())
@@ -682,11 +645,11 @@ func TestMultipleFunctionInteraction(t *testing.T) {
 
 	t.Run("function_state_persistence", func(t *testing.T) {
 		// Set initial value
-		_, err := runtime.Eval("test1.js", Code(`setGlobalValue("persistent value")`))
+		_, err := runtime.Eval(context.Background(), "test1.js", `setGlobalValue("persistent value")`)
 		require.NoError(t, err)
 
 		// Access from different eval call
-		val, err := runtime.Eval("test2.js", Code(`getGlobalValue()`))
+		val, err := runtime.Eval(context.Background(), "test2.js", `getGlobalValue()`)
 		defer val.Free()
 		require.NoError(t, err)
 		assert.Equal(t, "persistent value", val.String())
@@ -784,9 +747,9 @@ func TestProxyRegistryOperations(t *testing.T) {
 func TestFunctionWithDifferentArgTypes(t *testing.T) {
 	runtime := setupProxyTestRuntime(t)
 
-	runtime.SetFunc("concat", func(this *This) (*Value, error) {
+	runtime.SetFunc("concat", func(this *FunctionCall) (*Value, error) {
 		if len(this.Args()) != 2 {
-			return this.newUndefined(), errors.New("concat requires 2 arguments")
+			return this.Runtime().NewUndefined(), errors.New("concat requires 2 arguments")
 		}
 
 		str := this.Args()[0].String()
@@ -796,10 +759,10 @@ func TestFunctionWithDifferentArgTypes(t *testing.T) {
 		return this.Runtime().NewString(result), nil
 	})
 
-	val, err := runtime.Eval("test.js", Code(`
+	val, err := runtime.Eval(context.Background(), "test.js", `
         const result = concat("test", 42);
         result;
-    `))
+    `)
 	defer val.Free()
 
 	require.NoError(t, err)
@@ -811,21 +774,21 @@ func TestFunctionWithThis(t *testing.T) {
 	runtime := setupProxyTestRuntime(t)
 
 	// Function that uses the "this" value
-	runtime.SetFunc("getThisProperty", func(this *This) (*Value, error) {
-		thisValue := this.Value
+	runtime.SetFunc("getThisProperty", func(this *FunctionCall) (*Value, error) {
+		thisValue := this.This()
 		if !thisValue.IsObject() {
-			return this.newUndefined(), errors.New("'this' is not an object")
+			return this.Runtime().NewUndefined(), errors.New("'this' is not an object")
 		}
 
-		prop := thisValue.GetPropertyStr("name")
+		prop := must(thisValue.Get("name"))
 		return prop, nil
 	})
 
-	val, err := runtime.Eval("test.js", Code(`
+	val, err := runtime.Eval(context.Background(), "test.js", `
         const obj = { name: "test object" };
         const result = getThisProperty.call(obj);
         result;
-    `))
+    `)
 	defer val.Free()
 
 	require.NoError(t, err)
@@ -836,17 +799,17 @@ func TestFunctionWithThis(t *testing.T) {
 func TestPanicHandling(t *testing.T) {
 	runtime := setupProxyTestRuntime(t)
 
-	runtime.SetFunc("panicFunction", func(this *This) (*Value, error) {
+	runtime.SetFunc("panicFunction", func(this *FunctionCall) (*Value, error) {
 		panic("this function panics")
 	})
 
-	_, err := runtime.Eval("test.js", Code(`
+	_, err := runtime.Eval(context.Background(), "test.js", `
 			try {
 					panicFunction();
 			} catch (e) {
 					throw new Error("Caught: " + e.message);
 			}
-	`))
+	`)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "this function panics")
@@ -858,35 +821,35 @@ func TestMultipleFunctions(t *testing.T) {
 
 	runtime.SetFunc(
 		"setGlobalValue",
-		func(this *This) (*Value, error) {
+		func(this *FunctionCall) (*Value, error) {
 			if len(this.Args()) != 1 {
-				return this.newUndefined(), errors.New("requires 1 argument")
+				return this.Runtime().NewUndefined(), errors.New("requires 1 argument")
 			}
 
 			value := this.Args()[0]
 			global := this.Runtime().Global()
-			global.SetPropertyStr("testValue", value)
+			noErr(global.Set("testValue", value))
 
-			return this.newUndefined(), nil
+			return this.Runtime().NewUndefined(), nil
 		},
 	)
 
 	runtime.SetFunc(
 		"getGlobalValue",
-		func(this *This) (*Value, error) {
+		func(this *FunctionCall) (*Value, error) {
 			global := this.Runtime().Global()
-			return global.GetPropertyStr("testValue"), nil
+			return must(global.Get("testValue")), nil
 		},
 	)
 
-	_, err := runtime.Eval("test.js", Code(`
+	_, err := runtime.Eval(context.Background(), "test.js", `
 		setGlobalValue("global test value");
-	`))
+	`)
 	require.NoError(t, err)
 
-	val, err := runtime.Eval("test.js", Code(`
+	val, err := runtime.Eval(context.Background(), "test.js", `
 		getGlobalValue();
-	`))
+	`)
 	defer val.Free()
 
 	require.NoError(t, err)

@@ -1,6 +1,7 @@
 package qngg
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"reflect"
@@ -29,10 +30,10 @@ func TestJsonUnmarshalerFromField(t *testing.T) {
 	assert.True(t, implementsJSONUnmarshaler(reflect.TypeFor[streamedText]()))
 
 	t.Run("plain", func(t *testing.T) {
-		v := must(ctx.Eval("test.js", Code(`({ text: "hello" })`)))
+		v := must(ctx.Eval(context.Background(), "test.js", `({ text: "hello" })`))
 		defer v.Free()
 
-		got, err := ToGoValue[target](v)
+		got, err := toGo[target](v)
 		require.NoError(t, err)
 		assert.Equal(t, "hello", got.Text.S)
 	})
@@ -40,10 +41,10 @@ func TestJsonUnmarshalerFromField(t *testing.T) {
 	// JS strings may hold lone surrogates; JSON.stringify escapes them and
 	// they must decode as U+FFFD instead of failing.
 	t.Run("lone surrogate", func(t *testing.T) {
-		v := must(ctx.Eval("test.js", Code(`({ text: "a\ud800b" })`)))
+		v := must(ctx.Eval(context.Background(), "test.js", `({ text: "a\ud800b" })`))
 		defer v.Free()
 
-		got, err := ToGoValue[target](v)
+		got, err := toGo[target](v)
 		require.NoError(t, err)
 		assert.Equal(t, "a�b", got.Text.S)
 	})
@@ -60,16 +61,16 @@ func TestJSONStringifyPrimitives(t *testing.T) {
 		`42`:            `42`,
 		`undefined`:     `undefined`,
 	} {
-		v := must(ctx.Eval("test.js", Code(src)))
-		got, err := v.JSONStringify()
+		v := must(ctx.Eval(context.Background(), "test.js", src))
+		got, err := v.jsonStringify()
 		v.Free()
 		require.NoError(t, err, src)
 		assert.Equal(t, want, got, src)
 	}
 
-	v := must(ctx.Eval("test.js", Code(`const o = {}; o.self = o; o`)))
+	v := must(ctx.Eval(context.Background(), "test.js", `const o = {}; o.self = o; o`))
 	defer v.Free()
 
-	_, err := v.JSONStringify()
+	_, err := v.jsonStringify()
 	assert.Error(t, err)
 }

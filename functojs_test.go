@@ -47,7 +47,7 @@ func (c *Calculator) SetName(name string) error {
 func createAndRegisterJSFunc(t *testing.T, ctx *Runtime, name string, fn any) *Value {
 	jsFunc := must(funcToJS(ctx, fn))
 	assert.True(t, jsFunc.IsFunction())
-	ctx.Global().SetPropertyStr(name, jsFunc)
+	noErr(ctx.Global().Set(name, jsFunc))
 	return jsFunc
 }
 
@@ -64,7 +64,7 @@ func TestBasicConversion(t *testing.T) {
 		// Simple function
 		jsFunc := createAndRegisterJSFunc(t, ctx, "add", func(a, b int) int { return a + b })
 		defer jsFunc.Free()
-		result := must(ctx.Eval("test.js", Code("add(5, 3)")))
+		result := must(ctx.Eval(context.Background(), "test.js", "add(5, 3)"))
 		defer result.Free()
 		assert.Equal(t, int32(8), result.Int32())
 
@@ -76,11 +76,11 @@ func TestBasicConversion(t *testing.T) {
 			return a / b, nil
 		})
 		defer jsFunc2.Free()
-		result2 := must(ctx.Eval("test.js", Code("divide(10, 2)")))
+		result2 := must(ctx.Eval(context.Background(), "test.js", "divide(10, 2)"))
 		defer result2.Free()
 		assert.InEpsilon(t, float64(5), result2.Float64(), 0.0001)
 
-		_, err := ctx.Eval("test.js", Code("divide(10, 0)"))
+		_, err := ctx.Eval(context.Background(), "test.js", "divide(10, 0)")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "division by zero")
 
@@ -92,14 +92,14 @@ func TestBasicConversion(t *testing.T) {
 			return nil
 		})
 		defer jsFunc3.Free()
-		result3 := must(ctx.Eval("test.js", Code("errorOnly(false)")))
+		result3 := must(ctx.Eval(context.Background(), "test.js", "errorOnly(false)"))
 		defer result3.Free()
 		assert.True(t, result3.IsUndefined())
 
 		// No return value
 		jsFunc4 := createAndRegisterJSFunc(t, ctx, "print", func(msg string) { fmt.Printf("Message: %s\n", msg) })
 		defer jsFunc4.Free()
-		result4 := must(ctx.Eval("test.js", Code(`print("hello")`)))
+		result4 := must(ctx.Eval(context.Background(), "test.js", `print("hello")`))
 		defer result4.Free()
 		assert.True(t, result4.IsUndefined())
 	})
@@ -128,7 +128,7 @@ func TestBasicConversion(t *testing.T) {
 		funcPtr := &addFunc
 		jsFunc := createAndRegisterJSFunc(t, ctx, "funcPtr", funcPtr)
 		defer jsFunc.Free()
-		result := must(ctx.Eval("test.js", Code("funcPtr(7, 8)")))
+		result := must(ctx.Eval(context.Background(), "test.js", "funcPtr(7, 8)"))
 		defer result.Free()
 		assert.Equal(t, int32(15), result.Int32())
 	})
@@ -142,7 +142,7 @@ func TestParameters(t *testing.T) {
 			return a + b + c + d + e
 		})
 
-		result := must(ctx.Eval("test.js", Code(`manyParamFunc(1, 2, 3, 4, 5)`)))
+		result := must(ctx.Eval(context.Background(), "test.js", `manyParamFunc(1, 2, 3, 4, 5)`))
 		defer result.Free()
 		assert.Equal(t, int32(15), result.Int32())
 
@@ -150,7 +150,7 @@ func TestParameters(t *testing.T) {
 			return a + b + c
 		})
 
-		result2 := must(ctx.Eval("test.js", Code(`paramFunc(10)`)))
+		result2 := must(ctx.Eval(context.Background(), "test.js", `paramFunc(10)`))
 		defer result2.Free()
 		assert.Equal(t, int32(10), result2.Int32())
 
@@ -158,7 +158,7 @@ func TestParameters(t *testing.T) {
 			return a * 2
 		})
 
-		result3 := must(ctx.Eval("test.js", Code(`paramFunc2(5, 10, 15)`)))
+		result3 := must(ctx.Eval(context.Background(), "test.js", `paramFunc2(5, 10, 15)`))
 		defer result3.Free()
 		assert.Equal(t, int32(10), result3.Int32())
 	})
@@ -168,8 +168,8 @@ func TestParameters(t *testing.T) {
 			return len(y) + 1
 		})
 		assert.NoError(t, err)
-		ctx.Global().SetPropertyStr("testFunc", goFunc)
-		_, err = ctx.Eval("test.js", Code(`testFunc("invalid", 2)`))
+		noErr(ctx.Global().Set("testFunc", goFunc))
+		_, err = ctx.Eval(context.Background(), "test.js", `testFunc("invalid", 2)`)
 		require.Error(t, err)
 	})
 
@@ -178,7 +178,7 @@ func TestParameters(t *testing.T) {
 			return fmt.Sprintf("string:%s,int:%d,float:%.1f,bool:%t", s, i, f, b)
 		})
 
-		result := must(ctx.Eval("test.js", Code(`basicTypesFunc("test", 42, 3.14, true)`)))
+		result := must(ctx.Eval(context.Background(), "test.js", `basicTypesFunc("test", 42, 3.14, true)`))
 		defer result.Free()
 		assert.Equal(t, "string:test,int:42,float:3.1,bool:true", result.String())
 	})
@@ -192,11 +192,11 @@ func TestParameters(t *testing.T) {
 				return fmt.Sprintf("processed %d items, value=%v", len(data), data["value"]), nil
 			})
 
-			result := must(ctx.Eval("test.js", Code(`processData({name: "test", value: 42})`)))
+			result := must(ctx.Eval(context.Background(), "test.js", `processData({name: "test", value: 42})`))
 			defer result.Free()
 			assert.Equal(t, "processed 2 items, value=42", result.String())
 
-			_, err := ctx.Eval("test.js", Code(`processData({})`))
+			_, err := ctx.Eval(context.Background(), "test.js", `processData({})`)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "empty data")
 		})
@@ -206,7 +206,7 @@ func TestParameters(t *testing.T) {
 				return fmt.Sprintf("array: %v", arr)
 			})
 
-			result := must(ctx.Eval("test.js", Code(`arrayFunc([1, 2, 3])`)))
+			result := must(ctx.Eval(context.Background(), "test.js", `arrayFunc([1, 2, 3])`))
 			defer result.Free()
 			assert.Contains(t, result.String(), "array:")
 		})
@@ -221,15 +221,15 @@ func TestParameters(t *testing.T) {
 				return fmt.Sprintf("value: %d", *ptr)
 			})
 
-			result1 := must(ctx.Eval("test.js", Code(`pointerFunc(42)`)))
+			result1 := must(ctx.Eval(context.Background(), "test.js", `pointerFunc(42)`))
 			defer result1.Free()
 			assert.Equal(t, "value: 42", result1.String())
 
-			result2 := must(ctx.Eval("test.js", Code(`pointerFunc(null)`)))
+			result2 := must(ctx.Eval(context.Background(), "test.js", `pointerFunc(null)`))
 			defer result2.Free()
 			assert.Equal(t, "nil", result2.String())
 
-			result3 := must(ctx.Eval("test.js", Code(`pointerFunc(undefined)`)))
+			result3 := must(ctx.Eval(context.Background(), "test.js", `pointerFunc(undefined)`))
 			defer result3.Free()
 			assert.Equal(t, "nil", result3.String())
 		})
@@ -242,7 +242,7 @@ func TestParameters(t *testing.T) {
 				return fmt.Sprintf("value: %s", *ptr)
 			})
 
-			result4 := must(ctx.Eval("test.js", Code(`ptrStringFunc("hello")`)))
+			result4 := must(ctx.Eval(context.Background(), "test.js", `ptrStringFunc("hello")`))
 			defer result4.Free()
 			assert.Equal(t, "value: hello", result4.String())
 
@@ -253,7 +253,7 @@ func TestParameters(t *testing.T) {
 				return fmt.Sprintf("value: %.2f", *ptr)
 			})
 
-			result5 := must(ctx.Eval("test.js", Code(`ptrParamFunc(3.14159)`)))
+			result5 := must(ctx.Eval(context.Background(), "test.js", `ptrParamFunc(3.14159)`))
 			defer result5.Free()
 			assert.Equal(t, "value: 3.14", result5.String())
 		})
@@ -266,7 +266,7 @@ func TestParameters(t *testing.T) {
 				return *ptr
 			})
 
-			_, err := ctx.Eval("test.js", Code(`ptrFunc(new Date())`))
+			_, err := ctx.Eval(context.Background(), "test.js", `ptrFunc(new Date())`)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "cannot convert JS function argument")
 		})
@@ -289,7 +289,7 @@ func TestParameters(t *testing.T) {
 			}
 
 			for _, test := range tests {
-				result := must(ctx.Eval("test.js", Code(test.input)))
+				result := must(ctx.Eval(context.Background(), "test.js", test.input))
 				defer result.Free()
 				assert.Contains(t, result.String(), test.contains)
 			}
@@ -301,12 +301,12 @@ func TestParameters(t *testing.T) {
 			})
 
 			// Test whole number conversion to int
-			result := must(ctx.Eval("test.js", Code(`anyFunc(42)`)))
+			result := must(ctx.Eval(context.Background(), "test.js", `anyFunc(42)`))
 			defer result.Free()
 			assert.Contains(t, result.String(), "int64: 42")
 
 			// Test fractional number conversion to float64
-			result2 := must(ctx.Eval("test.js", Code(`anyFunc(3.14)`)))
+			result2 := must(ctx.Eval(context.Background(), "test.js", `anyFunc(3.14)`))
 			defer result2.Free()
 			assert.Contains(t, result2.String(), "float64")
 			assert.Contains(t, result2.String(), "3.14")
@@ -319,11 +319,11 @@ func TestParameters(t *testing.T) {
 				return callback(value)
 			})
 
-			result := must(ctx.Eval("test.js", Code(`higherOrderFunc(x => x * 2, 21)`)))
+			result := must(ctx.Eval(context.Background(), "test.js", `higherOrderFunc(x => x * 2, 21)`))
 			defer result.Free()
 			assert.Equal(t, int32(42), result.Int32())
 
-			_, err := ctx.Eval("test.js", Code(`higherOrderFunc(x => { throw new Error("callback error"); }, 10)`))
+			_, err := ctx.Eval(context.Background(), "test.js", `higherOrderFunc(x => { throw new Error("callback error"); }, 10)`)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "callback error")
 		})
@@ -333,7 +333,7 @@ func TestParameters(t *testing.T) {
 				return callback()
 			})
 
-			_, err2 := ctx.Eval("test.js", Code(`callbackTest(42)`))
+			_, err2 := ctx.Eval(context.Background(), "test.js", `callbackTest(42)`)
 			require.Error(t, err2)
 			assert.Contains(t, err2.Error(), "cannot convert JS function argument")
 		})
@@ -349,15 +349,15 @@ func TestParameters(t *testing.T) {
 				return total
 			})
 
-			result1 := must(ctx.Eval("test.js", Code("sumFunc(1, 2, 3, 4, 5)")))
+			result1 := must(ctx.Eval(context.Background(), "test.js", "sumFunc(1, 2, 3, 4, 5)"))
 			defer result1.Free()
 			assert.Equal(t, int32(15), result1.Int32())
 
-			result2 := must(ctx.Eval("test.js", Code("sumFunc()")))
+			result2 := must(ctx.Eval(context.Background(), "test.js", "sumFunc()"))
 			defer result2.Free()
 			assert.Equal(t, int32(0), result2.Int32())
 
-			result3 := must(ctx.Eval("test.js", Code("sumFunc(42)")))
+			result3 := must(ctx.Eval(context.Background(), "test.js", "sumFunc(42)"))
 			defer result3.Free()
 			assert.Equal(t, int32(42), result3.Int32())
 		})
@@ -371,11 +371,11 @@ func TestParameters(t *testing.T) {
 				return fmt.Sprintf("%s: %d", prefix, total)
 			})
 
-			result1 := must(ctx.Eval("test.js", Code(`partialSumFunc("Total", 1, 2, 3)`)))
+			result1 := must(ctx.Eval(context.Background(), "test.js", `partialSumFunc("Total", 1, 2, 3)`))
 			defer result1.Free()
 			assert.Equal(t, "Total: 6", result1.String())
 
-			result2 := must(ctx.Eval("test.js", Code(`partialSumFunc("Total")`)))
+			result2 := must(ctx.Eval(context.Background(), "test.js", `partialSumFunc("Total")`))
 			defer result2.Free()
 			assert.Equal(t, "Total: 0", result2.String())
 		})
@@ -385,7 +385,7 @@ func TestParameters(t *testing.T) {
 				return fmt.Sprintf(format, args...)
 			})
 
-			result := must(ctx.Eval("test.js", Code(`formatFunc("Hello %s, you are %d years old", "John", 25)`)))
+			result := must(ctx.Eval(context.Background(), "test.js", `formatFunc("Hello %s, you are %d years old", "John", 25)`))
 			defer result.Free()
 			assert.Equal(t, "Hello John, you are 25 years old", result.String())
 		})
@@ -399,7 +399,7 @@ func TestParameters(t *testing.T) {
 				return fmt.Sprintf("total: %d", total)
 			})
 
-			_, err := ctx.Eval("test.js", Code(`variadicIntFunc(1, 2, 1000)`))
+			_, err := ctx.Eval(context.Background(), "test.js", `variadicIntFunc(1, 2, 1000)`)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "cannot convert JS function argument")
 		})
@@ -415,7 +415,7 @@ func TestReturnValues(t *testing.T) {
 				return nil
 			})
 			defer jsFunc.Free()
-			result := must(ctx.Eval("test.js", Code(`nilFunc()`)))
+			result := must(ctx.Eval(context.Background(), "test.js", `nilFunc()`))
 			defer result.Free()
 			assert.True(t, result.IsNull())
 		})
@@ -427,7 +427,7 @@ func TestReturnValues(t *testing.T) {
 				}
 			})
 			defer jsFunc.Free()
-			result := must(ctx.Eval("test.js", Code(`const func = returningFunc(); func(4)`)))
+			result := must(ctx.Eval(context.Background(), "test.js", `const func = returningFunc(); func(4)`))
 			defer result.Free()
 			assert.Equal(t, int32(12), result.Int32())
 		})
@@ -439,7 +439,7 @@ func TestReturnValues(t *testing.T) {
 		})
 		defer jsFunc.Free()
 
-		result := must(ctx.Eval("test.js", Code(`singleReturnNilError()`)))
+		result := must(ctx.Eval(context.Background(), "test.js", `singleReturnNilError()`))
 		defer result.Free()
 		assert.Equal(t, "single", result.String())
 	})
@@ -450,7 +450,7 @@ func TestReturnValues(t *testing.T) {
 		})
 		defer jsFunc.Free()
 
-		result := must(ctx.Eval("test.js", Code(`onlyNilError()`)))
+		result := must(ctx.Eval(context.Background(), "test.js", `onlyNilError()`))
 		defer result.Free()
 		assert.True(t, result.IsUndefined())
 	})
@@ -461,15 +461,15 @@ func TestReturnValues(t *testing.T) {
 		})
 		defer jsFunc.Free()
 
-		result := must(ctx.Eval("test.js", Code(`twoReturnsNilError()`)))
+		result := must(ctx.Eval(context.Background(), "test.js", `twoReturnsNilError()`))
 		defer result.Free()
 		assert.True(t, result.IsArray())
 
-		elem0 := result.GetPropertyIndex(0)
+		elem0 := must(result.Index(uint32(0)))
 		defer elem0.Free()
 		assert.Equal(t, "success", elem0.String())
 
-		elem1 := result.GetPropertyIndex(1)
+		elem1 := must(result.Index(uint32(1)))
 		defer elem1.Free()
 		assert.Equal(t, int32(100), elem1.Int32())
 	})
@@ -480,19 +480,19 @@ func TestReturnValues(t *testing.T) {
 		})
 		defer jsFunc.Free()
 
-		result := must(ctx.Eval("test.js", Code(`threeReturns()`)))
+		result := must(ctx.Eval(context.Background(), "test.js", `threeReturns()`))
 		defer result.Free()
 		assert.True(t, result.IsArray())
 
-		elem0 := result.GetPropertyIndex(0)
+		elem0 := must(result.Index(uint32(0)))
 		defer elem0.Free()
 		assert.Equal(t, "test", elem0.String())
 
-		elem1 := result.GetPropertyIndex(1)
+		elem1 := must(result.Index(uint32(1)))
 		defer elem1.Free()
 		assert.Equal(t, int32(123), elem1.Int32())
 
-		elem2 := result.GetPropertyIndex(2)
+		elem2 := must(result.Index(uint32(2)))
 		defer elem2.Free()
 		assert.Equal(t, true, elem2.Bool())
 	})
@@ -503,28 +503,28 @@ func TestReturnValues(t *testing.T) {
 		})
 		defer jsFunc.Free()
 
-		result := must(ctx.Eval("test.js", Code(`fiveReturns()`)))
+		result := must(ctx.Eval(context.Background(), "test.js", `fiveReturns()`))
 		defer result.Free()
 		assert.True(t, result.IsArray())
 
 		// Should return array with 4 elements (error is popped)
-		arrayLen := result.GetPropertyStr("length")
+		arrayLen := must(result.Get("length"))
 		defer arrayLen.Free()
 		assert.Equal(t, int32(4), arrayLen.Int32())
 
-		elem0 := result.GetPropertyIndex(0)
+		elem0 := must(result.Index(uint32(0)))
 		defer elem0.Free()
 		assert.Equal(t, int32(1), elem0.Int32())
 
-		elem1 := result.GetPropertyIndex(1)
+		elem1 := must(result.Index(uint32(1)))
 		defer elem1.Free()
 		assert.Equal(t, "two", elem1.String())
 
-		elem2 := result.GetPropertyIndex(2)
+		elem2 := must(result.Index(uint32(2)))
 		defer elem2.Free()
 		assert.Equal(t, true, elem2.Bool())
 
-		elem3 := result.GetPropertyIndex(3)
+		elem3 := must(result.Index(uint32(3)))
 		defer elem3.Free()
 		assert.Equal(t, 4.5, elem3.Float64())
 	})
@@ -607,19 +607,19 @@ func TestMethodBinding(t *testing.T) {
 
 			jsAddMethod := createAndRegisterJSFunc(t, ctx, "calcAdd", calc.Add)
 			defer jsAddMethod.Free()
-			result := must(ctx.Eval("test.js", Code("calcAdd(10, 20)")))
+			result := must(ctx.Eval(context.Background(), "test.js", "calcAdd(10, 20)"))
 			defer result.Free()
 			assert.Equal(t, int32(30), result.Int32())
 
 			jsMultiplyMethod := createAndRegisterJSFunc(t, ctx, "calcMultiply", calc.Multiply)
 			defer jsMultiplyMethod.Free()
-			result2 := must(ctx.Eval("test.js", Code("calcMultiply(3.5, 2.0)")))
+			result2 := must(ctx.Eval(context.Background(), "test.js", "calcMultiply(3.5, 2.0)"))
 			defer result2.Free()
 			assert.Equal(t, float64(7), result2.Float64())
 
 			jsSumMethod := createAndRegisterJSFunc(t, ctx, "calcSum", calc.Sum)
 			defer jsSumMethod.Free()
-			result3 := must(ctx.Eval("test.js", Code("calcSum(1, 2, 3)")))
+			result3 := must(ctx.Eval(context.Background(), "test.js", "calcSum(1, 2, 3)"))
 			defer result3.Free()
 			assert.Equal(t, int32(6), result3.Int32())
 		})
@@ -630,12 +630,12 @@ func TestMethodBinding(t *testing.T) {
 			jsSetNameMethod := createAndRegisterJSFunc(t, ctx, "setName", calc.SetName)
 			defer jsSetNameMethod.Free()
 
-			result := must(ctx.Eval("test.js", Code(`setName("NewName")`)))
+			result := must(ctx.Eval(context.Background(), "test.js", `setName("NewName")`))
 			defer result.Free()
 			assert.True(t, result.IsUndefined() || result.IsNull())
 			assert.Equal(t, "NewName", calc.Name)
 
-			_, err := ctx.Eval("test.js", Code(`setName("")`))
+			_, err := ctx.Eval(context.Background(), "test.js", `setName("")`)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "name cannot be empty")
 		})

@@ -8,22 +8,6 @@ import (
 	"time"
 )
 
-// ToJsValue converts any Go value to a QuickJS value.
-func ToJsValue(c *Runtime, v any) (*Value, error) {
-	jsVal, err := newConvTracker[uintptr]().toJsValue(c, v)
-	if err != nil {
-		return nil, fmt.Errorf("[ToJSValue] %w", err)
-	}
-
-	if !jsVal.IsNull() && jsVal.IsObject() {
-		goValueType := reflect.TypeOf(v).String()
-		jsVal.SetPropertyStr("__go_type", c.NewString(goValueType))
-		jsVal.SetPropertyStr("__registry_id", c.NewInt64(int64(c.registry.Register(v))))
-	}
-
-	return jsVal, nil
-}
-
 // GoStructToJs converts a Go struct to a JavaScript object.
 // Includes both fields and methods as object properties.
 func (tracker *convTracker[T]) GoStructToJs(
@@ -32,8 +16,6 @@ func (tracker *convTracker[T]) GoStructToJs(
 	rval reflect.Value,
 ) (*Value, error) {
 	return withJSObject(c, func(obj *Value) error {
-		// obj.SetPropertyStr("__go_type", c.NewString(GetGoTypeName(rtype)))
-
 		// Determine the struct type and value for field processing:
 		// - pointer to struct: dereference for field processing.
 		// - direct struct: use as-is.
@@ -92,7 +74,9 @@ func (tracker *convTracker[T]) GoMapToJs(
 				return newGoToJsErr("map key: "+keyStr, err)
 			}
 
-			obj.SetPropertyStr(keyStr, jsValue)
+			if err := setTake(obj, keyStr, jsValue); err != nil {
+				return err
+			}
 		}
 
 		return nil
@@ -144,8 +128,8 @@ func goComplexToJs[T complex64 | complex128](c *Runtime, z T) *Value {
 		imagPart = imag(v)
 	}
 
-	obj.SetPropertyStr("real", c.NewFloat64(realPart))
-	obj.SetPropertyStr("imag", c.NewFloat64(imagPart))
+	_ = setTake(obj, "real", c.NewFloat64(realPart))
+	_ = setTake(obj, "imag", c.NewFloat64(imagPart))
 
 	return obj
 }
@@ -183,13 +167,13 @@ func tryConvertBuiltinTypes(c *Runtime, v any) *Value {
 
 		return c.NewArrayBuffer(val)
 	case time.Time:
-		return c.NewDate(&val)
+		return c.NewDate(val)
 	case *time.Time:
 		if val == nil {
 			return c.NewNull()
 		}
 
-		return c.NewDate(val)
+		return c.NewDate(*val)
 	case uintptr:
 		return c.NewInt64(int64(val))
 	}
@@ -413,9 +397,11 @@ func (tracker *convTracker[T]) addEmbeddedPrimitive(
 	}
 
 	prop, err := tracker.toJsValue(c, fieldValue.Interface())
-	obj.SetPropertyStr(fieldName, prop)
+	if err != nil {
+		return err
+	}
 
-	return err
+	return setTake(obj, fieldName, prop)
 }
 
 // processRegularFields handles non-anonymous fields in structs.
@@ -442,7 +428,9 @@ func (tracker *convTracker[T]) processRegularFields(
 			return err
 		}
 
-		obj.SetPropertyStr(fieldName, prop)
+		if err := setTake(obj, fieldName, prop); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -485,7 +473,9 @@ func (tracker *convTracker[T]) addStructMethodsToObject(
 			)
 		}
 
-		obj.SetPropertyStr(method.Name, jsMethod)
+		if err := setTake(obj, method.Name, jsMethod); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -509,16 +499,28 @@ func (tracker *convTracker[T]) arrayLikeToJS(
 			return nil, newGoToJsErr(typeName+": "+goTypeName(rval.Type()), err)
 		}
 
-		arr.SetPropertyIndex(int64(i), jsElem)
+		if err := setIndexTake(arr, uint32(i), jsElem); err != nil {
+			arr.Free()
+
+			return nil, err
+		}
 	}
 
-	return arr.Value, nil
+	return arr, nil
 }
 
 // toJsValue converts any Go value to a QuickJS Value using the conversion context.
 func (tracker *convTracker[T]) toJsValue(c *Runtime, v any) (*Value, error) {
 	if v == nil {
 		return c.NewNull(), nil
+	}
+
+	if jsVal, ok := v.(*Value); ok {
+		if err := jsVal.check(); err != nil {
+			return nil, err
+		}
+
+		return jsVal.Clone(), nil
 	}
 
 	if err, ok := v.(error); ok {

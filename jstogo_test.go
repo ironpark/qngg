@@ -1,6 +1,7 @@
 package qngg
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"math/big"
@@ -30,17 +31,17 @@ func validateCircularReference(t *testing.T, err error) {
 }
 
 func TestJsBigIntToGo(t *testing.T) {
-	rt := must(New())
+	rt := must(New(Config{}))
 	defer rt.Close()
 
-	result := must(rt.Eval("test.js", Code(`({ bigInt: BigInt(1234567890), notBigInt: "not a big int" })`)))
+	result := must(rt.Eval(context.Background(), "test.js", `({ bigInt: BigInt(1234567890), notBigInt: "not a big int" })`))
 	defer result.Free()
 
-	jsBigInt := result.GetPropertyStr("bigInt")
+	jsBigInt := must(result.Get("bigInt"))
 	defer jsBigInt.Free()
 
 	t.Run("not_a_bigInt", func(t *testing.T) {
-		notBigInt := result.GetPropertyStr("notBigInt")
+		notBigInt := must(result.Get("notBigInt"))
 		defer notBigInt.Free()
 		val, err := jsBigIntToGo[int64](notBigInt)
 		assert.Error(t, err)
@@ -70,10 +71,10 @@ func TestJsBigIntToGo(t *testing.T) {
 }
 
 func TestJsNumberToGo(t *testing.T) {
-	rt := must(New())
+	rt := must(New(Config{}))
 	defer rt.Close()
 
-	result := must(rt.Eval("test.js", Code(`({
+	result := must(rt.Eval(context.Background(), "test.js", `({
 			normalNumber: 42,
 			bigIntValue: BigInt(9007199254740991),
 			nan: NaN,
@@ -93,7 +94,7 @@ func TestJsNumberToGo(t *testing.T) {
 			floatValue: 3.14159,
 			overflowInt32: 2147483648,
 			overflowUint32: 4294967296,
-	})`)))
+	})`))
 	defer result.Free()
 
 	// Consolidated error tests
@@ -106,7 +107,7 @@ func TestJsNumberToGo(t *testing.T) {
 
 		for _, test := range errorTests {
 			t.Run(test.property, func(t *testing.T) {
-				val := result.GetPropertyStr(test.property)
+				val := must(result.Get(test.property))
 				defer val.Free()
 				_, err := jsNumberToGo[float64](val)
 				assert.Error(t, err)
@@ -193,13 +194,13 @@ func TestJsNumberToGo(t *testing.T) {
 
 		for _, tc := range overflowTestCases {
 			t.Run(tc.name+"_overflow", func(t *testing.T) {
-				val := result.GetPropertyStr(tc.property)
+				val := must(result.Get(tc.property))
 				defer val.Free()
 				tc.testValue(val)
 			})
 
 			t.Run("*"+tc.name+"_overflow", func(t *testing.T) {
-				val := result.GetPropertyStr(tc.property)
+				val := must(result.Get(tc.property))
 				defer val.Free()
 				tc.testPointer(val)
 			})
@@ -207,13 +208,13 @@ func TestJsNumberToGo(t *testing.T) {
 	})
 
 	t.Run("normal", func(t *testing.T) {
-		normalNum := result.GetPropertyStr("normalNumber")
+		normalNum := must(result.Get("normalNumber"))
 		defer normalNum.Free()
 
-		floatVal := result.GetPropertyStr("floatValue")
+		floatVal := must(result.Get("floatValue"))
 		defer floatVal.Free()
 
-		bigIntVal := result.GetPropertyStr("bigIntValue")
+		bigIntVal := must(result.Get("bigIntValue"))
 		defer bigIntVal.Free()
 
 		type CustomNumber int
@@ -344,10 +345,10 @@ func TestJsTimeToGo(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(New())
+			rt := must(New(Config{}))
 			defer rt.Close()
 
-			jsDate := must(rt.Eval("test.js", Code(test.jsCode)))
+			jsDate := must(rt.Eval(context.Background(), "test.js", test.jsCode))
 			defer jsDate.Free()
 
 			goTime, err := jsTimeToGo(jsDate)
@@ -404,10 +405,10 @@ func TestJsArrayBufferToGo(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(New())
+			rt := must(New(Config{}))
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", Code(test.jsCode)))
+			jsValue := must(rt.Eval(context.Background(), "test.js", test.jsCode))
 			defer jsValue.Free()
 
 			result, err := jsArrayBufferToGo(jsValue)
@@ -526,10 +527,10 @@ func TestIsTypedArray(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(New())
+			rt := must(New(Config{}))
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", Code(test.jsCode)))
+			jsValue := must(rt.Eval(context.Background(), "test.js", test.jsCode))
 			defer jsValue.Free()
 
 			result := isTypedArray(jsValue)
@@ -613,10 +614,10 @@ func TestJsTypedArrayToGo(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(New())
+			rt := must(New(Config{}))
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", Code(test.jsCode)))
+			jsValue := must(rt.Eval(context.Background(), "test.js", test.jsCode))
 			defer jsValue.Free()
 
 			result, err := jsTypedArrayToGo(jsValue)
@@ -823,10 +824,10 @@ func TestJsArrayToGo(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(New())
+			rt := must(New(Config{}))
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", Code(test.jsCode)))
+			jsValue := must(rt.Eval(context.Background(), "test.js", test.jsCode))
 			defer jsValue.Free()
 
 			result, err := jsArrayToGo(jsValue, test.sample)
@@ -988,10 +989,10 @@ func TestJsSetToGo(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(New())
+			rt := must(New(Config{}))
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", Code(test.jsCode)))
+			jsValue := must(rt.Eval(context.Background(), "test.js", test.jsCode))
 			defer jsValue.Free()
 
 			result, err := jsSetToGo(jsValue, test.sample)
@@ -1190,10 +1191,10 @@ func TestJsObjectOrMapToGoMap(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(New())
+			rt := must(New(Config{}))
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", Code(test.jsCode)))
+			jsValue := must(rt.Eval(context.Background(), "test.js", test.jsCode))
 			defer jsValue.Free()
 
 			result, err := jsObjectOrMapToGoMap(jsValue, test.sample)
@@ -1565,10 +1566,10 @@ func TestJsObjectOrMapToGoStruct(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(New())
+			rt := must(New(Config{}))
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", Code(test.jsCode)))
+			jsValue := must(rt.Eval(context.Background(), "test.js", test.jsCode))
 			defer jsValue.Free()
 
 			result, err := jsObjectOrMapToGoStruct(jsValue, test.sample)
@@ -1591,12 +1592,12 @@ func TestJsObjectOrMapToGoStruct(t *testing.T) {
 		})
 	}
 
-	rt := must(New())
+	rt := must(New(Config{}))
 	defer rt.Close()
 
 	t.Run("circular_reference_stringify_error", func(t *testing.T) {
 		// Create a JavaScript object with a circular reference that will cause JSONStringify to fail
-		result := must(rt.Eval("test.js", Code(`
+		result := must(rt.Eval(context.Background(), "test.js", `
 		(() => {
 			let obj = {
 				name: "test",
@@ -1605,7 +1606,7 @@ func TestJsObjectOrMapToGoStruct(t *testing.T) {
 			obj.circularField.parent = obj; // Create circular reference
 			return obj;
 		})()
-		`)))
+		`))
 		defer result.Free()
 
 		type TestStruct struct {
@@ -1625,13 +1626,13 @@ func TestJsObjectOrMapToGoStruct(t *testing.T) {
 
 	t.Run("test_unmarshaler_both_pointer_and_value", func(t *testing.T) {
 		// Test both pointer and non-pointer unmarshaler fields work correctly
-		result := must(rt.Eval("test.js", Code(`
+		result := must(rt.Eval(context.Background(), "test.js", `
 		({
 			name: "test",
 			pointerField: "pointer value",
 			valueField: "value field"
 		})
-		`)))
+		`))
 		defer result.Free()
 
 		type TestStruct struct {
@@ -1689,10 +1690,10 @@ func TestJsObjectOrMapToGo(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(New())
+			rt := must(New(Config{}))
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", Code(test.jsCode)))
+			jsValue := must(rt.Eval(context.Background(), "test.js", test.jsCode))
 			defer jsValue.Free()
 
 			result, err := jsObjectToGo(jsValue, test.sample)
@@ -1709,12 +1710,12 @@ func TestJsObjectOrMapToGo(t *testing.T) {
 	}
 
 	t.Run("js_object_array_to_go", func(t *testing.T) {
-		rt := must(New())
+		rt := must(New(Config{}))
 		defer rt.Close()
-		jsArray := must(rt.Eval("test.js", Code(`[
+		jsArray := must(rt.Eval(context.Background(), "test.js", `[
 		{name: "Alice", age: 30},
 		{name: "Bob", age: 25}
-	]`)))
+	]`))
 		defer jsArray.Free()
 
 		type Person struct {
@@ -1734,22 +1735,22 @@ func TestJsObjectOrMapToGo(t *testing.T) {
 	})
 
 	t.Run("js_object_to_go_fallback", func(t *testing.T) {
-		rt := must(New())
+		rt := must(New(Config{}))
 		defer rt.Close()
 
 		// successfully convert a JS object to a Go slice of int
-		jsValue := must(rt.Eval("test.js", Code(`(new Date)`)))
+		jsValue := must(rt.Eval(context.Background(), "test.js", `(new Date)`))
 		defer jsValue.Free()
 		result, err := jsObjectToGo[string](jsValue)
 		require.NoError(t, err)
 		assert.NotNil(t, result)
 
 		// fail to convert a JS object to a Go value due to json stringify error
-		jsValue = must(rt.Eval("test.js", Code(`(() => {
+		jsValue = must(rt.Eval(context.Background(), "test.js", `(() => {
 			let obj = { name: "test" };
 			obj.circular = obj; // Create circular reference
 			return obj;
-		})()`)))
+		})()`))
 		defer jsValue.Free()
 		_, err = jsObjectToGo[int](jsValue)
 		assert.Error(t, err)
@@ -2022,13 +2023,13 @@ func TestJsFuncToGo(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(New())
+			rt := must(New(Config{}))
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", Code(test.jsCode)))
+			jsValue := must(rt.Eval(context.Background(), "test.js", test.jsCode))
 			defer jsValue.Free()
 
-			goFunc, err := JsFuncToGo(jsValue, test.sample)
+			goFunc, err := jsFuncToGo(jsValue, test.sample)
 			if test.expectErr {
 				assert.Error(t, err)
 				if test.errMsg != "" {
@@ -2108,107 +2109,107 @@ func TestJsFuncToGo(t *testing.T) {
 	}
 
 	t.Run("validate_go_function_signature", func(t *testing.T) {
-		rt := must(New())
+		rt := must(New(Config{}))
 		defer rt.Close()
 
-		jsFuncValue := must(rt.Eval("test.js", Code(`
+		jsFuncValue := must(rt.Eval(context.Background(), "test.js", `
 			function testFunc(a, b, c) {
 				return a + b + c;
 			}
 			testFunc;
-		`)))
+		`))
 		defer jsFuncValue.Free()
 
 		t.Run("Non_variadic_function_argument_error", func(t *testing.T) {
-			jsFuncValue := must(rt.Eval("test.js", Code(`
+			jsFuncValue := must(rt.Eval(context.Background(), "test.js", `
 				function nonVariadicFunc(a, b, c) {
 					return a + b + c;
 				}
 				nonVariadicFunc;
-			`)))
+			`))
 			defer jsFuncValue.Free()
 
 			var goFunc func(int, int, any) (any, error)
-			goFunc = must(JsFuncToGo(jsFuncValue, goFunc))
+			goFunc = must(jsFuncToGo(jsFuncValue, goFunc))
 
 			unsafePtr := unsafe.Pointer(&[]byte{1, 2, 3}[0])
 			result, err := goFunc(1, 2, unsafePtr)
 			assert.Nil(t, result)
 			assert.Error(t, err)
-			assert.Contains(t, err.Error(), "failed to convert go function argument at index 2")
+			assert.Contains(t, err.Error(), "argument 2: [ToValue] cannot convert")
 		})
 
 		t.Run("Variadic_function_fixed_argument_error", func(t *testing.T) {
 			// Create a variadic JS function
-			jsFuncValue := must(rt.Eval("test.js", Code(`
+			jsFuncValue := must(rt.Eval(context.Background(), "test.js", `
 				function variadicFunc(required1, required2, ...rest) {
 					return required1 + required2 + rest.length;
 				}
 				variadicFunc;
-			`)))
+			`))
 			defer jsFuncValue.Free()
 
 			var goFunc func(int, any, ...any) (any, error)
-			goFunc = must(JsFuncToGo(jsFuncValue, goFunc))
+			goFunc = must(jsFuncToGo(jsFuncValue, goFunc))
 
 			unsafePtr := unsafe.Pointer(&[]byte{1, 2, 3}[0])
 			result, err := goFunc(1, unsafePtr, "extra1", "extra2")
 			assert.Nil(t, result)
 			assert.Error(t, err)
-			assert.Contains(t, err.Error(), "failed to convert go function argument at index 1")
+			assert.Contains(t, err.Error(), "argument 1: [ToValue] cannot convert")
 		})
 
 		t.Run("Variadic_function_variadic_argument_error", func(t *testing.T) {
-			jsFuncValue := must(rt.Eval("test.js", Code(`
+			jsFuncValue := must(rt.Eval(context.Background(), "test.js", `
 				function variadicFunc(required, ...rest) {
 					return required + rest.length;
 				}
 				variadicFunc;
-			`)))
+			`))
 			defer jsFuncValue.Free()
 
 			var goFunc func(int, ...any) (any, error)
-			goFunc = must(JsFuncToGo(jsFuncValue, goFunc))
+			goFunc = must(jsFuncToGo(jsFuncValue, goFunc))
 
 			unsafePtr := unsafe.Pointer(&[]byte{1, 2, 3}[0])
 			result, err := goFunc(1, "valid", unsafePtr, "another")
 			assert.Nil(t, result)
 			assert.Error(t, err)
-			assert.Contains(t, err.Error(), "failed to convert go function argument at index 2")
+			assert.Contains(t, err.Error(), "argument 2: [ToValue] cannot convert")
 		})
 
 		t.Run("Valid_function_arguments", func(t *testing.T) {
 			// Non-variadic function
-			jsFuncNV := must(rt.Eval("test.js", Code(`(a, b, c) => a + b + c`)))
+			jsFuncNV := must(rt.Eval(context.Background(), "test.js", `(a, b, c) => a + b + c`))
 			defer jsFuncNV.Free()
 
 			var goFuncNV func(int, int, int) (any, error)
-			goFuncNV = must(JsFuncToGo(jsFuncNV, goFuncNV))
+			goFuncNV = must(jsFuncToGo(jsFuncNV, goFuncNV))
 			result := must(goFuncNV(1, 2, 3))
 			assert.Equal(t, int64(6), result)
 
 			// Variadic function
-			jsFuncV := must(rt.Eval("test.js", Code(`(a, ...rest) => a + rest.length`)))
+			jsFuncV := must(rt.Eval(context.Background(), "test.js", `(a, ...rest) => a + rest.length`))
 			defer jsFuncV.Free()
 
 			var goFuncV func(int, ...any) (any, error)
-			goFuncV = must(JsFuncToGo(jsFuncV, goFuncV))
+			goFuncV = must(jsFuncToGo(jsFuncV, goFuncV))
 
 			result = must(goFuncV(10, "a", "b", "c"))
 			assert.Equal(t, int64(13), result)
 		})
 
 		t.Run("Invalid_function_return_type", func(t *testing.T) {
-			jsFuncValue := must(rt.Eval("test.js", Code(`
+			jsFuncValue := must(rt.Eval(context.Background(), "test.js", `
 				function invalidReturnFunc() {
 					return { name: "test" }; // Should return a string
 				}
 				invalidReturnFunc;
-			`)))
+			`))
 			defer jsFuncValue.Free()
 
 			var goFunc func() (string, error)
-			goFunc = must(JsFuncToGo(jsFuncValue, goFunc))
+			goFunc = must(jsFuncToGo(jsFuncValue, goFunc))
 
 			result, err := goFunc()
 			assert.Error(t, err)
@@ -2217,16 +2218,16 @@ func TestJsFuncToGo(t *testing.T) {
 		})
 
 		t.Run("Function_returns_error_with_symbol", func(t *testing.T) {
-			jsFuncValue := must(rt.Eval("test.js", Code(`
+			jsFuncValue := must(rt.Eval(context.Background(), "test.js", `
 				function symbolReturnFunc() {
 					return Symbol("test"); // Symbol cannot be converted by jsValueToGo
 				}
 				symbolReturnFunc;
-			`)))
+			`))
 			defer jsFuncValue.Free()
 
 			var goFunc func() (string, error)
-			goFunc = must(JsFuncToGo(jsFuncValue, goFunc))
+			goFunc = must(jsFuncToGo(jsFuncValue, goFunc))
 
 			result, err := goFunc()
 			assert.Error(t, err)
@@ -2241,33 +2242,33 @@ func TestJsFuncToGo(t *testing.T) {
 	// to verify the go function passthrough works correctly
 	// without any modification by js engine
 	t.Run("Passthrough_of_go_func", func(t *testing.T) {
-		rt := must(New())
+		rt := must(New(Config{}))
 		defer rt.Close()
 
 		type TestArg struct {
 			TestFunc func(int) (int, error) `json:"testFunc"`
 		}
 
-		goArg := must(ToJsValue(rt, TestArg{
+		goArg := must(rt.ToValue(TestArg{
 			TestFunc: func(x int) (int, error) {
 				return x * x, nil
 			},
 		}))
-		rt.Global().SetPropertyStr("goArg", goArg)
-		goReceiver := rt.Function(func(ctx *This) (*Value, error) {
+		noErr(rt.Global().Set("goArg", goArg))
+		goReceiver := rt.NewFunction(func(ctx *FunctionCall) (*Value, error) {
 			jsArg := ctx.Args()[0]
 			// expect wrong type
-			_, err := ToGoValue(jsArg, "")
+			_, err := toGo(jsArg, "")
 			assert.Error(t, err, "string is not a valid type, expected TestArg")
 
-			goArg := must(ToGoValue(jsArg, TestArg{}))
+			goArg := must(toGo(jsArg, TestArg{}))
 			result := must(goArg.TestFunc(5))
 			assert.Equal(t, 25, result)
 			return nil, nil
 		})
-		rt.Global().SetPropertyStr("goReceiver", goReceiver)
+		noErr(rt.Global().Set("goReceiver", goReceiver))
 		jsCode := `(function() { goReceiver(goArg); })();`
-		result := must(rt.Eval("test.js", Code(jsCode)))
+		result := must(rt.Eval(context.Background(), "test.js", jsCode))
 		defer result.Free()
 	})
 }
@@ -2355,7 +2356,9 @@ func TestJsValueToGo(t *testing.T) {
 			name:   "error_object",
 			jsCode: `new Error("test error")`,
 			expectEval: func(t *testing.T, result any, err error) {
-				assert.Contains(t, err.Error(), "test error")
+				require.NoError(t, err)
+				converted := must(result.(*Value).As[error]())
+				assert.ErrorContains(t, converted, "test error")
 			},
 		},
 
@@ -2529,10 +2532,10 @@ func TestJsValueToGo(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(New())
+			rt := must(New(Config{}))
 			defer rt.Close()
 
-			jsValue, err := rt.Eval("test.js", Code(test.jsCode))
+			jsValue, err := rt.Eval(context.Background(), "test.js", test.jsCode)
 			defer jsValue.Free()
 
 			if test.expectEval != nil {
@@ -2542,9 +2545,9 @@ func TestJsValueToGo(t *testing.T) {
 
 			var result any
 			if test.sample != nil {
-				result, err = ToGoValue(jsValue, test.sample)
+				result, err = toGo(jsValue, test.sample)
 			} else {
-				result, err = ToGoValue[any](jsValue)
+				result, err = toGo[any](jsValue)
 			}
 
 			if test.customAssert != nil {
@@ -2566,7 +2569,7 @@ func TestJsValueToGo(t *testing.T) {
 }
 
 func TestCircularReferenceDetection(t *testing.T) {
-	rt := must(New())
+	rt := must(New(Config{}))
 	defer rt.Close()
 
 	circularReferenceTests := []struct {
@@ -2600,11 +2603,11 @@ func TestCircularReferenceDetection(t *testing.T) {
 
 	for _, tc := range circularReferenceTests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := must(rt.Eval("test.js", Code(`
+			result := must(rt.Eval(context.Background(), "test.js", `
 				var obj = { name: "test" };
 				obj.self = obj; // circular reference
 				obj;
-			`)))
+			`))
 			defer result.Free()
 
 			err := tc.testFunc(result)
@@ -2614,62 +2617,59 @@ func TestCircularReferenceDetection(t *testing.T) {
 }
 
 func TestStringToBoolConversion(t *testing.T) {
-	rt := must(New())
+	rt := must(New(Config{}))
 	defer rt.Close()
 
 	var boolVal bool
 
-	result := must(rt.Eval("test.js", Code(`"non-empty"`)))
+	result := must(rt.Eval(context.Background(), "test.js", `"non-empty"`))
 	defer result.Free()
-	converted := must(ToGoValue(result, boolVal))
+	converted := must(toGo(result, boolVal))
 	assert.True(t, converted)
 
-	emptyResult := must(rt.Eval("test.js", Code(`""`)))
+	emptyResult := must(rt.Eval(context.Background(), "test.js", `""`))
 	defer emptyResult.Free()
-	converted2 := must(ToGoValue(emptyResult, boolVal))
+	converted2 := must(toGo(emptyResult, boolVal))
 	assert.False(t, converted2)
 }
 
 func TestErrorValueHandling(t *testing.T) {
-	rt := must(New())
+	rt := must(New(Config{}))
 	defer rt.Close()
 
-	obj := rt.NewObject()
-	defer obj.Free()
-
-	errorValue := obj.CallConstructor()
+	errorValue := must(rt.Eval(context.Background(), "test.js", "new TypeError('not a constructor')"))
 	defer errorValue.Free()
 
 	assert.True(t, errorValue.IsError())
-	converted := must(ToGoValue[error](errorValue))
+	converted := must(toGo[error](errorValue))
 	assert.Error(t, converted)
-	assert.Contains(t, converted.Error(), "not a constructor")
+	assert.Contains(t, converted.Error(), "TypeError: not a constructor")
 }
 
 func TestStringToNumericConversion(t *testing.T) {
-	rt := must(New())
+	rt := must(New(Config{}))
 	defer rt.Close()
 
 	t.Run("string_to_pointer_numeric_types", func(t *testing.T) {
-		result := must(rt.Eval("test.js", Code(`"42"`)))
+		result := must(rt.Eval(context.Background(), "test.js", `"42"`))
 		defer result.Free()
 		var ptrInt *int
-		converted := must(ToGoValue(result, ptrInt))
+		converted := must(toGo(result, ptrInt))
 		assert.Equal(t, 42, *converted)
 
-		floatResult := must(rt.Eval("test.js", Code(`"3.14"`)))
+		floatResult := must(rt.Eval(context.Background(), "test.js", `"3.14"`))
 		defer floatResult.Free()
 		var ptrFloat *float64
-		converted2 := must(ToGoValue(floatResult, ptrFloat))
+		converted2 := must(toGo(floatResult, ptrFloat))
 		assert.Equal(t, 3.14, *converted2)
 	})
 
 	t.Run("empty_string_to_numeric_conversion", func(t *testing.T) {
-		result := must(rt.Eval("test.js", Code(`""`)))
+		result := must(rt.Eval(context.Background(), "test.js", `""`))
 		defer result.Free()
 
 		var intVal int
-		_, err := ToGoValue(result, intVal)
+		_, err := toGo(result, intVal)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "empty string cannot be converted to number")
 	})
@@ -2712,10 +2712,10 @@ func TestStringToNumericConversion(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(fmt.Sprintf("convert_%s_to_%T", tc.jsValue, tc.targetType), func(t *testing.T) {
-				result := must(rt.Eval("test.js", Code(tc.jsValue)))
+				result := must(rt.Eval(context.Background(), "test.js", tc.jsValue))
 				defer result.Free()
 
-				converted, err := ToGoValue(result, tc.targetType)
+				converted, err := toGo(result, tc.targetType)
 				require.NoError(t, err)
 				assert.Equal(t, tc.expected, converted)
 			})

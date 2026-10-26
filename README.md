@@ -26,589 +26,350 @@ QNGG is a maintained fork of [fastschema/qjs](https://github.com/fastschema/qjs)
 - Runs QuickJS on **Wasmtime** instead of Wazero. Wasmtime's C API is called through [purego](https://github.com/ebitengine/purego) (a vendored port of [wasmtime-go](https://github.com/bytecodealliance/wasmtime-go)), so builds still need no cgo.
 - Tracks the latest **QuickJS-NG** release (currently v0.17.0), built with wasi-sdk 34.
 - Requires **Go 1.27** and decodes JSON with `encoding/json/v2`.
-- Fixes memory bugs inherited from upstream: string conversions leaked their C buffers, `JSONStringify` returned freed memory and `ToByteArray` freed memory owned by the ArrayBuffer.
-
-Migrating from `github.com/fastschema/qjs`:
-
-- Import `github.com/ironpark/qngg`; the package is named `qngg`.
-- `Context` was merged into `Runtime`: call its methods on the runtime, and use `Value.Runtime()`/`This.Runtime()` instead of `Context()`.
-- Low-level plumbing is no longer exported: `Handle`, `Mem`, raw `Call`/`Malloc`/`Free*`, the `Js*ToGo`/`Go*ToJs` helpers and the `ProxyFunction`, `StartFunctionName` and `QuickJSWasmBytes` options. Use `ToGoValue`, `ToJsValue` and `JsFuncToGo`.
-- `SetProperty`, `SetPropertyStr` and `SetPropertyIndex` take ownership of the value; do not `Free` it afterwards.
-- `Min` was removed; use the built-in `min`.
-- `Option.MaxExecutionTime` is now a `time.Duration` and is enforced (it was an ignored `int`).
-- JavaScript gets no filesystem unless `Option.CWD` is set, and that directory is read-only unless `Option.WritableCWD` is set (the process working directory used to be mounted read-write).
-- Output is discarded unless `Option.Stdout`/`Option.Stderr` are set (it used to go to the process's stdout/stderr).
-- `Pool.Put` closes runtimes that were closed or interrupted instead of reusing them.
+- Is **sandboxed by default**: no filesystem, no output and interruptible calls unless configured otherwise.
+- Has a smaller, redesigned API: one ownership rule for values, `context.Context` on every call that runs JavaScript, errors instead of silent failures and panics, and `Value.As[T]()` for conversions.
+- Fixes memory bugs inherited from upstream, such as leaked strings, property names and eval buffers, use-after-free in `JSONStringify` and a double free in `Await`.
 
 | `go test -bench .` (Apple M1 Ultra) | QJS on Wazero | QNGG |
 | --- | --- | --- |
-| RuntimeNew | 17 ms | 0.34 ms |
-| EvalFactorial | 97 ms | 39 ms |
-| GoFunctionCall | 168 ms | 25 ms |
-| ValueProperties | 503 µs | 153 µs |
+| RuntimeNew | 17 ms | 0.36 ms |
+| EvalFactorial | 97 ms | 52 ms (40 ms with `DisableInterruption`) |
+| GoFunctionCall | 168 ms | 11 ms |
+| ValueProperties | 503 µs | 220 µs |
+
+### Migrating from fastschema/qjs
+
+The API changed in ways the compiler will point out:
+
+| fastschema/qjs | QNGG |
+| --- | --- |
+| `qjs.New(qjs.Option{...})` | `qngg.New(qngg.Config{...})` |
+| `rt.Context().X(...)` | `rt.X(...)`: `Context` was merged into `Runtime` |
+| `rt.Eval(name, qjs.Code(src), qjs.TypeModule())` | `rt.Eval(ctx, name, src, qngg.AsModule())` |
+| `rt.Eval(name)` / `qjs.Bytecode(b)` | `rt.EvalFile(ctx, path)` / `rt.EvalBytecode(ctx, b)` |
+| `rt.Load(name, ...)` | `rt.LoadModule`, `LoadModuleFile`, `LoadModuleBytecode` |
+| `qjs.FlagAsync()` | `qngg.TopLevelAwait()` |
+| `Option.Context`, `CloseOnContextDone`, `MaxExecutionTime` | the `ctx` of each call: cancel it or give it a deadline |
+| `v.GetPropertyStr(n)`, `SetPropertyStr`, `GetPropertyIndex`, ... | `v.Get(n)`, `Set`, `Index`, `SetIndex`, `GetKey`, `SetKey`, `Has`, `Delete`, `Keys`: all return errors |
+| `v.InvokeJS(name, args...)`, `rt.Invoke(fn, this, args...)` | `v.Invoke(ctx, name, args...)`, `fn.Call(ctx, this, args...)` |
+| `v.CallConstructor(args...)` | `v.New(ctx, args...)` |
+| `v.JSONStringify()` | `json.Marshal(v)`: `Value` implements `json.Marshaler` |
+| `v.DateTime()`, `v.ToByteArray()` | `v.Time()`, `v.Bytes()` |
+| `qjs.ToJsValue(ctx, x)`, `qjs.ToGoValue[T](v)`, `qjs.JsFuncToGo[F](v)` | `rt.ToValue(x)`, `v.As[T]()`, `v.As[F]()` |
+| `func(this *qjs.This) (*qjs.Value, error)` | `func(call *qngg.FunctionCall) (*qngg.Value, error)` |
+| `SetAsyncFunc(name, func(this *qjs.This) { this.Promise().Resolve(v) })` | `SetAsyncFunc(name, fn)`: the promise settles with `fn`'s result or error |
+| `rt.ThrowTypeError(...)` | `return nil, &qngg.Error{Name: "TypeError", Message: ...}` |
+| `pool.Get()` / `pool.Put(rt)` | `pool.Do(ctx, func(rt *qngg.Runtime) error { ... })` |
+| `Array`, `Map`, `Set` wrappers | plain `*Value`s: `Index`, `Invoke(ctx, "get", k)`, `Keys`, ... |
+
+Behavior changes to watch for:
+
+- **Ownership**: passing a value to a method no longer takes it over. Free what you create even after `Set`ting it on an object.
+- **Sandbox**: JavaScript gets no filesystem unless `Config.CWD` is set, read-only unless `WritableCWD` is set, and its output is discarded unless `Stdout`/`Stderr` are set.
+- **Errors as values**: evaluating to an `Error` object returns the object, not a Go error. Only thrown exceptions are errors, as `*qngg.Error`.
+- **No hidden properties**: `ToValue` no longer adds `__go_type`/`__registry_id` to objects, so `As` converts them structurally. Use `NewProxyValue` to pass a Go value through JavaScript unchanged.
 
 ## Features
 
-- **JavaScript ES6+ Support**: Full ES2023 compatibility via QuickJS (NG fork).
-- **WebAssembly Execution**: Secure, sandboxed runtime using Wasmtime.
-- **Go-JS Interoperability**: Seamless data conversion between Go and JavaScript.
-- **ProxyValue Support**: Zero-copy sharing of Go values with JavaScript via lightweight proxies.
-- **Function Binding**: Expose Go functions to JavaScript and vice versa.
-- **Async/Await**: Full support for asynchronous JavaScript execution.
-- **Memory Safety**: Memory-safe execution environment with configurable limits.
-- **No CGO Dependencies**: Wasmtime is loaded at runtime through [purego](https://github.com/ebitengine/purego), so builds work with `CGO_ENABLED=0` and cross-compile without a C toolchain.
+- **JavaScript ES2023** via QuickJS-NG, including modules, async/await and top-level await.
+- **Sandboxed**: QuickJS runs in its own WebAssembly instance and only gets the capabilities you grant.
+- **Interruptible**: cancel a call's context or give it a deadline to stop runaway scripts, even `for (;;) {}`.
+- **Go-JS interoperability**: convert structs, maps, slices, functions and channels both ways, or share Go values by reference with ProxyValues.
+- **No cgo**: Wasmtime is loaded at runtime through [purego](https://github.com/ebitengine/purego), so builds work with `CGO_ENABLED=0` and cross-compile without a C toolchain.
 
 ## Example Usage
 
 ### Basic Execution
 
 ```go
-rt, err := qngg.New()
-if err != nil {
-	log.Fatal(err)
-}
-
-defer rt.Close()
-
-result, err := rt.Eval("test.js", qngg.Code(`
-	const person = {
-		name: "Alice",
-		age: 30,
-		city: "New York"
-	};
-
-	const info = Object.keys(person).map(key =>
-		key + ": " + person[key]
-	).join(", ");
-
-	// The last expression is the return value
-	({ person: person, info: info });
-`))
-if err != nil {
-	log.Fatal("Eval error:", err)
-}
-defer result.Free()
-// Output: name: Alice, age: 30, city: New York
-log.Println(result.GetPropertyStr("info").String())
-// Output: Alice
-log.Println(result.GetPropertyStr("person").GetPropertyStr("name").String())
-// Output: 30
-log.Println(result.GetPropertyStr("person").GetPropertyStr("age").Int32())
-```
-
-### Go function binding
-
-```go
-rt.SetFunc("goFunction", func(this *qngg.This) (*qngg.Value, error) {
-    return this.Runtime().NewString("Hello from Go!"), nil
-})
-
-result, err := rt.Eval("test.js", qngg.Code(`
-	const message = goFunction();
-	message;
-`))
-if err != nil {
-	log.Fatal("Eval error:", err)
-}
-defer result.Free()
-
-// Output: Hello from Go!
-log.Println(result.String())
-```
-
-### HTTP Handlers in JavaScript
-```go
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
-	"net/http"
 
 	"github.com/ironpark/qngg"
 )
 
-func must[T any](val T, err error) T {
-	if err != nil {
-		log.Fatalf("Error: %v", err)
-	}
-	return val
-}
-
-const script = `
-// JS handlers for HTTP routes
-const about = () => {
-	return "QuickJS in Go - Hello World!";
-};
-
-const contact = () => {
-	return "Contact us at contact@example.com";
-};
-
-export default { about, contact };
-`
-
 func main() {
-	rt := must(qngg.New())
+	rt, err := qngg.New(qngg.Config{})
+	if err != nil {
+		log.Fatal(err)
+	}
 	defer rt.Close()
 
-	// Precompile the script to bytecode
-	byteCode := must(rt.Compile("script.js", qngg.Code(script), qngg.TypeModule()))
-	// Use a pool of runtimes for concurrent requests
-	pool := qngg.NewPool(3, qngg.Option{}, func(r *qngg.Runtime) error {
-		results := must(r.Eval("script.js", qngg.Bytecode(byteCode), qngg.TypeModule()))
-		// Store the exported functions in the global object for easy access
-		r.Global().SetPropertyStr("handlers", results)
-		return nil
-	})
-
-	// Register HTTP handlers based on JS functions
-	val := must(rt.Eval("script.js", qngg.Bytecode(byteCode), qngg.TypeModule()))
-	methodNames := must(val.GetOwnPropertyNames())
-	val.Free()
-	for _, methodName := range methodNames {
-		http.HandleFunc("/"+methodName, func(w http.ResponseWriter, r *http.Request) {
-			runtime := must(pool.Get())
-			defer pool.Put(runtime)
-
-			// Call the corresponding JS function
-			handlers := runtime.Global().GetPropertyStr("handlers")
-			defer handlers.Free()
-			result := must(handlers.InvokeJS(methodName))
-			fmt.Fprint(w, result.String())
-			result.Free()
-		})
+	result, err := rt.Eval(context.Background(), "main.js", `
+		const person = { name: "Alice", age: 30, city: "New York" };
+		Object.entries(person).map(([k, v]) => k + ": " + v).join(", ");
+	`)
+	if err != nil {
+		log.Fatal(err)
 	}
+	defer result.Free()
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "Hello from Go's HTTP server!")
-	})
-
-	log.Println("Server listening on :8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
-		log.Fatalf("Server error: %v\n", err)
-	}
+	fmt.Println(result.String()) // name: Alice, age: 30, city: New York
 }
 ```
 
-### Async operations
+### Go Functions
 
-**Awaiting a promise**
+`Set` converts Go values, functions included, and assigns them to globals. A
+leading `context.Context` parameter receives the context of the call, and a
+returned error is thrown into JavaScript.
 
 ```go
-rt.SetAsyncFunc("asyncFunction", func(this *qngg.This) {
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		result := this.Runtime().NewString("Async result from Go!")
-		this.Promise().Resolve(result)
-	}()
+rt.Set("add", func(a, b int) int { return a + b })
+rt.Set("lookup", func(ctx context.Context, id string) (string, error) {
+	if id == "" {
+		return "", errors.New("id is required")
+	}
+	return "user:" + id, nil
 })
 
-result, err := rt.Eval("test.js", qngg.Code(`
-async function main() {
-	const result = await asyncFunction();
-	return result;
-}
-({ main: main() });
-`))
-
-if err != nil {
-	log.Fatal("Eval error:", err)
-}
-defer result.Free()
-
-mainFunc := result.GetPropertyStr("main")
-
-// Wait for the promise to resolve
-val, err := mainFunc.Await()
-if err != nil {
-	log.Fatal("Await error:", err)
-}
-
-// Output: Async result from Go!
-log.Println("Awaited value:", val.String())
+result, err := rt.Eval(ctx, "main.js", `lookup(String(add(40, 2)))`)
+// result.String() == "user:42"
 ```
 
-**Top level await**
+For direct access to JavaScript values, register a `Function`. Its arguments
+belong to the caller; return an `*Error` to throw a specific error type.
 
 ```go
-// asyncFunction is already defined above
-result, err := rt.Eval("test.js", qngg.Code(`
-	async function main() {
-		const result = await asyncFunction();
-		return result;
+rt.SetFunc("describe", func(call *qngg.FunctionCall) (*qngg.Value, error) {
+	if len(call.Args()) == 0 {
+		return nil, &qngg.Error{Name: "TypeError", Message: "describe needs an argument"}
 	}
-	await main()
-`), qngg.FlagAsync())
-
-if err != nil {
-	log.Fatal("Eval error:", err)
-}
-
-defer result.Free()
-log.Println(result.String())
+	return call.Runtime().NewString(call.Arg(0).Type()), nil
+})
 ```
 
-### Call JS function from Go
+### Timeouts and Cancellation
+
+Every call that runs JavaScript takes a context. When it is canceled or its
+deadline passes, the script is interrupted wherever it is, and the call fails
+with `ErrInterrupted`. The runtime's state is then undefined, so every later
+call fails too and the runtime must be closed; a `Pool` discards it for you.
 
 ```go
-// Call JS function from Go
-result, err := rt.Eval("test.js", qngg.Code(`
-	function add(a, b) {
-		return a + b;
-	}
+ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+defer cancel()
 
-	function errorFunc() {
-		throw new Error("test error");
-	}
+_, err := rt.Eval(ctx, "untrusted.js", `for (;;) {}`)
+fmt.Println(errors.Is(err, qngg.ErrInterrupted))   // true
+fmt.Println(errors.Is(err, context.DeadlineExceeded)) // true
+```
 
-	({
-		addFunc: add,
-		errorFunc: errorFunc
-	});
-`))
+Interruption checks make compute-heavy JavaScript about 30% slower. Set
+`Config.DisableInterruption` if you trust the code and need the speed;
+contexts are then only checked before a call starts.
 
+### Async Operations
+
+`Eval` awaits the promise a script returns and runs pending jobs and timers.
+Go functions registered with `SetAsyncFunc` look like async functions to
+JavaScript: they return a promise that settles with the Go result or error.
+
+```go
+rt.SetAsyncFunc("fetchUser", func(call *qngg.FunctionCall) (*qngg.Value, error) {
+	return call.Runtime().ToValue(map[string]any{"id": call.Arg(0).Int32(), "name": "Alice"})
+})
+
+result, err := rt.Eval(ctx, "main.js", `
+	const user = await fetchUser(1);
+	await new Promise(resolve => setTimeout(resolve, 10));
+	user.name;
+`, qngg.TopLevelAwait())
+// result.String() == "Alice"
+```
+
+`Value.Await` waits for a promise you got from a call:
+
+```go
+fn, _ := rt.Eval(ctx, "main.js", `async (x) => x * 2`)
+defer fn.Free()
+
+promise, _ := fn.Call(ctx, nil, 21)
+defer promise.Free()
+
+doubled, err := promise.Await(ctx)
+// doubled.Int32() == 42
+```
+
+### Calling JavaScript from Go
+
+```go
+calc, err := rt.Eval(ctx, "calc.js", `({
+	add: (a, b) => a + b,
+	fail: () => { throw new RangeError("out of range") },
+})`)
 if err != nil {
-	log.Fatal("Eval error:", err)
+	return err
 }
-defer result.Free()
+defer calc.Free()
 
-jsAddFunc := result.GetPropertyStr("addFunc")
-defer jsAddFunc.Free()
-
-goAddFunc, err := qngg.JsFuncToGo[func(int, int) (int, error)](jsAddFunc)
+sum, err := calc.Invoke(ctx, "add", 1, 2) // arguments are converted
 if err != nil {
-	log.Fatal("Func conversion error:", err)
+	return err
+}
+defer sum.Free()
+fmt.Println(sum.Int32()) // 3
+
+_, err = calc.Invoke(ctx, "fail")
+var jsErr *qngg.Error
+if errors.As(err, &jsErr) {
+	fmt.Println(jsErr.Name, jsErr.Message) // RangeError out of range
 }
 
-total, err := goAddFunc(1, 2)
-if err != nil {
-	log.Fatal("Func execution error:", err)
-}
-
-// Output: 3
-log.Println("Addition result:", total)
-
-jsErrorFunc := result.GetPropertyStr("errorFunc")
-defer jsErrorFunc.Free()
-
-goErrorFunc, err := qngg.JsFuncToGo[func() (any, error)](jsErrorFunc)
-if err != nil {
-	log.Fatal("Func conversion error:", err)
-}
-
-_, err = goErrorFunc()
-if err != nil {
-	// Output:
-	// JS function execution failed: Error: test error
-  //  at errorFunc (test.js:7:13)
-	log.Println(err.Error())
-}
+// Or convert a JS function into a typed Go function.
+addFn, _ := calc.Get("add")
+defer addFn.Free()
+add, err := addFn.As[func(int, int) (int, error)]()
+n, err := add(40, 2) // 42
 ```
 
 ### ES Modules
 
 ```go
-// Load a utility module
-if _, err = rt.Load("math-utils.js", qngg.Code(`
-	export function add(a, b) {
-		return a + b;
-	}
-
-	export function multiply(a, b) {
-		return a * b;
-	}
-
-	export function power(base, exponent) {
-		return Math.pow(base, exponent);
-	}
-
+err := rt.LoadModule(ctx, "math.js", `
 	export const PI = 3.14159;
-	export const E = 2.71828;
-	export default {
-		add,
-		multiply,
-		power,
-		PI,
-		E
-	};
-`)); err != nil {
-	log.Fatal("Module load error:", err)
-}
-
-// Use the module
-result, err := rt.Eval("use-math.js", qngg.Code(`
-	import mathUtils, { add, multiply, power, PI } from 'math-utils.js';
-
-	const calculations = {
-		addition: add(10, 20),
-		multiplication: multiply(6, 7),
-		power: power(2, 8),
-		circleArea: PI * power(5, 2),
-		defaultAdd: mathUtils.add(10, 20)
-	};
-
-	export default calculations;
-`), qngg.TypeModule())
-
+	export default function square(x) { return x * x; }
+`)
 if err != nil {
-	log.Fatal("Module eval error:", err)
+	return err
 }
 
-// Output:
-// Addition: 30
-// Multiplication: 42
-// Power: 256
-// Circle Area: 78.54
-// Default Add: 30
-fmt.Printf("Addition: %d\n", result.GetPropertyStr("addition").Int32())
-fmt.Printf("Multiplication: %.0f\n", result.GetPropertyStr("multiplication").Float64())
-fmt.Printf("Power: %.0f\n", result.GetPropertyStr("power").Float64())
-fmt.Printf("Circle Area: %.2f\n", result.GetPropertyStr("circleArea").Float64())
-fmt.Printf("Default Add: %.d\n", result.GetPropertyStr("defaultAdd").Int32())
-result.Free()
+result, err := rt.Eval(ctx, "main.js", `
+	import square, { PI } from "math.js";
+	export default square(2) * PI;
+`, qngg.AsModule())
+// result.Float64() == 12.56636
 ```
+
+`EvalFile` and `LoadModuleFile` read files from `Config.CWD`, and relative
+imports resolve against it.
 
 ### Bytecode Compilation
 
+Compile once, then run the bytecode in any runtime, skipping parsing:
+
 ```go
-script := `
-	function fibonacci(n) {
-		if (n <= 1) return n;
-		return fibonacci(n - 1) + fibonacci(n - 2);
-	}
-
-	function factorial(n) {
-		return n <= 1 ? 1 : n * factorial(n - 1);
-	}
-
-	const result = {
-		fib10: fibonacci(10),
-		fact5: factorial(5),
-		timestamp: Date.now()
-	};
-
-	result;
-`
-
-// Compile the script to bytecode
-bytecode, err := rt.Compile("math-functions.js", qngg.Code(script))
+bytecode, err := rt.Compile("fib.js", `
+	function fib(n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); }
+	fib(20);
+`)
 if err != nil {
-	log.Fatal("Compilation error:", err)
+	return err
 }
 
-fmt.Printf("Bytecode size: %d bytes\n", len(bytecode))
-
-// Execute the compiled bytecode
-result, err := rt.Eval("compiled-math.js", qngg.Bytecode(bytecode))
-if err != nil {
-	log.Fatal("Bytecode execution error:", err)
-}
-
-fmt.Printf("Fibonacci(10): %d\n", result.GetPropertyStr("fib10").Int32())
-fmt.Printf("Factorial(5): %d\n", result.GetPropertyStr("fact5").Int32())
-result.Free()
+result, err := other.EvalBytecode(ctx, bytecode)
+// result.Int32() == 6765
 ```
 
-### ProxyValue Support
+Pass `AsModule()` to both `Compile` and `EvalBytecode` for modules, or load
+module bytecode with `LoadModuleBytecode`.
 
-ProxyValue is a feature that allows you to pass Go values directly to JavaScript without full serialization, enabling efficient sharing of complex objects, functions, and resources.
+### Go-JS Conversion
 
-ProxyValue creates a lightweight JavaScript wrapper around Go values, storing only a reference ID rather than copying the entire value. This is particularly useful for **pass-through scenarios** where JavaScript receives a Go value and passes it back to Go without needing to access its contents.
-
-Key benefits:
-- **Zero-copy data sharing** - no serialization/deserialization overhead.
-- **Pass-through efficiency** - JavaScript can hold and return Go values without conversion.
-- **Type preservation** - original Go types are maintained across boundaries.
-- **Resource efficiency** - perfect for objects like `context.Context`, database connections, or large structs.
-
-#### Basic ProxyValue Usage
+`ToValue` (and `Set`) converts Go values to JavaScript: structs become
+objects using their `json` tags and methods, maps become objects, slices
+become arrays, functions become callable functions and `[]byte` becomes an
+ArrayBuffer. `Value.As[T]()` converts back.
 
 ```go
-// Create a Go function that accepts context and a number
-goFuncWithContext := func(c context.Context, num int) int {
-	// Access context values in Go
-	log.Println("Context value:", c.Value("key"))
-	return num * 2
-}
-
-// Convert Go function to JavaScript function
-jsFuncWithContext, err := qngg.ToJsValue(rt, goFuncWithContext)
-if err != nil {
-	log.Fatal("Func conversion error:", err)
-}
-// The global object takes ownership of jsFuncWithContext.
-rt.Global().SetPropertyStr("funcWithContext", jsFuncWithContext)
-
-// Create a helper function that returns a ProxyValue
-rt.SetFunc("$context", func(this *qngg.This) (*qngg.Value, error) {
-	// Create context as ProxyValue - JavaScript will never access its contents
-	passContext := context.WithValue(context.Background(), "key", "value123")
-	val := rt.NewProxyValue(passContext)
-	return val, nil
-})
-
-// JavaScript gets context as ProxyValue and passes it to Go function
-result, err := rt.Eval("test.js", qngg.Code(`
-	funcWithContext($context(), 10);
-`))
-if err != nil {
-	log.Fatal("Eval error:", err)
-}
-defer result.Free()
-
-// Output: 20
-log.Println("Result:", result.Int32())
-```
-
-### GO-JS Conversion
-
-```go
-package main
-
-import (
-	"fmt"
-	"log"
-
-	"github.com/ironpark/qngg"
-)
-
-type Post struct {
-	ID     int    `json:"id"`
-	Name   string `json:"name"`
-	Author User   `json:"author"`
-}
-
 type User struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
-	Age  int    `json:"age"`
 }
 
-// Method on User struct
-func (u User) GetDisplayName() string {
-	return fmt.Sprintf("%s (%d)", u.Name, u.Age)
+type Post struct {
+	ID      int    `json:"id"`
+	Title   string `json:"title"`
+	Author  User   `json:"author"`
+	Content string `json:"content"`
 }
 
-func (u User) IsAdult() bool {
-	return u.Age >= 18
+rt.Set("user", User{ID: 1, Name: "Alice"})
+
+result, err := rt.Eval(ctx, "main.js", `({
+	id: 10,
+	title: "Hello from " + user.name,
+	author: user,
+	content: "Written in JavaScript",
+})`)
+if err != nil {
+	return err
 }
+defer result.Free()
 
-func main() {
-	rt, err := qngg.New()
-	if err != nil {
-		log.Fatalf("Failed to create QuickJS runtime: %v", err)
-	}
-	defer rt.Close()
+post, err := result.As[Post]()
+// post.Author.Name == "Alice"
+```
 
-	rt.Global().SetPropertyStr("goInt", rt.NewInt32(55))
-	rt.Global().SetPropertyStr("goString", rt.NewString("Hello, World!"))
-	jsUser, err := qngg.ToJsValue(rt, User{ID: 1, Name: "Alice", Age: 25})
-	if err != nil {
-		log.Fatalf("Failed to convert User to JS value: %v", err)
-	}
-	rt.Global().SetPropertyStr("goUser", jsUser)
+### ProxyValue
 
-	result, err := rt.Eval("test.js", qngg.Code(`
-		const post = {
-			id: goInt,
-			name: goString,
-			author: goUser,
-			displayName: goUser.GetDisplayName(),
-			isAdult: goUser.IsAdult()
-		};
-		post;
-	`))
-	if err != nil {
-		log.Fatalf("Failed to evaluate JS code: %v", err)
-	}
-	defer result.Free()
+A ProxyValue passes a Go value through JavaScript by reference: Go
+functions receive the original value, not a converted copy. Use it for
+`context.Context`, connections, or large structs that should not be copied.
 
-	goPost, err := qngg.ToGoValue[Post](result)
-	if err != nil {
-		log.Fatalf("Failed to convert JS value to Post: %v", err)
-	}
+```go
+type Counter struct{ hits int }
 
-	// Output:
-	// Post ID: 55
-	// Post Name: Hello, World!
-	// Author ID: 1
-	// Author Name: Alice
-	// Author Age: 25
-	// Author Display Name: Alice (25)
-	// Author Is Adult: true
-	log.Printf("Post ID: %d\n", goPost.ID)
-	log.Printf("Post Name: %s\n", goPost.Name)
-	log.Printf("Author ID: %d\n", goPost.Author.ID)
-	log.Printf("Author Name: %s\n", goPost.Author.Name)
-	log.Printf("Author Age: %d\n", goPost.Author.Age)
-	log.Printf("Author Display Name: %s\n", goPost.Author.GetDisplayName())
-	log.Printf("Author Is Adult: %t\n", goPost.Author.IsAdult())
-}
+counter := &Counter{}
+rt.Set("bump", func(c *Counter) int { c.hits++; return c.hits })
+
+proxy := rt.NewProxyValue(counter)
+defer proxy.Free()
+rt.Global().Set("counter", proxy)
+
+rt.Eval(ctx, "main.js", `bump(counter); bump(counter)`)
+// counter.hits == 2
 ```
 
 ### Pool
 
+A `Runtime` must not be used by several goroutines at once. A `Pool` gives
+each call its own runtime and reuses idle ones. Runtimes that were
+interrupted, or whose function panicked, are discarded instead of reused.
+
 ```go
-package main
-
-import (
-	"log"
-	"sync"
-
-	"github.com/ironpark/qngg"
-)
-
-func main() {
-	setupFunc := func(rt *qngg.Runtime) error {
-		rt.Eval("setup.js", qngg.Code(`
-			function getMessage(workerId, taskId) {
-				return "Hello from pooled runtime: " + workerId + "-" + taskId;
-			}
-		`))
-		return nil
-	}
-	// Create a pool with 3 runtimes
-	pool := qngg.NewPool(3, qngg.Option{}, setupFunc)
-	numWorkers := 5
-	numTasks := 3
-	var wg sync.WaitGroup
-
-	for workerID := range numWorkers {
-		wg.Go(func() {
-			for taskID := range numTasks {
-				rt, err := pool.Get()
-				if err != nil {
-					log.Fatalf("Failed to get runtime from pool: %v", err)
-				}
-
-				rt.Global().SetPropertyStr("workerID", rt.NewInt32(int32(workerID)))
-				rt.Global().SetPropertyStr("taskID", rt.NewInt32(int32(taskID)))
-
-				// Use the runtime
-				result, err := rt.Eval("pool-test.js", qngg.Code(`
-					({
-						message: getMessage(workerID, taskID),
-						timestamp: Date.now(),
-					});
-				`))
-				if err != nil {
-					log.Fatalf("JS execution error: %v", err)
-				}
-				message := result.GetPropertyStr("message")
-				log.Println(message.String())
-
-				// Release values before returning the runtime to the pool,
-				// where another goroutine may pick it up.
-				message.Free()
-				result.Free()
-				pool.Put(rt)
-			}
-		})
-	}
-	wg.Wait()
+pool, err := qngg.NewPool(8, qngg.Config{}, func(rt *qngg.Runtime) error {
+	// Runs once for each new runtime.
+	_, err := rt.Eval(context.Background(), "setup.js",
+		`globalThis.greet = (name) => "Hello, " + name + "!"`)
+	return err
+})
+if err != nil {
+	log.Fatal(err)
 }
+defer pool.Close()
+
+http.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+	defer cancel()
+
+	err := pool.Do(ctx, func(rt *qngg.Runtime) error {
+		greet, err := rt.Get("greet")
+		if err != nil {
+			return err
+		}
+		defer greet.Free()
+
+		msg, err := greet.Call(ctx, nil, r.URL.Query().Get("name"))
+		if err != nil {
+			return err
+		}
+		defer msg.Free()
+
+		_, err = io.WriteString(w, msg.String())
+		return err
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+})
 ```
+
+Values created inside `Do` must not be used after it returns.
 
 ## Installation
 
@@ -642,66 +403,69 @@ import "github.com/ironpark/qngg"
 
 ## API Reference
 
+See [pkg.go.dev](https://pkg.go.dev/github.com/ironpark/qngg) for the full documentation.
+
 ### Core Types
 
 | Type | Description |
 |------|-------------|
-| `Runtime` | Main JavaScript runtime instance |
-| `Value` | JavaScript value wrapper |
-| `Pool` | Runtime pool for performance |
-| `ProxyRegistry` | Thread-safe registry for ProxyValue objects |
+| `Runtime` | A QuickJS runtime and its global context. Not safe for concurrent use. |
+| `Value` | A JavaScript value. Free the ones you get. |
+| `Function` / `FunctionCall` | A Go function callable from JavaScript, and its call. |
+| `Error` | A JavaScript exception, returned by calls and throwable from Go. |
+| `Pool` | Runtimes for concurrent use. |
+| `Config` | Runtime configuration. |
 
 ### Key Methods
 
 ```go
 // Runtime
-rt, err := qngg.New(options...)          // Create a runtime
-rt.Close()                               // Free the runtime
-rt.Eval(filename, qngg.Code(src))        // Run a script, returns the last value
-rt.Load(filename, qngg.Code(src))        // Load an ES module for later imports
-rt.Compile(filename, qngg.Code(src))     // Compile to bytecode
-rt.Global()                              // Global object
-rt.SetFunc(name, fn)                     // Bind a Go function
-rt.SetAsyncFunc(name, fn)                // Bind a Go function returning a promise
-rt.NewString(s), rt.NewObject(), ...     // Create JS values
-rt.NewProxyValue(v)                      // Wrap a Go value as a ProxyValue
+rt, err := qngg.New(qngg.Config{})             // Create a runtime
+rt.Close()                                     // Free it and all its values
+rt.Eval(ctx, name, src, opts...)               // Run a script (or module with AsModule)
+rt.EvalFile(ctx, path, opts...)                // Run a file from Config.CWD
+rt.Compile(name, src, opts...)                 // Compile to bytecode
+rt.EvalBytecode(ctx, bytecode, opts...)        // Run bytecode
+rt.LoadModule(ctx, name, src)                  // Register a module for imports
+rt.Set(name, goValue)                          // Convert and assign a global
+rt.Get(name)                                   // Read a global
+rt.SetFunc(name, fn), rt.SetAsyncFunc(name, fn)
+rt.ToValue(goValue)                            // Convert Go to JS
+rt.NewString(s), rt.NewObject(), rt.NewProxyValue(v), ...
+rt.Global()                                    // The global object (owned by the runtime)
 
 // Value
-value.String(), value.Int32(), value.Bool(), ...
-value.GetPropertyStr(name)               // Get a property (free the result)
-value.SetPropertyStr(name, val)          // Set a property (takes ownership of val)
-value.InvokeJS(name, args...)            // Call a method
-value.Await()                            // Wait for a promise
-value.Free()                             // Release the value
+v.Get(name), v.Set(name, val), v.Index(i), v.SetIndex(i, val)
+v.Has(name), v.Delete(name), v.Keys(), v.Len()
+v.Call(ctx, this, args...), v.Invoke(ctx, method, args...), v.New(ctx, args...)
+v.Await(ctx)                                   // Wait for a promise
+v.As[T]()                                      // Convert JS to Go
+v.String(), v.Int32(), v.Float64(), v.Bool(), v.Time(), v.Bytes(), json.Marshal(v)
+v.IsObject(), v.IsArray(), v.IsFunction(), v.Type(), ...
+v.Clone()                                      // A new reference to the same value
+v.Free()                                       // Release the value
 
-// Conversion
-qngg.ToGoValue[T](value)                 // JS (or ProxyValue) to Go
-qngg.ToJsValue(rt, goValue)             // Go to JS
-qngg.JsFuncToGo[F](value)                // JS function to a typed Go function
+// Pool
+pool, err := qngg.NewPool(size, config, setup)
+pool.Do(ctx, func(rt *qngg.Runtime) error { ... })
+pool.Close()
 ```
 
 ### Configuration Options
 
 ```go
-type Option struct {
-    CWD                string          // Host directory mounted as "/" (default: no filesystem)
-    WritableCWD        bool            // Allow JavaScript to write under CWD (default: read-only)
-    Context            context.Context // Context passed to Go functions called from JS
-    CloseOnContextDone bool            // Interrupt running JavaScript when Context is done
-    MemoryLimit        int             // QuickJS heap limit in bytes
-    MaxStackSize       int             // QuickJS stack limit in bytes
-    GCThreshold        int             // GC trigger threshold in bytes
-    CacheDir           string          // Directory for compiled module cache files
-    DisableBuildCache  bool            // Do not reuse in-memory compiled modules
-    Stdout, Stderr     io.Writer       // Output of console.log and friends (default: discarded)
-    MaxExecutionTime   time.Duration   // Time limit for each call into JavaScript, such as Eval
+type Config struct {
+    CWD                 string    // Host directory mounted as "/" (default: no filesystem)
+    WritableCWD         bool      // Allow JavaScript to write under CWD (default: read-only)
+    Stdout, Stderr      io.Writer // Output of console.log and friends (default: discarded)
+    MemoryLimit         int       // QuickJS heap limit in bytes
+    MaxStackSize        int       // QuickJS stack limit in bytes
+    GCThreshold         int       // GC trigger threshold in bytes
+    DisableInterruption bool      // ~30% faster compute, but contexts can no longer stop running code
+    CacheDir            string    // Directory for compiled module cache files
+    DisableBuildCache   bool      // Do not reuse in-memory compiled modules
 }
 ```
-
-`MaxExecutionTime` and `CloseOnContextDone` stop running JavaScript, including
-infinite loops. Calls then fail with `ErrExecutionTimeout` or the context's
-error, and the runtime must be closed. Both compile QuickJS with interruption
-checks, which makes compute-heavy JavaScript about 30% slower.
 
 ### Wasmtime native library
 
@@ -722,11 +486,11 @@ system temp directory).
 ## Performance & Security
 
 **Optimization Tips:**
-1. Use runtime pools for concurrent applications.
+1. Use a `Pool` for concurrent applications.
 2. Compile frequently-used scripts to bytecode.
-3. Use ProxyValue for large objects or shared state to avoid serialization overhead.
+3. Use ProxyValue for large objects or shared state to avoid conversion.
 4. Set `CacheDir` so compiled modules are reused across processes.
-5. Set appropriate memory limits.
+5. Set `DisableInterruption` for trusted, compute-heavy code.
 
 **Security**
 
@@ -734,24 +498,35 @@ system temp directory).
 - **Filesystem**: none by default. With `CWD` set, only that directory is visible, as `/`, and it is read-only unless `WritableCWD` is set. WASI enforces this, so `qjs:std`/`qjs:os` cannot reach anything else.
 - **Environment and output**: no environment variables are passed, and output is discarded unless `Stdout`/`Stderr` are set.
 - **No network access**: no sockets are exposed to JavaScript.
-- **Interruptible**: `MaxExecutionTime` and `CloseOnContextDone` stop runaway scripts.
+- **Interruptible**: calls stop when their context is done, even in the middle of an infinite loop.
+- **Isolation between users**: runtimes in a `Pool` keep their global state between calls. Use separate runtimes, or reset the globals you set, when running code for different tenants.
 - **No CGO**: the Wasmtime native library is loaded at runtime through purego.
 
 ### Memory Management
 
-**Rules:**
-- Call `Free()` on values you get back (`Eval`, `GetPropertyStr`, `InvokeJS`, ...).
-- Do not `Free()` a value after passing it to `SetProperty`, `SetPropertyStr` or `SetPropertyIndex`; the object owns it.
-- Do not free functions registered on the global object.
-- Free values before returning a runtime to a `Pool`.
-- Call `rt.Close()` when done with a runtime.
+Values live in QuickJS's heap, not Go's, so they must be released with
+`Free`. The rule is simple:
+
+- Every `*Value` returned to you is yours: `Free` it when done.
+- Passing a value to a method never takes it over: you still free it.
+- Values you do not own have a no-op `Free`: `Runtime.Global()`, and the
+  arguments and `this` of a `Function`, which are only valid until it returns.
+  `Clone` them to keep them longer.
+- A value returned from a `Function` is handed to JavaScript.
+- `Close` frees everything that is left, and makes further use of the runtime
+  and its values fail with `ErrRuntimeClosed`. Using a freed value fails with
+  `ErrFreed`.
 
 ```go
-result, err := rt.Eval("script.js", qngg.Code(src))
-if err != nil {
+obj := rt.NewObject()
+defer obj.Free()
+
+name := rt.NewString("Alice")
+defer name.Free()
+
+if err := obj.Set("name", name); err != nil { // name is still yours
 	return err
 }
-defer result.Free()
 ```
 
 **Choose QNGG when you need:**

@@ -1,858 +1,435 @@
 package qngg
 
 import (
-	"errors"
+	"context"
+	"encoding/json"
+	"math"
 	"math/big"
-	"slices"
 	"testing"
-	"unsafe"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestValueBasicOperations(t *testing.T) {
-	rt, ctx := setupTestContext(t)
-	defer rt.Close()
+// eval evaluates code and frees the result when the test ends.
+func eval(t *testing.T, rt *Runtime, code string) *Value {
+	t.Helper()
+	v, err := rt.Eval(context.Background(), "test.js", code)
+	require.NoError(t, err)
+	t.Cleanup(v.Free)
+	return v
+}
 
-	t.Run("NewUndefined", func(t *testing.T) {
-		val := ctx.NewUndefined()
+func TestValueOwnership(t *testing.T) {
+	rt, _ := setupRuntime(t)
+
+	t.Run("FreeIsIdempotent", func(t *testing.T) {
+		v := rt.NewObject()
+		v.Free()
+		assert.NotPanics(t, v.Free)
+
+		var nilValue *Value
+		assert.NotPanics(t, nilValue.Free)
+	})
+
+	t.Run("UseAfterFree", func(t *testing.T) {
+		v := rt.NewObject()
+		v.Free()
+
+		_, err := v.Get("a")
+		assert.ErrorIs(t, err, ErrFreed)
+		assert.ErrorIs(t, v.Set("a", rt.Global()), ErrFreed)
+		assert.PanicsWithError(t, ErrFreed.Error(), func() { v.IsObject() })
+		assert.Equal(t, "<invalid qngg.Value>", v.String())
+	})
+
+	t.Run("SetDoesNotTakeOwnership", func(t *testing.T) {
+		obj := rt.NewObject()
+		defer obj.Free()
+		val := rt.NewString("kept")
 		defer val.Free()
-		assert.True(t, val.IsUndefined())
-		assert.False(t, val.IsNull())
+
+		require.NoError(t, obj.Set("a", val))
+		require.NoError(t, obj.SetIndex(0, val))
+		assert.Equal(t, "kept", val.String(), "val stays usable after Set")
+	})
+
+	t.Run("GlobalIsBorrowed", func(t *testing.T) {
+		rt.Global().Free()
+		assert.True(t, rt.Global().IsObject(), "freeing the global object is a no-op")
 	})
 
 	t.Run("Clone", func(t *testing.T) {
-		original := ctx.NewInt32(42)
-		defer original.Free()
-
-		clone := original.Clone()
-		defer clone.Free()
-
-		assert.Equal(t, original.Int32(), clone.Int32())
-		assert.Equal(t, int32(42), clone.Int32())
+		v := rt.NewString("hello")
+		c := v.Clone()
+		v.Free()
+		defer c.Free()
+		assert.Equal(t, "hello", c.String())
 	})
 
-	t.Run("Handle", func(t *testing.T) {
-		val := ctx.NewInt32(42)
-		defer val.Free()
+	t.Run("FunctionArgumentsAreBorrowed", func(t *testing.T) {
+		var kept *Value
+		noErr(rt.SetFunc("keep", func(call *FunctionCall) (*Value, error) {
+			call.Arg(0).Free() // no-op
+			kept = call.Arg(0).Clone()
+			return call.Arg(0), nil // returning a borrowed value is fine
+		}))
 
-		assert.NotNil(t, val.rawHandle())
-		assert.NotEqual(t, uint64(0), val.raw())
+		result := eval(t, rt, `keep({ x: 1 })`)
+		defer kept.Free()
+		assert.Equal(t, int32(1), must(result.Get("x")).Int32())
+		assert.Equal(t, int32(1), must(kept.Get("x")).Int32())
 	})
 
-	t.Run("Raw_nil_value", func(t *testing.T) {
-		var nilValue *Value = nil
-		result := nilValue.raw()
-		assert.Equal(t, uint64(0), result, "nil Value should return 0 from Raw()")
-	})
+	t.Run("StringConversionsDoNotLeak", func(t *testing.T) {
+		str := eval(t, rt, `"x".repeat(4096)`)
+		obj := eval(t, rt, `({ a: "x".repeat(4096) })`)
+		buf := eval(t, rt, `new ArrayBuffer(4096)`)
 
-	t.Run("Raw_after_free", func(t *testing.T) {
-		val := ctx.NewInt32(42)
-		assert.NotEqual(t, uint64(0), val.raw())
-		val.Free()
-		result := val.raw()
-		assert.True(t, result == 0)
-	})
+		before := rt.mem.Size()
+		for range 2000 {
+			_ = str.String()
+			_, _ = obj.MarshalJSON()
+			_ = must(buf.Bytes())
+			v := must(obj.Get("a"))
+			v.Free()
+		}
 
-	t.Run("Context", func(t *testing.T) {
-		val := ctx.NewInt32(42)
-		defer val.Free()
-		assert.Equal(t, ctx, val.Runtime())
+		// Each iteration copies ~12KiB out of wasm; leaking it would grow
+		// memory by about 24MiB.
+		assert.Less(t, rt.mem.Size()-before, uint32(1<<20))
 	})
 }
 
 func TestValueTypeChecks(t *testing.T) {
-	rt, ctx := setupTestContext(t)
-	defer rt.Close()
+	rt, _ := setupRuntime(t)
 
-	t.Run("IsNumber", func(t *testing.T) {
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.True(t, num.IsNumber())
+	cases := []struct {
+		code  string
+		check func(*Value) bool
+		want  bool
+	}{
+		{"42", (*Value).IsNumber, true},
+		{"4.5", (*Value).IsNumber, true},
+		{"'s'", (*Value).IsNumber, false},
+		{"'s'", (*Value).IsString, true},
+		{"'a'.repeat(100) + 'b'", (*Value).IsString, true},
+		{"true", (*Value).IsBool, true},
+		{"null", (*Value).IsNull, true},
+		{"undefined", (*Value).IsUndefined, true},
+		{"({})", (*Value).IsObject, true},
+		{"null", (*Value).IsObject, false},
+		{"[1]", (*Value).IsArray, true},
+		{"({})", (*Value).IsArray, false},
+		{"(() => 1)", (*Value).IsFunction, true},
+		{"(class A {})", (*Value).IsConstructor, true},
+		{"(() => 1)", (*Value).IsConstructor, false},
+		{"Promise.resolve(1).then", (*Value).IsFunction, true},
+		{"new Error('x')", (*Value).IsError, true},
+		{"10n", (*Value).IsBigInt, true},
+		{"2n ** 100n", (*Value).IsBigInt, true},
+		{"Symbol('s')", (*Value).IsSymbol, true},
+		{"new Map()", (*Value).IsMap, true},
+		{"new Set()", (*Value).IsSet, true},
+		{"new Map()", (*Value).IsSet, false},
+		{"new ArrayBuffer(8)", (*Value).IsArrayBuffer, true},
+		{"new Uint8Array(8)", (*Value).IsArrayBuffer, false},
+		{"new Date()", (*Value).IsDate, true},
+		{"NaN", (*Value).IsNaN, true},
+		{"1", (*Value).IsNaN, false},
+		{"Infinity", (*Value).IsInfinity, true},
+		{"-Infinity", (*Value).IsInfinity, true},
+		{"1e308", (*Value).IsInfinity, false},
+	}
 
-		str := ctx.NewString("test")
-		defer str.Free()
-		assert.False(t, str.IsNumber())
+	for _, c := range cases {
+		assert.Equal(t, c.want, c.check(eval(t, rt, c.code)), c.code)
+	}
+
+	t.Run("Promise", func(t *testing.T) {
+		// Eval awaits promises, so get one through a function.
+		fn := eval(t, rt, `() => new Promise(() => {})`)
+		p := must(fn.Call(context.Background(), nil))
+		defer p.Free()
+		assert.True(t, p.IsPromise())
+		assert.Equal(t, "Promise", p.Type())
 	})
 
-	t.Run("IsString", func(t *testing.T) {
-		str := ctx.NewString("test")
-		defer str.Free()
-		assert.True(t, str.IsString())
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.False(t, num.IsString())
-	})
-
-	t.Run("IsBool", func(t *testing.T) {
-		b := ctx.NewBool(true)
-		defer b.Free()
-		assert.True(t, b.IsBool())
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.False(t, num.IsBool())
-	})
-
-	t.Run("IsNull", func(t *testing.T) {
-		n := ctx.NewNull()
-		defer n.Free()
-		assert.True(t, n.IsNull())
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.False(t, num.IsNull())
-	})
-
-	t.Run("IsUndefined", func(t *testing.T) {
-		u := ctx.NewUndefined()
-		defer u.Free()
-		assert.True(t, u.IsUndefined())
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.False(t, num.IsUndefined())
-	})
-
-	t.Run("IsObject", func(t *testing.T) {
-		obj := ctx.NewObject()
-		defer obj.Free()
-		assert.True(t, obj.IsObject())
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.False(t, num.IsObject())
-	})
-
-	t.Run("IsArray", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", Code("[]")))
-		defer val.Free()
-		assert.True(t, val.IsArray())
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.False(t, num.IsArray())
-	})
-
-	t.Run("IsFunction", func(t *testing.T) {
-		val := must(ctx.Eval(
-			"test.js",
-			Code(`
-				function test() {};
-				test;
-			`),
-		))
-		defer val.Free()
-		assert.True(t, val.IsFunction())
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.False(t, num.IsFunction())
-	})
-
-	t.Run("IsConstructor", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", Code("Array")))
-		defer val.Free()
-		assert.True(t, val.IsConstructor())
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.False(t, num.IsConstructor())
-	})
-
-	t.Run("IsPromise", func(t *testing.T) {
-		val := must(ctx.Eval(
-			"test.js",
-			Code(`({
-				data: new Promise((resolve, reject) => resolve())
-			})`),
-		))
-		defer val.Free()
-		data := val.GetPropertyStr("data")
-		assert.True(t, data.IsPromise())
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.False(t, num.IsPromise())
-	})
-
-	t.Run("IsError", func(t *testing.T) {
-		val, err := ctx.Eval("test.js", Code("new Error('test')"))
-		defer val.Free()
-		require.Error(t, err)
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.False(t, num.IsError())
-	})
-
-	t.Run("IsBigInt", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", Code("BigInt(42)")))
-		defer val.Free()
-		assert.True(t, val.IsBigInt())
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.False(t, num.IsBigInt())
-	})
-
-	t.Run("IsMap", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", Code("new Map()")))
-		defer val.Free()
-		assert.True(t, val.IsMap())
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.False(t, num.IsMap())
-	})
-
-	t.Run("IsSet", func(t *testing.T) {
-		set := must(ctx.Eval("test.js", Code("new Set()")))
-		defer set.Free()
-		assert.True(t, set.IsSet())
-		assert.False(t, set.IsMap())
-
-		mapObj := must(ctx.Eval("test.js", Code("new Map()")))
-		defer mapObj.Free()
-		assert.False(t, mapObj.IsSet())
-		assert.True(t, mapObj.IsMap())
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.False(t, num.IsSet())
-	})
-
-	t.Run("IsByteArray", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", Code("new ArrayBuffer(10)")))
-		defer val.Free()
-		assert.True(t, val.IsByteArray())
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.False(t, num.IsByteArray())
-	})
-
-	t.Run("IsNaN", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", Code("NaN")))
-		defer val.Free()
-		assert.True(t, val.IsNaN())
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.False(t, num.IsNaN())
-	})
-
-	t.Run("IsInfinity", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", Code("Infinity")))
-		defer val.Free()
-		assert.True(t, val.IsInfinity())
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.False(t, num.IsInfinity())
-	})
-
-	t.Run("IsGlobalInstanceOf", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", Code("new Date()")))
-		defer val.Free()
-		assert.True(t, val.isGlobalInstanceOf("Date"))
-		assert.False(t, val.isGlobalInstanceOf("Array"))
-
-		assert.False(t, val.isGlobalInstanceOf("NonExistentConstructor"))
-		assert.False(t, val.isGlobalInstanceOf("FakeConstructor"))
-		assert.False(t, val.isGlobalInstanceOf(""))
+	t.Run("Type", func(t *testing.T) {
+		types := map[string]string{
+			"42": "Number", "'s'": "String", "true": "Boolean", "null": "Null",
+			"undefined": "Undefined", "NaN": "NaN", "Infinity": "Infinity", "10n": "BigInt",
+			"Symbol()": "Symbol", "[1]": "Array", "new Map()": "Map", "new Set()": "Set",
+			"new Date()": "Date", "new Error('x')": "Error", "(() => 1)": "Function",
+			"(class Foo {})": "Constructor Foo", "new ArrayBuffer(1)": "ArrayBuffer", "({})": "unknown",
+		}
+		for code, want := range types {
+			assert.Equal(t, want, eval(t, rt, code).Type(), code)
+		}
 	})
 }
 
 func TestValueConversions(t *testing.T) {
-	rt, ctx := setupTestContext(t)
-	defer rt.Close()
+	rt, _ := setupRuntime(t)
 
-	t.Run("String", func(t *testing.T) {
-		val := ctx.NewString("hello")
-		defer val.Free()
-		assert.Equal(t, "hello", val.String())
+	t.Run("Numbers", func(t *testing.T) {
+		assert.Equal(t, int32(42), eval(t, rt, "42").Int32())
+		assert.Equal(t, int32(-3), eval(t, rt, "-3.7").Int32())
+		assert.Equal(t, int64(1)<<40, eval(t, rt, "2 ** 40").Int64())
+		assert.Equal(t, uint32(math.MaxUint32), eval(t, rt, "-1").Uint32())
+		assert.InDelta(t, 3.14, eval(t, rt, "3.14").Float64(), 1e-9)
+		assert.InDelta(t, 12.5, eval(t, rt, "'12.5'").Float64(), 1e-9, "strings are coerced")
+		assert.True(t, math.IsNaN(eval(t, rt, "'x'").Float64()))
 	})
 
-	t.Run("JSONStringify", func(t *testing.T) {
-		obj := ctx.NewObject()
-		defer obj.Free()
-
-		objVal := ctx.NewString("world")
-		obj.SetPropertyStr("hello", objVal)
-		assert.JSONEq(t, `{"hello":"world"}`, must(obj.JSONStringify()))
+	t.Run("ThrowingCoercionReturnsZero", func(t *testing.T) {
+		v := eval(t, rt, "({ valueOf() { throw new Error('no') } })")
+		assert.Equal(t, int32(0), v.Int32())
+		assert.Equal(t, int32(1), eval(t, rt, "1").Int32(), "the exception does not linger")
 	})
 
 	t.Run("Bool", func(t *testing.T) {
-		val := ctx.NewBool(true)
-		defer val.Free()
-		assert.True(t, val.Bool())
-
-		val = ctx.NewBool(false)
-		defer val.Free()
-		assert.False(t, val.Bool())
+		assert.True(t, eval(t, rt, "true").Bool())
+		assert.True(t, eval(t, rt, "'x'").Bool())
+		assert.False(t, eval(t, rt, "0").Bool())
+		assert.False(t, eval(t, rt, "''").Bool())
 	})
 
-	t.Run("Int32", func(t *testing.T) {
-		val := ctx.NewInt32(42)
-		defer val.Free()
-		assert.Equal(t, int32(42), val.Int32())
-	})
-
-	t.Run("Int64", func(t *testing.T) {
-		val := ctx.NewInt64(1234567890123)
-		defer val.Free()
-		assert.Equal(t, int64(1234567890123), val.Int64())
-	})
-
-	t.Run("Uint32", func(t *testing.T) {
-		val := ctx.NewUint32(42)
-		defer val.Free()
-		assert.Equal(t, uint32(42), val.Uint32())
-	})
-
-	t.Run("Float64", func(t *testing.T) {
-		val := ctx.NewFloat64(3.14159)
-		defer val.Free()
-		assert.InDelta(t, 3.14159, val.Float64(), 0.0001)
+	t.Run("String", func(t *testing.T) {
+		assert.Equal(t, "hello", eval(t, rt, "'hello'").String())
+		assert.Equal(t, "1,2", eval(t, rt, "[1, 2]").String())
+		assert.Equal(t, "[object Object]", eval(t, rt, "({})").String())
+		assert.Equal(t, "", eval(t, rt, "({ toString() { throw 1 } })").String())
 	})
 
 	t.Run("BigInt", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", Code("BigInt('9007199254740991')")))
-		defer val.Free()
-		expected := new(big.Int)
-		expected.SetString("9007199254740991", 10)
-		assert.Equal(t, expected, val.BigInt())
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.Nil(t, num.BigInt())
+		want, _ := new(big.Int).SetString("1267650600228229401496703205376", 10)
+		assert.Equal(t, want, eval(t, rt, "2n ** 100n").BigInt())
+		assert.Nil(t, eval(t, rt, "1").BigInt())
 	})
 
-	t.Run("ToArray", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", Code("[1, 2, 3]")))
-		defer val.Free()
-		arr := must(val.ToArray())
-		assert.NotNil(t, arr)
-		assert.Equal(t, int64(3), arr.Len())
+	t.Run("Time", func(t *testing.T) {
+		got, err := eval(t, rt, "new Date(Date.UTC(2024, 0, 2, 3, 4, 5, 678))").Time()
+		require.NoError(t, err)
+		assert.True(t, got.Equal(time.Date(2024, 1, 2, 3, 4, 5, 678e6, time.UTC)))
 
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		_, err := num.ToArray()
+		_, err = eval(t, rt, "new Date(NaN)").Time()
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "expected JS array, got Number=42")
+		_, err = eval(t, rt, "1").Time()
+		assert.Error(t, err)
 	})
 
-	t.Run("ToMap", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", Code("new Map([['key', 'value']])")))
-		defer val.Free()
-		m := val.ToMap()
-		assert.NotNil(t, m)
-
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.Nil(t, num.ToMap())
+	t.Run("Bytes", func(t *testing.T) {
+		assert.Equal(t, []byte{1, 2, 3}, must(eval(t, rt, "new Uint8Array([1, 2, 3]).buffer").Bytes()))
+		assert.Equal(t, []byte{2, 3}, must(eval(t, rt, "new Uint8Array([1, 2, 3, 4]).subarray(1, 3)").Bytes()))
+		_, err := eval(t, rt, "1").Bytes()
+		assert.Error(t, err)
 	})
 
-	t.Run("ToSet", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", Code("new Set([1, 2, 3])")))
-		defer val.Free()
-		assert.NotNil(t, val.ToSet())
+	t.Run("MarshalJSON", func(t *testing.T) {
+		b, err := json.Marshal(map[string]any{"v": eval(t, rt, "({ a: [1, 'x'] })")})
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"v":{"a":[1,"x"]}}`, string(b))
 
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		nilSet := num.ToSet()
-		assert.Nil(t, nilSet)
+		b, err = eval(t, rt, "undefined").MarshalJSON()
+		require.NoError(t, err)
+		assert.Equal(t, "null", string(b))
+
+		_, err = eval(t, rt, "(() => { const o = {}; o.o = o; return o })()").MarshalJSON()
+		assert.Error(t, err)
 	})
 
-	t.Run("Object", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", Code("({ prop: 'value' })")))
-		defer val.Free()
-		obj := val.toObject()
-		defer obj.Free()
-		assert.True(t, obj.IsObject())
+	t.Run("As", func(t *testing.T) {
+		type user struct {
+			Name string `json:"name"`
+			Age  int    `json:"age"`
+		}
 
-		propVal := obj.GetPropertyStr("prop")
-		defer propVal.Free()
-		assert.Equal(t, "value", propVal.String())
-	})
+		u, err := eval(t, rt, "({ name: 'Ann', age: 30 })").As[user]()
+		require.NoError(t, err)
+		assert.Equal(t, user{"Ann", 30}, u)
 
-	t.Run("DateTime", func(t *testing.T) {
-		// Normal date
-		val := must(ctx.Eval("test.js", Code("new Date('2023-01-01T00:00:00Z')")))
-		defer val.Free()
+		nums, err := eval(t, rt, "[1, 2, 3]").As[[]int]()
+		require.NoError(t, err)
+		assert.Equal(t, []int{1, 2, 3}, nums)
 
-		dateTime := val.DateTime("UTC")
-		assert.NotNil(t, dateTime)
-		assert.Contains(t, dateTime.String(), "2023-01-01 00:00:00")
+		add, err := eval(t, rt, "(a, b) => a + b").As[func(int, int) (int, error)]()
+		require.NoError(t, err)
+		assert.Equal(t, 5, must(add(2, 3)))
 
-		// Non-Date object returns nil
-		num := ctx.NewInt32(42)
-		defer num.Free()
-		assert.Nil(t, num.DateTime())
-
-		// Unix epoch (1970-01-01 00:00:00 UTC)
-		epochVal := must(ctx.Eval("test.js", Code("new Date(0)")))
-		defer epochVal.Free()
-		epochTime := epochVal.DateTime("UTC")
-		assert.NotNil(t, epochTime, "Unix epoch (1970-01-01) should not return nil")
-		assert.Equal(t, int64(0), epochTime.Unix(), "Unix epoch should have timestamp 0")
-		assert.Equal(t, 1970, epochTime.Year(), "Unix epoch should be year 1970")
-		assert.Equal(t, 1, int(epochTime.Month()), "Unix epoch should be January")
-		assert.Equal(t, 1, epochTime.Day(), "Unix epoch should be day 1")
-
-		// Invalid Date object (NaN)
-		invalidDate := must(ctx.Eval("test.js", Code("new Date('invalid')")))
-		defer invalidDate.Free()
-		assert.Nil(t, invalidDate.DateTime(), "Invalid Date should return nil")
-
-		// Different timezone
-		localTime := epochVal.DateTime("America/New_York")
-		assert.NotNil(t, localTime)
-		// Unix epoch in EST/EDT should be different hour
-		assert.NotEqual(t, epochTime.Hour(), localTime.Hour())
-
-		// Default timezone (should use time.Local)
-		defaultTz := epochVal.DateTime()
-		assert.NotNil(t, defaultTz)
-
-		// Empty timezone string (should use time.Local)
-		emptyTz := epochVal.DateTime("")
-		assert.NotNil(t, emptyTz)
+		_, err = eval(t, rt, "'x'").As[int]()
+		assert.Error(t, err)
 	})
 }
 
-func TestValuePropertyOperations(t *testing.T) {
-	runtime := must(New())
-	defer runtime.Close()
-	ctx := runtime
+func TestValueProperties(t *testing.T) {
+	rt, _ := setupRuntime(t)
+	bg := context.Background()
 
-	t.Run("GetSetPropertyStr", func(t *testing.T) {
-		obj := ctx.NewObject()
+	t.Run("GetSet", func(t *testing.T) {
+		obj := rt.NewObject()
 		defer obj.Free()
 
-		val := ctx.NewString("value")
+		v := rt.NewString("John")
+		defer v.Free()
+		require.NoError(t, obj.Set("name", v))
 
-		obj.SetPropertyStr("prop", val)
+		got := must(obj.Get("name"))
+		defer got.Free()
+		assert.Equal(t, "John", got.String())
 
-		prop := obj.GetPropertyStr("prop")
-		defer prop.Free()
-
-		assert.Equal(t, "value", prop.String())
+		missing := must(obj.Get("missing"))
+		defer missing.Free()
+		assert.True(t, missing.IsUndefined())
 	})
 
-	t.Run("GetSetProperty", func(t *testing.T) {
-		obj := ctx.NewObject()
-		defer obj.Free()
+	t.Run("GetterAndSetterExceptions", func(t *testing.T) {
+		obj := eval(t, rt, `({ get bad() { throw new TypeError('getter') }, set bad(v) { throw new RangeError('setter') } })`)
 
-		key := ctx.NewString("prop")
-		defer key.Free()
+		_, err := obj.Get("bad")
+		var jsErr *Error
+		require.ErrorAs(t, err, &jsErr)
+		assert.Equal(t, "TypeError", jsErr.Name)
+		assert.Equal(t, "getter", jsErr.Message)
 
-		val := ctx.NewString("value")
-
-		obj.SetProperty(key, val)
-
-		prop := obj.GetProperty(key)
-		defer prop.Free()
-
-		assert.Equal(t, "value", prop.String())
+		err = obj.Set("bad", rt.Global())
+		require.ErrorAs(t, err, &jsErr)
+		assert.Equal(t, "RangeError", jsErr.Name)
 	})
 
-	t.Run("GetSetPropertyIndex", func(t *testing.T) {
-		arr := must(ctx.Eval("test.js", Code("[]")))
+	t.Run("GetOnNullThrows", func(t *testing.T) {
+		_, err := eval(t, rt, "null").Get("x")
+		assert.Error(t, err)
+	})
+
+	t.Run("Keys", func(t *testing.T) {
+		obj := eval(t, rt, `(() => { const o = { a: 1, b: 2 }; Object.defineProperty(o, 'hidden', { value: 3 }); return o })()`)
+		assert.Equal(t, []string{"a", "b"}, must(obj.Keys()))
+	})
+
+	t.Run("KeyedAndIndexed", func(t *testing.T) {
+		arr := rt.NewArray()
 		defer arr.Free()
 
-		val := ctx.NewString("value")
-
-		arr.SetPropertyIndex(0, val)
-
-		prop := arr.GetPropertyIndex(0)
-		defer prop.Free()
-
-		assert.Equal(t, "value", prop.String())
-	})
-
-	t.Run("HasProperty", func(t *testing.T) {
-		obj := ctx.NewObject()
-		defer obj.Free()
-
-		val := ctx.NewString("value")
-
-		obj.SetPropertyStr("prop", val)
-
-		assert.True(t, obj.HasProperty("prop"))
-		assert.False(t, obj.HasProperty("nonExistent"))
-	})
-
-	t.Run("HasPropertyIndex", func(t *testing.T) {
-		arr := must(ctx.Eval("test.js", Code("['value']")))
-		defer arr.Free()
-
-		assert.True(t, arr.HasPropertyIndex(0))
-		assert.False(t, arr.HasPropertyIndex(1))
-	})
-
-	t.Run("DeleteProperty", func(t *testing.T) {
-		obj := ctx.NewObject()
-		defer obj.Free()
-
-		val := ctx.NewString("value")
-
-		obj.SetPropertyStr("prop", val)
-		assert.True(t, obj.HasProperty("prop"))
-
-		deleteResult := obj.DeleteProperty("prop")
-		assert.True(t, deleteResult)
-		assert.False(t, obj.HasProperty("prop"))
-	})
-
-	t.Run("GetOwnProperties", func(t *testing.T) {
-		obj := must(ctx.Eval("test.js", Code(`({a: 1, b: 2})`)))
-		defer obj.Free()
-
-		props := obj.getOwnProperties()
-		assert.Len(t, props, 2)
-
-		// Check if properties include 'a' and 'b'
-		found := make(map[string]bool)
-		for _, prop := range props {
-			propName := prop.String()
-			found[propName] = true
+		for i, s := range []string{"a", "b"} {
+			v := rt.NewString(s)
+			require.NoError(t, arr.SetIndex(uint32(i), v))
+			v.Free()
 		}
+		assert.Equal(t, int64(2), arr.Len())
+		assert.Equal(t, "b", must(arr.Index(1)).String())
 
-		assert.True(t, found["a"])
-		assert.True(t, found["b"])
-	})
-
-	t.Run("GetOwnPropertyNames", func(t *testing.T) {
-		obj := must(ctx.Eval("test.js", Code(`({a: 1, b: 2})`)))
+		sym := eval(t, rt, "Symbol('k')")
+		obj := rt.NewObject()
 		defer obj.Free()
-
-		names, err := obj.GetOwnPropertyNames()
-		assert.NoError(t, err)
-		assert.Len(t, names, 2)
-
-		// Check if names include 'a' and 'b'
-		found := make(map[string]bool)
-		for _, name := range names {
-			found[name] = true
-		}
-
-		assert.True(t, found["a"])
-		assert.True(t, found["b"])
+		require.NoError(t, obj.SetKey(sym, rt.Global()))
+		got := must(obj.GetKey(sym))
+		defer got.Free()
+		assert.True(t, got.IsObject())
 	})
 
-	t.Run("ForEach", func(t *testing.T) {
-		nonObject := ctx.NewInt32(42)
-		defer nonObject.Free()
-		nonObject.ForEach(func(key *Value, value *Value) {
-			t.Fail()
-		})
+	t.Run("HasAndDelete", func(t *testing.T) {
+		obj := eval(t, rt, `(() => { const o = { a: 1 }; Object.defineProperty(o, 'fixed', { value: 2 }); return o })()`)
 
-		obj := must(ctx.Eval("test.js", Code(`({a: 1, b: 2})`)))
-		defer obj.Free()
+		assert.True(t, must(obj.Has("a")))
+		assert.True(t, must(obj.Has("toString")), "inherited properties count")
+		assert.False(t, must(obj.Has("b")))
 
-		props := make(map[string]string)
-
-		obj.ForEach(func(key *Value, value *Value) {
-			props[key.String()] = value.String()
-		})
-
-		assert.Len(t, props, 2)
-		assert.Equal(t, "1", props["a"])
-		assert.Equal(t, "2", props["b"])
+		assert.True(t, must(obj.Delete("a")))
+		assert.False(t, must(obj.Has("a")))
+		assert.False(t, must(obj.Delete("fixed")), "non-configurable")
 	})
-}
-
-func TestValueInvokeOperations(t *testing.T) {
-	rt, ctx := setupTestContext(t)
-	defer rt.Close()
 
 	t.Run("Invoke", func(t *testing.T) {
-		obj := must(ctx.Eval("test.js", Code(`({
-				add: function(a, b) { return a + b; }
-		})`)))
-		defer obj.Free()
+		obj := eval(t, rt, `({ add(a, b) { return a + b }, fail() { throw new Error('nope') } })`)
 
-		result, err := obj.Invoke("add", 5, 3)
-		defer result.Free()
+		sum := must(obj.Invoke(bg, "add", 2, 3))
+		defer sum.Free()
+		assert.Equal(t, int32(5), sum.Int32())
 
-		assert.NoError(t, err)
-		assert.Equal(t, int32(8), result.Int32())
+		three := rt.NewInt32(3)
+		defer three.Free()
+		sum2 := must(obj.Invoke(bg, "add", three, 4))
+		defer sum2.Free()
+		assert.Equal(t, int32(7), sum2.Int32(), "*Value and Go arguments mix")
+
+		_, err := obj.Invoke(bg, "fail")
+		assert.ErrorContains(t, err, "nope")
+		_, err = obj.Invoke(bg, "missing")
+		assert.ErrorContains(t, err, "is not a function")
+		_, err = eval(t, rt, "1").Invoke(bg, "toString")
+		assert.Error(t, err, "Invoke needs an object")
 	})
 
-	t.Run("InvokeError", func(t *testing.T) {
-		obj := must(ctx.Eval("test.js", Code(`({
-				add: function(a, b) { return a + b; }
-		})`)))
-		defer obj.Free()
+	t.Run("CallWithThis", func(t *testing.T) {
+		fn := eval(t, rt, `(function (x) { return this.base + x })`)
+		this := eval(t, rt, `({ base: 10 })`)
 
-		var a any = 5
-		var b any = unsafe.Pointer(&[]byte{1, 2, 3}[0])
-
-		_, err := obj.Invoke("add", a, b)
-		assert.Error(t, err)
-	})
-
-	t.Run("InvokeJS", func(t *testing.T) {
-		obj := must(ctx.Eval("test.js", Code(`({
-				add: function(a, b) { return a + b; }
-		})`)))
-		defer obj.Free()
-
-		a := ctx.NewInt32(5)
-		defer a.Free()
-
-		b := ctx.NewInt32(3)
-		defer b.Free()
-
-		result, err := obj.InvokeJS("add", a, b)
-		defer result.Free()
-
-		assert.NoError(t, err)
-		assert.Equal(t, int32(8), result.Int32())
-	})
-
-	t.Run("InvokeJSError", func(t *testing.T) {
-		num := ctx.NewInt32(42)
-		defer num.Free()
-
-		_, err := num.InvokeJS("toString")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "cannot call function on non-object")
-
-		obj := ctx.NewObject()
-		defer obj.Free()
-
-		_, err = obj.InvokeJS("nonExistent")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not a function")
+		v := must(fn.Call(bg, this, 5))
+		defer v.Free()
+		assert.Equal(t, int32(15), v.Int32())
 	})
 
 	t.Run("New", func(t *testing.T) {
-		arrayConstructor := must(ctx.Eval("test.js", Code("Array")))
-		defer arrayConstructor.Free()
+		date := must(must(rt.Get("Date")).New(bg, 0))
+		defer date.Free()
+		assert.True(t, date.IsDate())
 
-		length := ctx.NewInt32(3)
-		defer length.Free()
-
-		newArray := arrayConstructor.New(length)
-		defer newArray.Free()
-
-		assert.True(t, newArray.IsArray())
-		assert.Equal(t, int64(3), newArray.Len())
-	})
-
-	t.Run("CallConstructor", func(t *testing.T) {
-		dateConstructor := must(ctx.Eval("test.js", Code("Date")))
-		defer dateConstructor.Free()
-
-		newDate := dateConstructor.CallConstructor()
-		defer newDate.Free()
-
-		assert.True(t, newDate.isGlobalInstanceOf("Date"))
-	})
-
-	t.Run("ConstructorError", func(t *testing.T) {
-		obj := ctx.NewObject()
-		defer obj.Free()
-
-		result := obj.CallConstructor()
-		defer result.Free()
-
-		assert.True(t, result.IsError())
+		_, err := eval(t, rt, "(() => 1)").New(bg)
+		assert.Error(t, err)
 	})
 }
 
-func TestValueArrayBufferOperations(t *testing.T) {
-	rt, ctx := setupTestContext(t)
-	defer rt.Close()
+func TestValueAwait(t *testing.T) {
+	rt, _ := setupRuntime(t)
+	bg := context.Background()
 
-	t.Run("ByteLen", func(t *testing.T) {
-		buffer := must(ctx.Eval("test.js", Code("new ArrayBuffer(10)")))
-		defer buffer.Free()
+	t.Run("Resolved", func(t *testing.T) {
+		fn := eval(t, rt, `async (x) => { await null; return x * 2 }`)
+		p := must(fn.Call(bg, nil, 21))
+		defer p.Free()
 
-		assert.Equal(t, int64(10), buffer.ByteLen())
+		v := must(p.Await(bg))
+		defer v.Free()
+		assert.Equal(t, int32(42), v.Int32())
+		assert.True(t, p.IsPromise(), "the promise stays usable after Await")
 	})
 
-	t.Run("ToByteArray", func(t *testing.T) {
-		code := `
-			const buffer = new ArrayBuffer(4);
-			const view = new Uint8Array(buffer);
-			view[0] = 10;
-			view[1] = 20;
-			view[2] = 30;
-			view[3] = 40;
-			buffer;
-		`
+	t.Run("Rejected", func(t *testing.T) {
+		fn := eval(t, rt, `async () => { throw new Error('rejected') }`)
+		p := must(fn.Call(bg, nil))
+		defer p.Free()
 
-		buffer := must(ctx.Eval("test.js", Code(code)))
-		defer buffer.Free()
-
-		bytes := buffer.ToByteArray()
-		assert.Equal(t, []byte{10, 20, 30, 40}, bytes)
+		_, err := p.Await(bg)
+		assert.ErrorContains(t, err, "rejected")
 	})
 
-	t.Run("Len", func(t *testing.T) {
-		arr := must(ctx.Eval("test.js", Code("[1, 2, 3, 4, 5]")))
-		defer arr.Free()
+	t.Run("Timers", func(t *testing.T) {
+		fn := eval(t, rt, `() => new Promise(resolve => setTimeout(() => resolve('done'), 10))`)
+		p := must(fn.Call(bg, nil))
+		defer p.Free()
 
-		assert.Equal(t, int64(5), arr.Len())
+		v := must(p.Await(bg))
+		defer v.Free()
+		assert.Equal(t, "done", v.String())
 	})
-}
 
-func TestValueType(t *testing.T) {
-	rt, ctx := setupTestContext(t)
-	defer rt.Close()
+	t.Run("NotAPromise", func(t *testing.T) {
+		_, err := eval(t, rt, "1").Await(bg)
+		assert.Error(t, err)
+	})
 
-	testCases := []struct {
-		name         string
-		code         string
-		value        *Value
-		expectedType string
-		allowedTypes []string
-	}{
-		{"Symbol", "Symbol('test')", nil, "Symbol", nil},
-		{"NaN", "NaN", nil, "NaN", nil},
-		{"Infinity", "Infinity", nil, "Infinity", nil},
-		{"BigInt", "123n", nil, "BigInt", nil},
-		{"Number", "42", nil, "Number", nil},
-		{"Date", "new Date()", nil, "Date", nil},
-		{"Boolean", "true", nil, "Boolean", nil},
-		{"Null", "null", nil, "Null", nil},
-		{"Undefined", "undefined", nil, "Undefined", nil},
-		{"String", "'hello'", nil, "String", nil},
-		{"Array", "[]", nil, "Array", nil},
-		{"Map", "new Map()", nil, "Map", nil},
-		{"Set", "new Set()", nil, "Set", nil},
-		{"Constructor", "Array", nil, "Constructor", []string{"Constructor Array"}},
-		{"Function", "(() => 42)", nil, "Function", []string{"Constructor"}},
-		{"ArrayBuffer", "new ArrayBuffer(8)", nil, "ArrayBuffer", nil},
-
-		{"IsUninitialized", "", ctx.newUninitialized(), "Uninitialized", nil},
-		{"Error", "", ctx.NewError(errors.New("some error")), "Error", nil},
-		{"ProxyValue", "", ctx.NewProxyValue(42), "QJSProxyValue", nil},
-
-		{"unknown", "({})", nil, "unknown", nil},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			var val *Value
-			if tc.value != nil {
-				val = tc.value
-			} else {
-				val = must(ctx.Eval("test.js", Code(tc.code)))
+	t.Run("AsyncGoFunction", func(t *testing.T) {
+		noErr(rt.SetAsyncFunc("double", func(call *FunctionCall) (*Value, error) {
+			if call.Arg(0).IsUndefined() {
+				return nil, &Error{Name: "TypeError", Message: "missing argument"}
 			}
+			return call.Runtime().NewInt32(call.Arg(0).Int32() * 2), nil
+		}))
 
-			defer val.Free()
-
-			actualType := val.Type()
-			validTypes := append([]string{tc.expectedType}, tc.allowedTypes...)
-			matched := slices.Contains(validTypes, actualType)
-
-			assert.True(t, matched,
-				"Code '%s' expected type in %v but got '%s'",
-				tc.code, validTypes, actualType)
-		})
-	}
-
-	t.Run("PromiseType", func(t *testing.T) {
-		result := must(ctx.Eval("test.js", Code(`({
-			promise: new Promise((resolve) => resolve(42))
-		})`)))
-		defer result.Free()
-
-		promise := result.GetPropertyStr("promise")
-		defer promise.Resolve()
-		defer promise.Free()
-		assert.Equal(t, "Promise", promise.Type())
+		assert.Equal(t, int32(42), eval(t, rt, `double(21)`).Int32())
+		assert.Equal(t, "TypeError: missing argument",
+			eval(t, rt, `double().catch(e => e.toString())`).String())
 	})
-}
-
-func TestValuePromiseOperations(t *testing.T) {
-	rt, ctx := setupTestContext(t)
-	defer rt.Close()
-
-	t.Run("AwaitOnNonPromise", func(t *testing.T) {
-		val := ctx.NewInt32(42)
-		defer val.Free()
-		_, err := val.Await()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "expected JS Promise")
-	})
-
-	t.Run("ResolveOnRegularPromise", func(t *testing.T) {
-		result := must(ctx.Eval("test.js", Code(`({
-			promise: new Promise((resolve) => resolve(42))
-		})`)))
-		defer result.Free()
-
-		promise := result.GetPropertyStr("promise")
-		assert.True(t, promise.IsPromise())
-		val := must(promise.Await())
-		defer val.Free()
-		assert.Equal(t, int32(42), val.Int32())
-	})
-
-	t.Run("RejectOnRegularPromise", func(t *testing.T) {
-		result := must(ctx.Eval("test.js", Code(`({
-			promise: new Promise((resolve, reject) => reject(new Error("promise rejected")))
-		})`)))
-		defer result.Free()
-
-		promise := result.GetPropertyStr("promise")
-		assert.True(t, promise.IsPromise())
-		_, err := promise.Await()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "promise rejected")
-	})
-
-	t.Run("AsyncGoFunctionResolveRejectError", func(t *testing.T) {
-		rt, ctx := setupTestContext(t)
-		defer rt.Close()
-		ctx.SetAsyncFunc("testAsyncFunc", func(this *This) {
-			val := this.Runtime().NewString("async result")
-			this.Promise().Resolve(val)
-		})
-
-		// Call the async function and verify behavior
-		result := must(ctx.Eval("test.js", Code(`({
-			promise: testAsyncFunc()
-		})`)))
-		defer result.Free()
-
-		promise := result.GetPropertyStr("promise")
-		assert.True(t, promise.IsPromise())
-		// remove resolve/reject from the promise
-		promise.SetPropertyStr("resolve", nil)
-		promise.SetPropertyStr("reject", nil)
-		assert.Error(t, promise.Resolve())
-		assert.Error(t, promise.Reject())
-	})
-}
-
-func TestValueStringConversionsDoNotLeak(t *testing.T) {
-	rt, ctx := setupTestContext(t)
-	defer rt.Close()
-
-	str := must(ctx.Eval("test.js", Code(`"x".repeat(4096)`)))
-	defer str.Free()
-	obj := must(ctx.Eval("test.js", Code(`({ a: "x".repeat(4096) })`)))
-	defer obj.Free()
-	buf := must(ctx.Eval("test.js", Code(`new ArrayBuffer(4096)`)))
-	defer buf.Free()
-
-	before := rt.memory().Size()
-	for range 2000 {
-		_ = str.String()
-		_, _ = obj.JSONStringify()
-		_ = buf.ToByteArray()
-	}
-
-	// Each iteration copies ~12KiB out of wasm; leaking it would grow memory
-	// by about 24MiB.
-	assert.Less(t, rt.memory().Size()-before, uint32(1<<20))
 }

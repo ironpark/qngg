@@ -9,16 +9,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 const (
-	// minMapForeachArgs is the minimum number of arguments for Map forEach callback (value, key).
-	minMapForeachArgs = 2
 	// nanosToMillis is the conversion factor from nanoseconds to milliseconds.
 	nanosToMillis = 1e6
-	// uint64ByteSize is the size of a uint64 value in bytes.
-	uint64ByteSize = 8
 	// uint64SignBitPosition is the bit position of the sign bit in a 64-bit unsigned integer.
 	uint64SignBitPosition = 63
 	// packedPtrSize is the size in bytes of a packed pointer structure.
@@ -75,16 +70,6 @@ var (
 		"DataView",
 	}
 )
-
-// objectOrMap interface for unified object/map handling.
-type objectOrMap interface {
-	IsObject() bool
-	IsMap() bool
-	ToMap() *Map
-	JSONStringify() (string, error)
-	IsNull() bool
-	ForEach(callback func(*Value, *Value))
-}
 
 // fieldMapper handles struct field mapping with caching for performance.
 type fieldMapper struct {
@@ -343,9 +328,9 @@ func newJsArrayToGoConverter[T any](input *Value, samples ...T) *jsArrayToGoConv
 func (ac *jsArrayToGoConverter[T]) Convert() (T, error) {
 	var zero T
 
-	jsArray, err := ac.input.ToArray()
-	if err != nil {
-		return zero, newJsToGoErr(ac.input, err, "Array")
+	jsArray := ac.input
+	if !jsArray.IsArray() {
+		return zero, newJsToGoErr(ac.input, newInvalidJsInputErr("array", jsArray), "Array")
 	}
 
 	jsLen := jsArray.Len()
@@ -363,21 +348,22 @@ func (ac *jsArrayToGoConverter[T]) Convert() (T, error) {
 	}
 }
 
-func (ac *jsArrayToGoConverter[T]) convertToInterface(jsArray *Array, jsLen int64) (T, error) {
+func (ac *jsArrayToGoConverter[T]) convertToInterface(jsArray *Value, jsLen int64) (T, error) {
 	result := make([]any, 0, jsLen)
 
 	for i := range jsLen {
-		jsElem := jsArray.Get(i)
+		jsElem, err := jsArray.Index(uint32(i))
+		if err != nil {
+			return ac.sample, newJsToGoErr(jsArray, err, fmt.Sprintf("array/set element at index %d", int(i)))
+		}
 
 		goElem, convErr := toGoValue[any](ac.tracker, jsElem)
 
-		if !jsElem.IsFunction() {
-			jsElem.Free()
-		}
+		jsElem.Free()
 
 		if convErr != nil {
 			return ac.sample, newJsToGoErr(
-				jsArray.Value,
+				jsArray,
 				convErr,
 				fmt.Sprintf("array/set element at index %d", int(i)),
 			)
@@ -391,22 +377,24 @@ func (ac *jsArrayToGoConverter[T]) convertToInterface(jsArray *Array, jsLen int6
 	return resultT, nil
 }
 
-func (ac *jsArrayToGoConverter[T]) convertToSlice(jsArray *Array, jsLen int64) (T, error) {
+func (ac *jsArrayToGoConverter[T]) convertToSlice(jsArray *Value, jsLen int64) (T, error) {
 	elemType := ac.targetType.Elem()
 	sliceValue := reflect.MakeSlice(ac.targetType, 0, int(jsLen))
 
 	for i := range jsLen {
-		jsElem := jsArray.Get(i)
+		jsElem, err := jsArray.Index(uint32(i))
+		if err != nil {
+			return ac.sample, newJsToGoErr(jsArray, err, fmt.Sprintf("array/set element at index %d", int(i)))
+		}
+
 		elemSample := reflect.New(elemType).Elem().Interface()
 		goElem, convErr := toGoValue(ac.tracker, jsElem, elemSample)
 
-		if !jsElem.IsFunction() {
-			jsElem.Free()
-		}
+		jsElem.Free()
 
 		if convErr != nil {
 			return ac.sample, newJsToGoErr(
-				jsArray.Value,
+				jsArray,
 				convErr,
 				fmt.Sprintf("array/set element at index %d", int(i)),
 			)
@@ -421,7 +409,7 @@ func (ac *jsArrayToGoConverter[T]) convertToSlice(jsArray *Array, jsLen int64) (
 	return sliceT, nil
 }
 
-func (ac *jsArrayToGoConverter[T]) convertToArray(jsArray *Array, jsLen int64) (T, error) {
+func (ac *jsArrayToGoConverter[T]) convertToArray(jsArray *Value, jsLen int64) (T, error) {
 	elemType := ac.targetType.Elem()
 	goArrayLen := ac.targetType.Len()
 	goArrayValue := reflect.New(ac.targetType).Elem()
@@ -431,17 +419,19 @@ func (ac *jsArrayToGoConverter[T]) convertToArray(jsArray *Array, jsLen int64) (
 	}
 
 	for i := range jsLen {
-		jsElem := jsArray.Get(i)
+		jsElem, err := jsArray.Index(uint32(i))
+		if err != nil {
+			return ac.sample, newJsToGoErr(jsArray, err, fmt.Sprintf("array/set element at index %d", int(i)))
+		}
+
 		elemSample := reflect.New(elemType).Elem().Interface()
 		goElem, convErr := toGoValue(ac.tracker, jsElem, elemSample)
 
-		if !jsElem.IsFunction() {
-			jsElem.Free()
-		}
+		jsElem.Free()
 
 		if convErr != nil {
 			return ac.sample, newJsToGoErr(
-				jsArray.Value,
+				jsArray,
 				convErr,
 				fmt.Sprintf("array/set element at index %d", int(i)),
 			)
@@ -464,8 +454,8 @@ func (ac *jsArrayToGoConverter[T]) convertElementValue(goElem any, elemType refl
 	return reflect.ValueOf(goElem)
 }
 
-func (ac *jsArrayToGoConverter[T]) convertViaJSON(jsArray *Array) (T, error) {
-	jsonString, err := jsArray.JSONStringify()
+func (ac *jsArrayToGoConverter[T]) convertViaJSON(jsArray *Value) (T, error) {
+	jsonString, err := jsArray.jsonStringify()
 	if err != nil {
 		return ac.sample, newJsStringifyErr("array", err)
 	}
@@ -613,7 +603,7 @@ func stringToNumeric(s string, targetType reflect.Type) (result any, err error) 
 	}
 
 	if s == "" {
-		return nil, ErrEmptyStringToNumber
+		return nil, errEmptyStringToNumber
 	}
 
 	// For integer types, try to parse as float first (JavaScript-style conversion)
@@ -694,19 +684,13 @@ func stringToNumeric(s string, targetType reflect.Type) (result any, err error) 
 	return nil, fmt.Errorf("cannot convert JS string %q to %s", s, targetType.String())
 }
 
-func createGoObjectTarget[T any](input objectOrMap, samples ...T) (
+func createGoObjectTarget[T any](samples ...T) (
 	temp any,
-	obj objectOrMap,
 	sample T,
 	target reflect.Type,
 ) {
 	if len(samples) > 0 {
 		sample = samples[0]
-	}
-
-	obj = input
-	if obj.IsMap() {
-		obj = obj.ToMap()
 	}
 
 	target = reflect.TypeOf(sample)
@@ -716,7 +700,7 @@ func createGoObjectTarget[T any](input objectOrMap, samples ...T) (
 
 	temp = reflect.New(target).Interface()
 
-	return temp, obj, sample, target
+	return temp, sample, target
 }
 
 // canConvertToGoNumber performs common validation for number inputs.
@@ -822,48 +806,6 @@ func hashBytes(data []byte) uint64 {
 	return h.Sum64()
 }
 
-// parseTimezone attempts to parse a timezone string as either an IANA location name
-// or a UTC offset format (+/-HH:MM). Returns UTC location if parsing fails.
-func parseTimezone(tz string) *time.Location {
-	// First try to parse as IANA timezone name (e.g., "America/New_York", "Asia/Tokyo")
-	if loc, err := time.LoadLocation(tz); err == nil {
-		return loc
-	}
-
-	// If IANA parsing fails, try to parse as UTC offset (e.g., "+05:30", "-08:00")
-	hasSign := tz[0] == '+' || tz[0] == '-'
-	if len(tz) >= 3 && hasSign {
-		// Parse formats like "+05:30", "-08:00", "+0530", "-0800"
-		var sign = 1
-		if tz[0] == '-' {
-			sign = -1
-		}
-
-		offset := tz[1:]
-
-		var hours, minutes int
-
-		// Handle both "+05:30" and "+0530" formats
-		switch {
-		case len(offset) == 5 && offset[2] == ':':
-			_, _ = fmt.Sscanf(offset, "%02d:%02d", &hours, &minutes)
-		case len(offset) == 4:
-			_, _ = fmt.Sscanf(offset, "%02d%02d", &hours, &minutes)
-		case len(offset) == 2:
-			_, _ = fmt.Sscanf(offset, "%02d", &hours)
-		}
-
-		if hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59 {
-			offsetSeconds := sign * (hours*3600 + minutes*60)
-
-			return time.FixedZone(tz, offsetSeconds)
-		}
-	}
-
-	// Fallback to UTC if parsing fails
-	return time.UTC
-}
-
 // is32BitPlatform check if the platform is 32-bit by comparing the size of uintptr.
 func is32BitPlatform() bool {
 	return strconv.IntSize == 32
@@ -890,10 +832,16 @@ func channelToJSObjectValue(
 			"capacity": rval.Cap,
 		}
 
-		obj.SetPropertyStr("type", c.NewString("channel"))
-		obj.SetPropertyStr("elementType", c.NewString(goTypeName(rtype.Elem())))
-		obj.SetPropertyStr("canSend", c.NewBool(canSend))
-		obj.SetPropertyStr("canReceive", c.NewBool(canRecv))
+		for name, value := range map[string]*Value{
+			"type":        c.NewString("channel"),
+			"elementType": c.NewString(goTypeName(rtype.Elem())),
+			"canSend":     c.NewBool(canSend),
+			"canReceive":  c.NewBool(canRecv),
+		} {
+			if err := setTake(obj, name, value); err != nil {
+				return err
+			}
+		}
 
 		if canSend {
 			objMethods["send"] = createChannelSendFunc(rval)
@@ -906,7 +854,9 @@ func channelToJSObjectValue(
 		for name, method := range objMethods {
 			// Skip error check since we know the function signatures are correct
 			jsMethod, _ := funcToJS(c, method)
-			obj.SetPropertyStr(name, jsMethod)
+			if err := setTake(obj, name, jsMethod); err != nil {
+				return err
+			}
 		}
 
 		return nil
@@ -915,7 +865,6 @@ func channelToJSObjectValue(
 
 // createChannelSendFunc creates 'func(T) error' for sending T to a channel.
 func createChannelSendFunc(chanRValue reflect.Value) any {
-	errValue := errZeroRValue
 	chanElemRType := chanRValue.Type().Elem()
 	funcRType := reflect.FuncOf(
 		[]reflect.Type{chanElemRType}, // params
@@ -925,6 +874,7 @@ func createChannelSendFunc(chanRValue reflect.Value) any {
 
 	fn := reflect.MakeFunc(funcRType, func(args []reflect.Value) []reflect.Value {
 		valueToSend := args[0]
+		errValue := errZeroRValue
 		chosen, _, _ := reflect.Select([]reflect.SelectCase{
 			{Dir: reflect.SelectSend, Chan: chanRValue, Send: valueToSend},
 			{Dir: reflect.SelectDefault},
@@ -932,7 +882,7 @@ func createChannelSendFunc(chanRValue reflect.Value) any {
 
 		// Default case was chosen - send would block
 		if chosen == 1 {
-			errValue = reflect.ValueOf(ErrChanSend)
+			errValue = reflect.ValueOf(errChanSend)
 		}
 
 		return []reflect.Value{errValue}
@@ -952,12 +902,12 @@ func createChannelReceiveFunc(chanRValue reflect.Value) func() (any, error) {
 
 		// First: Check default case was chosen - no data available
 		if chosen == 1 {
-			return nil, ErrChanReceive
+			return nil, errChanReceive
 		}
 
 		// Receive case was chosen but channel is closed
 		if !ok {
-			return nil, ErrChanClosed
+			return nil, errChanClosed
 		}
 
 		// Successful receive
@@ -970,7 +920,7 @@ func createChannelCloseFunc(rval reflect.Value) func() error {
 	return func() error {
 		// Only close if it's a send or bidirectional channel
 		if rval.Type().ChanDir() == reflect.RecvDir {
-			return ErrChanCloseReceiveOnly
+			return errChanCloseReceiveOnly
 		}
 
 		rval.Close()

@@ -1,53 +1,13 @@
 package qngg
 
 import (
+	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestCombineErrors(t *testing.T) {
-	t.Run("empty slice returns nil", func(t *testing.T) {
-		result := combineErrors()
-		assert.Nil(t, result)
-	})
-
-	t.Run("single error", func(t *testing.T) {
-		err := errors.New("test error")
-		result := combineErrors(err)
-		assert.Error(t, result)
-		assert.Contains(t, result.Error(), "test error")
-	})
-
-	t.Run("multiple errors", func(t *testing.T) {
-		err1 := errors.New("error 1")
-		err2 := errors.New("error 2")
-		result := combineErrors(err1, err2)
-		assert.Error(t, result)
-		assert.Contains(t, result.Error(), "error 1")
-		assert.Contains(t, result.Error(), "error 2")
-	})
-
-	t.Run("mixed nil and non-nil errors", func(t *testing.T) {
-		err1 := errors.New("error 1")
-		var err2 error // nil
-		err3 := errors.New("error 3")
-		result := combineErrors(err1, err2, err3)
-		assert.Error(t, result)
-		assert.Contains(t, result.Error(), "error 1")
-		assert.Contains(t, result.Error(), "error 3")
-	})
-
-	t.Run("all nil errors", func(t *testing.T) {
-		var err1, err2, err3 error // all nil
-		result := combineErrors(err1, err2, err3)
-		assert.Error(t, result)
-		assert.Equal(t, "", result.Error()) // When all errors are nil, empty string
-	})
-}
 
 func TestNewJsStringifyErr(t *testing.T) {
 	t.Run("basic error wrapping", func(t *testing.T) {
@@ -72,64 +32,23 @@ func TestNewJsStringifyErr(t *testing.T) {
 }
 
 func TestNewProxyErr(t *testing.T) {
-	t.Run("error type input", func(t *testing.T) {
-		originalErr := errors.New("original error")
-		result := newProxyErr(123, originalErr)
-
-		assert.Error(t, result)
-		assert.Contains(t, result.Error(), "functionProxy [123]:")
-		assert.Contains(t, result.Error(), "original error")
-		assert.True(t, errors.Is(result, originalErr))
-		// Should contain stack trace
-		assert.Contains(t, result.Error(), "TestNewProxyErr")
-	})
-
-	t.Run("string type input", func(t *testing.T) {
-		result := newProxyErr(456, "string error")
-
-		assert.Error(t, result)
-		assert.Contains(t, result.Error(), "functionProxy [456]: string error")
-		// Should contain stack trace
-		assert.Contains(t, result.Error(), "TestNewProxyErr")
-	})
-
-	t.Run("other type input", func(t *testing.T) {
-		result := newProxyErr(789, 42)
-
-		assert.Error(t, result)
-		assert.Contains(t, result.Error(), "functionProxy [789]: 42")
-		// Should contain stack trace
-		assert.Contains(t, result.Error(), "TestNewProxyErr")
-	})
-
-	t.Run("contains debug stack", func(t *testing.T) {
-		result := newProxyErr(999, "test")
-
-		// Verify the stack trace is included
-		stackLines := strings.Split(result.Error(), "\n")
-		found := false
-		for _, line := range stackLines {
-			if strings.Contains(line, "TestNewProxyErr") {
-				found = true
-				break
-			}
-		}
-		assert.True(t, found, "Stack trace should contain test function name")
-	})
+	result := newProxyErr("boom")
+	assert.Contains(t, result.Error(), "panic in Go function: boom")
+	assert.Contains(t, result.Error(), "TestNewProxyErr", "the stack is included")
 }
 
 func TestNewJsToGoErr_JSONStringifyFailure(t *testing.T) {
 	// This test requires a runtime to create a Value that fails JSONStringify
-	rt, err := New()
+	rt, err := New(Config{})
 	require.NoError(t, err)
 	defer rt.Close()
 
 	// Create a Value that will fail JSONStringify (circular reference)
-	result, err := rt.Eval("test.js", Code(`
+	result, err := rt.Eval(context.Background(), "test.js", `
 		const obj = {};
 		obj.self = obj; // circular reference
 		obj
-	`))
+	`)
 	require.NoError(t, err)
 	defer result.Free()
 
@@ -144,7 +63,7 @@ func TestNewJsToGoErr_JSONStringifyFailure(t *testing.T) {
 }
 
 func TestNewJsToGoErr_EmptyErrorConditions(t *testing.T) {
-	rt, err := New()
+	rt, err := New(Config{})
 	require.NoError(t, err)
 	defer rt.Close()
 
@@ -180,11 +99,11 @@ func TestNewJsToGoErr_EmptyErrorConditions(t *testing.T) {
 }
 
 func createCircularValue(ctx *Runtime) *Value {
-	result, err := ctx.Eval("test.js", Code(`
+	result, err := ctx.Eval(context.Background(), "test.js", `
 		const obj = {};
 		obj.self = obj;
 		obj
-	`))
+	`)
 	if err != nil {
 		panic(err)
 	}
@@ -192,7 +111,7 @@ func createCircularValue(ctx *Runtime) *Value {
 }
 
 func TestNewJsToGoErr(t *testing.T) {
-	rt, err := New()
+	rt, err := New(Config{})
 	require.NoError(t, err)
 	defer rt.Close()
 
@@ -223,16 +142,16 @@ func TestNewJsToGoErr(t *testing.T) {
 }
 
 func TestNewInvalidJsInputErr_JSONStringifyFailure(t *testing.T) {
-	rt, err := New()
+	rt, err := New(Config{})
 	require.NoError(t, err)
 	defer rt.Close()
 
 	// Create a Value that will fail JSONStringify (circular reference)
-	circularValue, err := rt.Eval("test.js", Code(`
+	circularValue, err := rt.Eval(context.Background(), "test.js", `
 		const obj = {};
 		obj.self = obj; // circular reference
 		obj
-	`))
+	`)
 	require.NoError(t, err)
 	defer circularValue.Free()
 
@@ -246,7 +165,7 @@ func TestNewInvalidJsInputErr_JSONStringifyFailure(t *testing.T) {
 }
 
 func TestNewInvalidJsInputErr_SuccessfulJSONStringify(t *testing.T) {
-	rt, err := New()
+	rt, err := New(Config{})
 	require.NoError(t, err)
 	defer rt.Close()
 

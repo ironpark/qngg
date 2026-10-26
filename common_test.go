@@ -1,6 +1,7 @@
 package qngg
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"sync"
@@ -11,131 +12,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestParseTimezone(t *testing.T) {
-	t.Run("IANA_timezone_names", func(t *testing.T) {
-		// Test valid IANA timezone names
-		testCases := []struct {
-			name     string
-			timezone string
-			expected string
-		}{
-			{"UTC", "UTC", "UTC"},
-			{"America_New_York", "America/New_York", "America/New_York"},
-			{"Asia_Tokyo", "Asia/Tokyo", "Asia/Tokyo"},
-			{"Europe_London", "Europe/London", "Europe/London"},
-			{"Australia_Sydney", "Australia/Sydney", "Australia/Sydney"},
-		}
-
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				result := parseTimezone(tc.timezone)
-				assert.NotNil(t, result)
-				assert.Equal(t, tc.expected, result.String())
-			})
-		}
-	})
-
-	t.Run("UTC_offset_formats", func(t *testing.T) {
-		testCases := []struct {
-			name           string
-			timezone       string
-			expectedName   string
-			expectedOffset int // in seconds
-		}{
-			// 5-character format with colon (+HH:MM)
-			{"positive_offset_colon_format", "+05:30", "+05:30", 5*3600 + 30*60},
-			{"negative_offset_colon_format", "-08:00", "-08:00", -(8 * 3600)},
-			{"zero_offset_colon_format", "+00:00", "+00:00", 0},
-			{"max_positive_colon", "+23:59", "+23:59", 23*3600 + 59*60},
-			{"max_negative_colon", "-23:59", "-23:59", -(23*3600 + 59*60)},
-
-			// 4-character format without colon (+HHMM)
-			{"positive_offset_no_colon", "+0530", "+0530", 5*3600 + 30*60},
-			{"negative_offset_no_colon", "-0800", "-0800", -(8 * 3600)},
-			{"zero_offset_no_colon", "+0000", "+0000", 0},
-			{"max_positive_no_colon", "+2359", "+2359", 23*3600 + 59*60},
-			{"max_negative_no_colon", "-2359", "-2359", -(23*3600 + 59*60)},
-
-			// 2-character format hours only (+HH)
-			{"positive_hours_only", "+05", "+05", 5 * 3600},
-			{"negative_hours_only", "-08", "-08", -(8 * 3600)},
-			{"zero_hours_only", "+00", "+00", 0},
-			{"max_positive_hours", "+23", "+23", 23 * 3600},
-			{"max_negative_hours", "-23", "-23", -(23 * 3600)},
-		}
-
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				result := parseTimezone(tc.timezone)
-				assert.NotNil(t, result)
-				assert.Equal(t, tc.expectedName, result.String())
-
-				// Test offset by checking time conversion
-				testTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
-				convertedTime := testTime.In(result)
-				_, offset := convertedTime.Zone()
-				assert.Equal(t, tc.expectedOffset, offset)
-			})
-		}
-	})
-
-	t.Run("unusual_but_valid_offset_formats", func(t *testing.T) {
-		testCases := []struct {
-			name     string
-			timezone string
-			expected string
-		}{
-			{"extra_characters_after_valid", "+05:30extra", "+05:30extra"},
-			{"letters_that_parse_to_zero", "+ab:cd", "+ab:cd"}, // parses as 0:0
-			{"incomplete_colon_format", "+05:", "+05:"},        // parses as 5:0
-			{"invalid_colon_position", "+0:530", "+0:530"},     // parses as 0:530, but 530 > 59 so might be invalid
-			{"three_digit_format", "+123", "+123"},             // treated as unknown format, parses as 0:0
-		}
-
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				result := parseTimezone(tc.timezone)
-				assert.NotNil(t, result)
-				assert.Equal(t, tc.expected, result.String())
-			})
-		}
-	})
-
-	t.Run("invalid_UTC_offset_formats_fallback_to_UTC", func(t *testing.T) {
-		// These are the actual conditions that cause fallback to UTC:
-		// 1. Length < 3
-		// 2. Doesn't start with + or -
-		// 3. Hours > 23 or Minutes > 59 (after parsing)
-		testCases := []struct {
-			name     string
-			timezone string
-			reason   string
-		}{
-			// Length < 3 conditions
-			{"too_short_with_sign", "+1", "length < 3"},
-			{"too_short_with_minus", "-", "length < 3"},
-
-			// No + or - prefix
-			{"no_sign_prefix", "0530", "doesn't start with + or -"},
-			{"invalid_sign", "*0530", "invalid sign character"},
-
-			// These should actually fallback due to validation failure
-			{"invalid_minutes_over_59_colon", "+05:60", "minutes > 59"},
-			{"invalid_minutes_over_59_no_colon", "+0560", "minutes > 59"},
-			{"invalid_hours_over_23_colon", "+24:00", "hours > 23"},
-			{"invalid_hours_over_23_no_colon", "+2400", "hours > 23"},
-		}
-
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				result := parseTimezone(tc.timezone)
-				assert.NotNil(t, result)
-				assert.Equal(t, "UTC", result.String(), "Should fallback to UTC for: %s", tc.reason)
-			})
-		}
-	})
-}
 
 // Test struct types for FieldMapper concurrency testing
 type ConcurrencyTestStruct struct {
@@ -283,11 +159,11 @@ func TestJsNumericToGoConverterErrorHandling(t *testing.T) {
 
 // TestJsArrayToGoConverterErrorWrapping tests that errors are properly wrapped with newJsToGoErr
 func TestJsArrayToGoConverterErrorWrapping(t *testing.T) {
-	rt := must(New())
+	rt := must(New(Config{}))
 	defer rt.Close()
 
 	// Create a non-array value
-	jsValue, err := rt.Eval("test.js", Code("123"))
+	jsValue, err := rt.Eval(context.Background(), "test.js", "123")
 	assert.NoError(t, err)
 	defer jsValue.Free()
 
@@ -304,15 +180,15 @@ func TestJsArrayToGoConverterErrorWrapping(t *testing.T) {
 
 // TestJsArrayToGoConverterJSONStringifyError tests the JSONStringify error.
 func TestJsArrayToGoConverterJSONStringifyError(t *testing.T) {
-	rt := must(New())
+	rt := must(New(Config{}))
 	defer rt.Close()
 
 	// Create a JS array with circular reference that will fail JSONStringify
-	jsValue, err := rt.Eval("test.js", Code(`
+	jsValue, err := rt.Eval(context.Background(), "test.js", `
 		const obj = {};
 		obj.self = obj; // circular reference
 		[obj]  // array containing circular reference object
-	`))
+	`)
 	assert.NoError(t, err)
 	defer jsValue.Free()
 
@@ -623,13 +499,13 @@ func createChannelValue(t *testing.T, ctx *Runtime) (
 	chValue := reflect.ValueOf(goChan)
 	jsChan = must(channelToJSObjectValue(ctx, chType, chValue))
 	assert.True(t, jsChan.IsObject())
-	ctx.Global().SetPropertyStr("goChan", jsChan)
+	noErr(ctx.Global().Set("goChan", jsChan))
 
 	return waitChan, goChan, jsChan
 }
 
 func TestChannelToJSObjectValue(t *testing.T) {
-	rt := must(New())
+	rt := must(New(Config{}))
 	defer rt.Close()
 	ctx := rt
 
@@ -651,9 +527,9 @@ func TestChannelToJSObjectValue(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.True(t, chValue.IsObject())
-		ctx.Global().SetPropertyStr("ch", chValue)
+		noErr(ctx.Global().Set("ch", chValue))
 
-		result, err := ctx.Eval("test.js", Code(`
+		result, err := ctx.Eval(context.Background(), "test.js", `
 			([
 				ch.type,
 				ch.elementType,
@@ -667,33 +543,33 @@ func TestChannelToJSObjectValue(t *testing.T) {
 				typeof ch.length,
 				typeof ch.capacity,
 			])
-		`))
+		`)
 
 		require.NoError(t, err)
 		defer result.Free()
 		assert.True(t, result.IsArray())
 		assert.Equal(t, int64(11), result.Len())
-		resultJson := must(result.JSONStringify())
+		resultJson := must(result.jsonStringify())
 		assert.Equal(t, "[\"channel\",\"string\",true,true,0,5,\"function\",\"function\",\"function\",\"function\",\"function\"]", resultJson)
 	})
 }
 
 func TestGoChannelToJs(t *testing.T) {
 	t.Run("SendErrorNoReceiverReady", func(t *testing.T) {
-		rt := must(New())
+		rt := must(New(Config{}))
 		defer rt.Close()
 		ctx := rt
 
 		_, _, jsChan := createChannelValue(t, ctx)
 		defer jsChan.Free()
-		_, err := ctx.Eval("test.js", Code(`
+		_, err := ctx.Eval(context.Background(), "test.js", `
 			setTimeout(() => { goChan.send(1) }, 100);
-		`))
+		`)
 		assert.Error(t, err)
 	})
 
 	t.Run("SendErrorBufferFull", func(t *testing.T) {
-		rt := must(New())
+		rt := must(New(Config{}))
 		defer rt.Close()
 		ctx := rt
 		_, goChan, jsChan := createChannelValue(t, ctx)
@@ -704,27 +580,27 @@ func TestGoChannelToJs(t *testing.T) {
 
 		// ensure the goroutine has sent the value
 		time.Sleep(10 * time.Millisecond)
-		_, err := ctx.Eval("test.js", Code(`
+		_, err := ctx.Eval(context.Background(), "test.js", `
 			setTimeout(() => { goChan.send(1) }, 100);
-		`))
+		`)
 		assert.Error(t, err)
 	})
 
 	t.Run("SendErrorChannelClosed", func(t *testing.T) {
-		rt := must(New())
+		rt := must(New(Config{}))
 		defer rt.Close()
 		ctx := rt
 		_, goChan, jsChan := createChannelValue(t, ctx)
 		defer jsChan.Free()
 		close(goChan)
-		_, err := ctx.Eval("test.js", Code(`
+		_, err := ctx.Eval(context.Background(), "test.js", `
 			setTimeout(() => { goChan.send(1) }, 100);
-		`))
+		`)
 		assert.Error(t, err)
 	})
 
 	t.Run("SendSuccess", func(t *testing.T) {
-		rt := must(New())
+		rt := must(New(Config{}))
 		defer rt.Close()
 		ctx := rt
 
@@ -736,28 +612,28 @@ func TestGoChannelToJs(t *testing.T) {
 		}()
 
 		defer jsChan.Free()
-		must(ctx.Eval("test.js", Code(`
+		must(ctx.Eval(context.Background(), "test.js", `
 			setTimeout(() => { goChan.send(1) }, 100);
-		`)))
+		`))
 		<-waitChan
 	})
 
 	t.Run("ReceiveErrorNoData", func(t *testing.T) {
-		rt := must(New())
+		rt := must(New(Config{}))
 		defer rt.Close()
 		ctx := rt
 
 		_, _, jsChan := createChannelValue(t, ctx)
 		defer jsChan.Free()
-		_, err := ctx.Eval("test.js", Code(`
+		_, err := ctx.Eval(context.Background(), "test.js", `
 			goChan.receive();
-		`))
+		`)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "channel receive would block: buffer empty or no sender ready")
 	})
 
 	t.Run("ReceiveErrorClosedChannel", func(t *testing.T) {
-		rt := must(New())
+		rt := must(New(Config{}))
 		defer rt.Close()
 		ctx := rt
 
@@ -766,15 +642,15 @@ func TestGoChannelToJs(t *testing.T) {
 
 		close(goChan)
 
-		_, err := ctx.Eval("test.js", Code(`
+		_, err := ctx.Eval(context.Background(), "test.js", `
 			goChan.receive();
-		`))
+		`)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "channel is closed")
 	})
 
 	t.Run("ReceiveSuccess", func(t *testing.T) {
-		rt := must(New())
+		rt := must(New(Config{}))
 		defer rt.Close()
 		ctx := rt
 
@@ -787,9 +663,9 @@ func TestGoChannelToJs(t *testing.T) {
 
 		// ensure the goroutine has sent the value
 		time.Sleep(10 * time.Millisecond)
-		result := must(ctx.Eval("test.js", Code(`
+		result := must(ctx.Eval(context.Background(), "test.js", `
 			goChan.receive();
-		`)))
+		`))
 		defer result.Free()
 
 		assert.True(t, result.IsNumber())
@@ -798,7 +674,7 @@ func TestGoChannelToJs(t *testing.T) {
 	})
 
 	t.Run("ReceiveMultipleValues", func(t *testing.T) {
-		rt := must(New())
+		rt := must(New(Config{}))
 		defer rt.Close()
 		ctx := rt
 
@@ -807,16 +683,16 @@ func TestGoChannelToJs(t *testing.T) {
 		chValue := reflect.ValueOf(goChan)
 		jsChan := must(channelToJSObjectValue(ctx, chType, chValue))
 		assert.True(t, jsChan.IsObject())
-		ctx.Global().SetPropertyStr("goChan", jsChan)
+		noErr(ctx.Global().Set("goChan", jsChan))
 
 		for i := 1; i <= 3; i++ {
 			goChan <- i * 10
 		}
 
 		for i := 1; i <= 3; i++ {
-			result := must(ctx.Eval("test.js", Code(`
+			result := must(ctx.Eval(context.Background(), "test.js", `
 				goChan.receive();
-			`)))
+			`))
 			assert.True(t, result.IsNumber())
 			receivedValue := result.Int32()
 			assert.Equal(t, int32(i*10), receivedValue)
@@ -824,15 +700,15 @@ func TestGoChannelToJs(t *testing.T) {
 		}
 
 		// Next receive should block (no more data)
-		_, err := ctx.Eval("test.js", Code(`
+		_, err := ctx.Eval(context.Background(), "test.js", `
 			goChan.receive();
-		`))
+		`)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "channel receive would block: buffer empty or no sender ready")
 	})
 
 	t.Run("ReceiveFromBufferedChannel", func(t *testing.T) {
-		rt := must(New())
+		rt := must(New(Config{}))
 		defer rt.Close()
 		ctx := rt
 
@@ -840,16 +716,16 @@ func TestGoChannelToJs(t *testing.T) {
 		chType := reflect.TypeOf(bufferedChan)
 		chValue := reflect.ValueOf(bufferedChan)
 		jsChan := must(channelToJSObjectValue(ctx, chType, chValue))
-		ctx.Global().SetPropertyStr("bufferedChan", jsChan)
+		noErr(ctx.Global().Set("bufferedChan", jsChan))
 
 		bufferedChan <- 100
 		bufferedChan <- 200
 		bufferedChan <- 300
 
 		for i, expected := range []int{100, 200, 300} {
-			result := must(ctx.Eval("test.js", Code(`
+			result := must(ctx.Eval(context.Background(), "test.js", `
 				bufferedChan.receive();
-			`)))
+			`))
 			assert.True(t, result.IsNumber(), "Result %d should be a number", i)
 			receivedValue := result.Int32()
 			assert.Equal(t, int32(expected), receivedValue, "Received value %d should match expected", i)
@@ -857,31 +733,31 @@ func TestGoChannelToJs(t *testing.T) {
 		}
 
 		// Next receive should block since buffer is empty
-		_, err := ctx.Eval("test.js", Code(`
+		_, err := ctx.Eval(context.Background(), "test.js", `
 			bufferedChan.receive();
-		`))
+		`)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "channel receive would block: buffer empty or no sender ready")
 	})
 
 	t.Run("CloseSuccessBidirectionalChannel", func(t *testing.T) {
-		rt := must(New())
+		rt := must(New(Config{}))
 		defer rt.Close()
 		ctx := rt
 
 		_, _, jsChan := createChannelValue(t, ctx)
 		defer jsChan.Free()
 
-		result := must(ctx.Eval("test.js", Code(`
+		result := must(ctx.Eval(context.Background(), "test.js", `
 			goChan.close();
-		`)))
+		`))
 		defer result.Free()
 
 		assert.True(t, result.IsUndefined() || result.IsNull())
 	})
 
 	t.Run("CloseSuccessSendOnlyChannel", func(t *testing.T) {
-		rt := must(New())
+		rt := must(New(Config{}))
 		defer rt.Close()
 		ctx := rt
 
@@ -892,18 +768,18 @@ func TestGoChannelToJs(t *testing.T) {
 		chValue := reflect.ValueOf(sendOnlyChan)
 		jsChan := must(channelToJSObjectValue(ctx, chType, chValue))
 		assert.True(t, jsChan.IsObject())
-		ctx.Global().SetPropertyStr("sendOnlyChan", jsChan)
+		noErr(ctx.Global().Set("sendOnlyChan", jsChan))
 
-		result := must(ctx.Eval("test.js", Code(`
+		result := must(ctx.Eval(context.Background(), "test.js", `
 			sendOnlyChan.close();
-		`)))
+		`))
 		defer result.Free()
 
 		assert.True(t, result.IsUndefined() || result.IsNull())
 	})
 
 	t.Run("CloseErrorReceiveOnlyChannel", func(t *testing.T) {
-		rt := must(New())
+		rt := must(New(Config{}))
 		defer rt.Close()
 		ctx := rt
 
@@ -914,33 +790,33 @@ func TestGoChannelToJs(t *testing.T) {
 		chValue := reflect.ValueOf(receiveOnlyChan)
 		jsChan := must(channelToJSObjectValue(ctx, chType, chValue))
 		assert.True(t, jsChan.IsObject())
-		ctx.Global().SetPropertyStr("receiveOnlyChan", jsChan)
+		noErr(ctx.Global().Set("receiveOnlyChan", jsChan))
 
-		_, err := ctx.Eval("test.js", Code(`
+		_, err := ctx.Eval(context.Background(), "test.js", `
 			receiveOnlyChan.close();
-		`))
+		`)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "cannot close receive-only channel")
 	})
 
 	t.Run("CloseChannelTwice", func(t *testing.T) {
-		rt := must(New())
+		rt := must(New(Config{}))
 		defer rt.Close()
 		ctx := rt
 
 		_, _, jsChan := createChannelValue(t, ctx)
 		defer jsChan.Free()
 
-		result1 := must(ctx.Eval("test.js", Code(`
+		result1 := must(ctx.Eval(context.Background(), "test.js", `
 			goChan.close();
-		`)))
+		`))
 		defer result1.Free()
 		assert.True(t, result1.IsUndefined() || result1.IsNull())
 
 		// Second close should fail
-		_, err := ctx.Eval("test.js", Code(`
+		_, err := ctx.Eval(context.Background(), "test.js", `
 			goChan.close();
-		`))
+		`)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "close of closed channel")
 	})

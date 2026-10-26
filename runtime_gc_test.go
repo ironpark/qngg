@@ -9,7 +9,7 @@ import (
 func TestRuntimeCollectedWithoutClose(t *testing.T) {
 	collected := make(chan struct{})
 	func() {
-		rt, err := New()
+		rt, err := New(Config{})
 		if err != nil {
 			t.Fatal(err)
 		}

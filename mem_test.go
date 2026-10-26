@@ -12,7 +12,7 @@ import (
 // allocateMemoryPtr allocates memory and returns a uint32 pointer
 func allocateMemoryPtr(t *testing.T, runtime *Runtime, size uint64) uint32 {
 	ptr := runtime.malloc(size)
-	t.Cleanup(func() { runtime.freeHandle(ptr) })
+	t.Cleanup(func() { runtime.free(ptr) })
 	return uint32(ptr)
 }
 
@@ -29,7 +29,7 @@ func generateTestPattern(size int) []byte {
 func createPackedPtr(t *testing.T, runtime *Runtime, addr, size uint32) uint64 {
 	packedValue := uint64(addr)<<32 | uint64(size)
 	packedPtr := allocateMemoryPtr(t, runtime, 8)
-	err := runtime.memory().WriteUint64(packedPtr, packedValue)
+	err := runtime.mem.WriteUint64(packedPtr, packedValue)
 	require.NoError(t, err)
 	return uint64(packedPtr)
 }
@@ -49,10 +49,10 @@ func (m *memTestUtil) allocatePtr(size uint64) uint32 {
 }
 
 func (m *memTestUtil) assertWriteRead(ptr uint32, data []byte) {
-	err := m.runtime.memory().Write(ptr, data)
+	err := m.runtime.mem.Write(ptr, data)
 	require.NoError(m.t, err)
 
-	readData, err := m.runtime.memory().Read(ptr, uint64(len(data)))
+	readData, err := m.runtime.mem.Read(ptr, uint64(len(data)))
 	require.NoError(m.t, err)
 	assert.Equal(m.t, data, readData)
 }
@@ -136,7 +136,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			shouldError: true,
 			errorType:   errInvalidPointer,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
-				_, err := util.runtime.memory().Read(0, uint64(len(tc.testData)))
+				_, err := util.runtime.mem.Read(0, uint64(len(tc.testData)))
 				assert.ErrorIs(t, err, tc.errorType)
 			},
 		},
@@ -147,7 +147,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			shouldError: true,
 			errorType:   errInvalidPointer,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
-				err := util.runtime.memory().Write(0, tc.testData)
+				err := util.runtime.mem.Write(0, tc.testData)
 				assert.ErrorIs(t, err, tc.errorType)
 			},
 		},
@@ -158,7 +158,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			shouldError: true,
 			errorType:   errIndexOutOfRange,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
-				mem := util.runtime.memory()
+				mem := util.runtime.mem
 				memSize := mem.Size()
 				_, err := mem.ReadUint8(memSize)
 				assert.ErrorIs(t, err, tc.errorType)
@@ -171,7 +171,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			shouldError: true,
 			errorType:   errIndexOutOfRange,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
-				mem := util.runtime.memory()
+				mem := util.runtime.mem
 				memSize := mem.Size()
 				if memSize >= 2 {
 					_, err := mem.ReadUint32(memSize - 2) // Only 2 bytes available, needs 4
@@ -186,7 +186,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			shouldError: true,
 			errorType:   errIndexOutOfRange,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
-				mem := util.runtime.memory()
+				mem := util.runtime.mem
 				memSize := mem.Size()
 				if memSize >= 2 {
 					err := mem.WriteUint32(memSize-2, 42) // Only 2 bytes available, needs 4
@@ -201,7 +201,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			shouldError: true,
 			errorType:   errIndexOutOfRange,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
-				mem := util.runtime.memory()
+				mem := util.runtime.mem
 				memSize := mem.Size()
 				if memSize >= 4 {
 					_, err := mem.ReadUint64(memSize - 4) // Only 4 bytes available, needs 8
@@ -216,7 +216,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			shouldError: true,
 			errorType:   errIndexOutOfRange,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
-				mem := util.runtime.memory()
+				mem := util.runtime.mem
 				memSize := mem.Size()
 				if memSize >= 4 {
 					err := mem.WriteUint64(memSize-4, 42) // Only 4 bytes available, needs 8
@@ -233,7 +233,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
 				ptr := util.allocatePtr(tc.dataSize)
 				oversizedRead := uint64(math.MaxUint32) + 1
-				_, err := util.runtime.memory().Read(ptr, oversizedRead)
+				_, err := util.runtime.mem.Read(ptr, oversizedRead)
 				assert.ErrorIs(t, err, tc.errorType)
 			},
 		},
@@ -244,7 +244,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			shouldError: true,
 			errorType:   errIndexOutOfRange,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
-				mem := util.runtime.memory()
+				mem := util.runtime.mem
 				memSize := mem.Size()
 
 				// Test ReadString with a pointer beyond memory bounds
@@ -269,7 +269,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			shouldError: true,
 			errorType:   errIndexOutOfRange,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
-				mem := util.runtime.memory()
+				mem := util.runtime.mem
 				memSize := mem.Size()
 
 				// Use a large pointer value that's definitely out of bounds
@@ -307,16 +307,16 @@ func TestMem_ReadWrite(t *testing.T) {
 		ptr := util.allocatePtr(10)
 		testData := []byte{1, 2, 3, 4, 5}
 
-		util.runtime.memory().MustWrite(ptr, testData)
-		readData := util.runtime.memory().MustRead(ptr, uint64(len(testData)))
+		util.runtime.mem.MustWrite(ptr, testData)
+		readData := util.runtime.mem.MustRead(ptr, uint64(len(testData)))
 		assert.Equal(t, testData, readData)
 
 		// Test panic conditions
 		assert.Panics(t, func() {
-			util.runtime.memory().MustRead(0, 5)
+			util.runtime.mem.MustRead(0, 5)
 		})
 		assert.Panics(t, func() {
-			util.runtime.memory().MustWrite(0, []byte{1, 2, 3})
+			util.runtime.mem.MustWrite(0, []byte{1, 2, 3})
 		})
 	})
 }
@@ -333,10 +333,10 @@ func TestMem_Primitives(t *testing.T) {
 				uint8(0), uint8(127), uint8(255),
 			},
 			writeFunc: func(r *Runtime, ptr uint32, v any) error {
-				return r.memory().WriteUint8(ptr, v.(uint8))
+				return r.mem.WriteUint8(ptr, v.(uint8))
 			},
 			readFunc: func(r *Runtime, ptr uint32) (any, error) {
-				return r.memory().ReadUint8(ptr)
+				return r.mem.ReadUint8(ptr)
 			},
 		},
 		{
@@ -346,10 +346,10 @@ func TestMem_Primitives(t *testing.T) {
 				uint32(0), uint32(0x12345678), uint32(math.MaxUint32),
 			},
 			writeFunc: func(r *Runtime, ptr uint32, v any) error {
-				return r.memory().WriteUint32(ptr, v.(uint32))
+				return r.mem.WriteUint32(ptr, v.(uint32))
 			},
 			readFunc: func(r *Runtime, ptr uint32) (any, error) {
-				return r.memory().ReadUint32(ptr)
+				return r.mem.ReadUint32(ptr)
 			},
 		},
 		{
@@ -359,10 +359,10 @@ func TestMem_Primitives(t *testing.T) {
 				uint64(0), uint64(0x1234567890ABCDEF), uint64(math.MaxUint64),
 			},
 			writeFunc: func(r *Runtime, ptr uint32, v any) error {
-				return r.memory().WriteUint64(ptr, v.(uint64))
+				return r.mem.WriteUint64(ptr, v.(uint64))
 			},
 			readFunc: func(r *Runtime, ptr uint32) (any, error) {
-				return r.memory().ReadUint64(ptr)
+				return r.mem.ReadUint64(ptr)
 			},
 		},
 		{
@@ -374,17 +374,17 @@ func TestMem_Primitives(t *testing.T) {
 				math.Inf(1), math.Inf(-1),
 			},
 			writeFunc: func(r *Runtime, ptr uint32, v any) error {
-				return r.memory().WriteFloat64(ptr, v.(float64))
+				return r.mem.WriteFloat64(ptr, v.(float64))
 			},
 			readFunc: func(r *Runtime, ptr uint32) (any, error) {
-				return r.memory().ReadFloat64(ptr)
+				return r.mem.ReadFloat64(ptr)
 			},
 			specialTests: func(t *testing.T, runtime *Runtime) {
 				// NaN requires special handling since NaN != NaN
 				ptr := allocateMemoryPtr(t, runtime, 8)
-				err := runtime.memory().WriteFloat64(ptr, math.NaN())
+				err := runtime.mem.WriteFloat64(ptr, math.NaN())
 				require.NoError(t, err)
-				readValue, err := runtime.memory().ReadFloat64(ptr)
+				readValue, err := runtime.mem.ReadFloat64(ptr)
 				require.NoError(t, err)
 				assert.True(t, math.IsNaN(readValue), "NaN should be preserved")
 			},
@@ -487,7 +487,7 @@ func TestMem_Strings(t *testing.T) {
 			shouldError: true,
 			errorType:   errIndexOutOfRange,
 			setupFunc: func(t *testing.T, runtime *Runtime) uint32 {
-				return runtime.memory().Size()
+				return runtime.mem.Size()
 			},
 		},
 		{
@@ -521,22 +521,22 @@ func TestMem_Strings(t *testing.T) {
 			if tc.shouldError {
 				switch tc.name {
 				case "null_pointer_read_error":
-					_, err := runtime.memory().ReadString(0, 10)
+					_, err := runtime.mem.ReadString(0, 10)
 					assert.ErrorIs(t, err, tc.errorType)
 					return
 				case "null_pointer_write_error":
-					err := runtime.memory().WriteString(0, tc.testString)
+					err := runtime.mem.WriteString(0, tc.testString)
 					assert.ErrorIs(t, err, tc.errorType)
 					return
 				case "insufficient_space_error":
-					err := runtime.memory().WriteString(ptr, tc.testString)
+					err := runtime.mem.WriteString(ptr, tc.testString)
 					assert.ErrorIs(t, err, tc.errorType)
 					return
 				}
 			}
 
 			// Normal string operations
-			err := runtime.memory().WriteString(ptr, tc.testString)
+			err := runtime.mem.WriteString(ptr, tc.testString)
 			require.NoError(t, err)
 
 			expectedStr := tc.testString
@@ -550,19 +550,19 @@ func TestMem_Strings(t *testing.T) {
 			}
 
 			if tc.name == "zero_maxlen_handling" {
-				str, err := runtime.memory().ReadString(ptr, maxLen)
+				str, err := runtime.mem.ReadString(ptr, maxLen)
 				require.NoError(t, err)
 				assert.Empty(t, str)
 				return
 			}
 
-			readStr, err := runtime.memory().ReadString(ptr, maxLen)
+			readStr, err := runtime.mem.ReadString(ptr, maxLen)
 			require.NoError(t, err)
 			assert.Equal(t, expectedStr, readStr)
 
 			// Verify null terminator for basic strings
 			if tc.name == "basic_string_operations" {
-				rawBytes, err := runtime.memory().Read(ptr, uint64(len(tc.testString)+1))
+				rawBytes, err := runtime.mem.Read(ptr, uint64(len(tc.testString)+1))
 				require.NoError(t, err)
 				assert.Equal(t, byte(0), rawBytes[len(tc.testString)])
 			}
@@ -573,8 +573,8 @@ func TestMem_Strings(t *testing.T) {
 		// ReadString looks one byte past maxlen for the terminator, so fill
 		// that byte too instead of relying on what follows the allocation.
 		ptr := util.allocatePtr(6)
-		runtime.memory().MustWrite(ptr, []byte{65, 66, 67, 68, 69, 70})
-		_, err := runtime.memory().ReadString(ptr, 5)
+		runtime.mem.MustWrite(ptr, []byte{65, 66, 67, 68, 69, 70})
+		_, err := runtime.mem.ReadString(ptr, 5)
 		assert.ErrorIs(t, err, errNoNullTerminator)
 	})
 }
@@ -603,7 +603,7 @@ func TestMem_Pointers(t *testing.T) {
 			name: "little_endian_handling",
 			setupFunc: func(t *testing.T, runtime *Runtime) uint64 {
 				ptr := allocateMemoryPtr(t, runtime, 8)
-				err := runtime.memory().Write(ptr, []byte{1, 2, 3, 4, 5, 6, 7, 8})
+				err := runtime.mem.Write(ptr, []byte{1, 2, 3, 4, 5, 6, 7, 8})
 				require.NoError(t, err)
 				return uint64(ptr)
 			},
@@ -622,7 +622,7 @@ func TestMem_Pointers(t *testing.T) {
 			setupFunc: func(t *testing.T, runtime *Runtime) uint64 {
 				testStr := "Test string for packed ptr"
 				strPtr := allocateMemoryPtr(t, runtime, uint64(len(testStr)+1))
-				err := runtime.memory().WriteString(strPtr, testStr)
+				err := runtime.mem.WriteString(strPtr, testStr)
 				require.NoError(t, err)
 				return createPackedPtr(t, runtime, strPtr, uint32(len(testStr)))
 			},
@@ -645,21 +645,21 @@ func TestMem_Pointers(t *testing.T) {
 			if tc.shouldPanic {
 				if tc.testString != "" {
 					assert.Panics(t, func() {
-						runtime.memory().StringFromPackedPtr(packedPtr)
+						runtime.mem.StringFromPackedPtr(packedPtr)
 					})
 				} else {
 					assert.Panics(t, func() {
-						runtime.memory().UnpackPtr(packedPtr)
+						runtime.mem.UnpackPtr(packedPtr)
 					})
 				}
 				return
 			}
 
 			if tc.testString != "" {
-				str := runtime.memory().StringFromPackedPtr(packedPtr)
+				str := runtime.mem.StringFromPackedPtr(packedPtr)
 				assert.Equal(t, tc.testString, str)
 			} else {
-				addr, size := runtime.memory().UnpackPtr(packedPtr)
+				addr, size := runtime.mem.UnpackPtr(packedPtr)
 				assert.Equal(t, tc.expectAddr, addr)
 				assert.Equal(t, tc.expectSize, size)
 			}
@@ -672,11 +672,11 @@ func TestMem_Boundaries(t *testing.T) {
 	util := newMemTestUtil(t, runtime)
 
 	t.Run("memory_size_properties", func(t *testing.T) {
-		size := runtime.memory().Size()
+		size := runtime.mem.Size()
 		assert.Positive(t, size, "Memory size should be greater than 0")
 
 		runtime.malloc(1024)
-		newSize := runtime.memory().Size()
+		newSize := runtime.mem.Size()
 		assert.GreaterOrEqual(t, newSize, size, "Memory size should not decrease after allocation")
 	})
 
@@ -690,28 +690,28 @@ func TestMem_Boundaries(t *testing.T) {
 			name:     "uint8",
 			typeSize: 1,
 			testFunc: func(ptr uint32) error {
-				return runtime.memory().WriteUint8(ptr, 1)
+				return runtime.mem.WriteUint8(ptr, 1)
 			},
 		},
 		{
 			name:     "uint32",
 			typeSize: 4,
 			testFunc: func(ptr uint32) error {
-				return runtime.memory().WriteUint32(ptr, 1)
+				return runtime.mem.WriteUint32(ptr, 1)
 			},
 		},
 		{
 			name:     "uint64",
 			typeSize: 8,
 			testFunc: func(ptr uint32) error {
-				return runtime.memory().WriteUint64(ptr, 1)
+				return runtime.mem.WriteUint64(ptr, 1)
 			},
 		},
 		{
 			name:     "float64",
 			typeSize: 8,
 			testFunc: func(ptr uint32) error {
-				return runtime.memory().WriteFloat64(ptr, 1.0)
+				return runtime.mem.WriteFloat64(ptr, 1.0)
 			},
 		},
 	}
@@ -735,15 +735,15 @@ func TestMem_EdgeCases(t *testing.T) {
 				ptr := util.allocatePtr(10)
 				testStr := "AB"
 
-				err := util.runtime.memory().WriteString(ptr, testStr)
+				err := util.runtime.mem.WriteString(ptr, testStr)
 				require.NoError(t, err)
 
-				readStr, err := util.runtime.memory().ReadString(ptr, uint32(len(testStr)+1))
+				readStr, err := util.runtime.mem.ReadString(ptr, uint32(len(testStr)+1))
 				require.NoError(t, err)
 				assert.Equal(t, testStr, readStr)
 
 				// Test reading with large maxlen
-				readStr, err = util.runtime.memory().ReadString(ptr, 1000000)
+				readStr, err = util.runtime.mem.ReadString(ptr, 1000000)
 				require.NoError(t, err)
 				assert.Equal(t, testStr, readStr)
 			},
@@ -777,13 +777,13 @@ func TestMem_EdgeCases(t *testing.T) {
 					}
 					expectedData[i] = testData
 
-					err := util.runtime.memory().Write(ptrs[i], testData)
+					err := util.runtime.mem.Write(ptrs[i], testData)
 					require.NoError(t, err)
 				}
 
 				// Verify data integrity across all allocations
 				for i := range numAllocs {
-					readData, err := util.runtime.memory().Read(ptrs[i], allocSize)
+					readData, err := util.runtime.mem.Read(ptrs[i], allocSize)
 					require.NoError(t, err)
 					assert.Equal(t, expectedData[i], readData)
 				}

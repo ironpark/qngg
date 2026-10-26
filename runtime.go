@@ -1,19 +1,60 @@
 package qngg
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"errors"
 	"fmt"
+	"io"
 	"runtime/debug"
-	"sync"
-	"sync/atomic"
 
 	"github.com/ironpark/qngg/internal/wasmtime"
 )
 
 //go:embed qjs.wasm
 var wasmBytes []byte
+
+// Config configures a Runtime. The zero value is a sandboxed runtime: no
+// filesystem, no output, no resource limits beyond those of WebAssembly, and
+// interruptible calls.
+type Config struct {
+	// CWD is a host directory exposed to JavaScript as "/", used for module
+	// loading, EvalFile and the qjs:std/qjs:os file APIs. Empty means
+	// JavaScript has no filesystem access at all. The directory is read-only
+	// unless WritableCWD is set.
+	CWD string
+	// WritableCWD lets JavaScript create, modify and delete files under CWD.
+	WritableCWD bool
+
+	// Stdout and Stderr receive console.log/console.error and std.out/std.err
+	// output. Nil discards it.
+	Stdout io.Writer
+	Stderr io.Writer
+
+	// MemoryLimit, MaxStackSize and GCThreshold configure the QuickJS heap
+	// limit, stack limit and GC trigger threshold, in bytes. Zero keeps the
+	// QuickJS default.
+	MemoryLimit  int
+	MaxStackSize int
+	GCThreshold  int
+
+	// DisableInterruption compiles QuickJS without interruption checks,
+	// which makes compute-heavy JavaScript about 30% faster. Contexts passed
+	// to calls are then only checked before the call starts, so a runaway
+	// script can no longer be stopped.
+	DisableInterruption bool
+
+	// CacheDir is a directory where the compiled QuickJS module is cached
+	// across processes. Empty disables the on-disk cache.
+	CacheDir string
+	// DisableBuildCache recompiles the QuickJS module instead of reusing the
+	// in-memory compilation of earlier runtimes.
+	DisableBuildCache bool
+
+	// quickJSWasm replaces the embedded QuickJS build, for tests.
+	quickJSWasm []byte
+}
 
 // wasmFunc is a cached export of the QuickJS module.
 type wasmFunc struct {
@@ -25,35 +66,34 @@ type wasmFunc struct {
 	result32 bool
 }
 
-// Runtime wraps a QuickJS WebAssembly runtime with memory management.
+// Runtime is a QuickJS runtime with its JavaScript context, running in its
+// own WebAssembly instance. A Runtime is not safe for concurrent use; use a
+// Pool to run JavaScript from several goroutines.
 type Runtime struct {
+	config    Config
 	store     *wasmtime.Store
 	linker    *wasmtime.Linker
 	instance  *wasmtime.Instance
+	engine    *wasmtime.Engine
 	funcs     map[string]*wasmFunc
 	mallocFn  *wasmFunc
 	freeFn    *wasmFunc
 	mem       *wasmMemory
-	stopWatch func() bool
-	limit     *execLimit
+	interrupt *interrupter
 	// argument buffers for invoke, one per level of nested wasm calls
 	callBufs  [][]wasmtime.ValRaw
 	callDepth int
-	option    Option
-	handle    *rawHandle
-	// goCtx is Option.Context, handed to Go functions called from JS.
-	goCtx     context.Context
-	ctxHandle *rawHandle // the JSContext
+	qjs       uint64 // QJSRuntime*
+	jsCtx     uint64 // JSContext*
 	global    *Value
 	registry  *proxyRegistry
 	closed    bool
 }
 
-// New creates a QuickJS runtime with optional configuration.
-func New(options ...Option) (runtime *Runtime, err error) {
+// New creates a runtime.
+func New(config Config) (runtime *Runtime, err error) {
 	defer func() {
-		rerr := anyToError(recover())
-		if rerr != nil {
+		if rerr := anyToError(recover()); rerr != nil {
 			runtime.release()
 			runtime = nil
 			err = fmt.Errorf("failed to create QJS runtime: %w", rerr)
@@ -64,20 +104,15 @@ func New(options ...Option) (runtime *Runtime, err error) {
 		return nil, fmt.Errorf("failed to load wasmtime: %w", err)
 	}
 
-	proxyRegistry := newProxyRegistry()
-
-	option := getRuntimeOption(options...)
-	proxy := createFuncProxyWithRegistry(proxyRegistry)
-
 	qjsBytes, hash := wasmBytes, embeddedHash()
-	if len(option.quickJSWasm) > 0 {
-		qjsBytes, hash = option.quickJSWasm, hashBytes(option.quickJSWasm)
+	if len(config.quickJSWasm) > 0 {
+		qjsBytes, hash = config.quickJSWasm, hashBytes(config.quickJSWasm)
 	}
 
 	engine, module, err := getCompiledModule(
-		option.CloseOnContextDone || option.MaxExecutionTime > 0,
-		option.DisableBuildCache,
-		option.CacheDir,
+		!config.DisableInterruption,
+		config.DisableBuildCache,
+		config.CacheDir,
 		qjsBytes,
 		hash,
 	)
@@ -86,13 +121,14 @@ func New(options ...Option) (runtime *Runtime, err error) {
 	}
 
 	runtime = &Runtime{
-		option:   option,
-		goCtx:    option.Context,
-		registry: proxyRegistry,
-		funcs:    map[string]*wasmFunc{},
+		config:    config,
+		engine:    engine,
+		interrupt: &interrupter{},
+		registry:  newProxyRegistry(),
+		funcs:     map[string]*wasmFunc{},
 	}
 
-	if err := runtime.instantiate(engine, module, proxy); err != nil {
+	if err := runtime.instantiate(module); err != nil {
 		runtime.release()
 
 		return nil, err
@@ -105,103 +141,45 @@ func New(options ...Option) (runtime *Runtime, err error) {
 
 // String returns a string representation of the runtime.
 func (r *Runtime) String() string {
-	return fmt.Sprintf("QJSRuntime: %p", r)
+	return fmt.Sprintf("qngg.Runtime(%p)", r)
 }
 
-// Close cleanly shuts down the runtime and frees all associated resources.
-// Calling Close more than once is a no-op; using the runtime or its values
-// afterwards fails with ErrRuntimeClosed.
-func (r *Runtime) Close() {
+// Close frees the runtime and everything it owns, including values that were
+// not freed. Calling Close more than once is a no-op; using the runtime or
+// its values afterwards fails with ErrRuntimeClosed.
+func (r *Runtime) Close() (err error) {
 	if r == nil || r.closed {
-		return
-	}
-
-	// Free QJS runtime handle. An interrupted runtime cannot run wasm anymore
-	// and its QuickJS state may be inconsistent; releasing the store below
-	// frees its memory as a whole.
-	if r.handle != nil && r.interruptErr() == nil {
-		r.freeQJSRuntime()
-	}
-
-	r.closed = true
-	r.handle = nil
-	r.release()
-
-	if r.registry != nil {
-		r.registry.Clear()
-		r.registry = nil
-	}
-
-	r.mallocFn = nil
-	r.freeFn = nil
-	r.mem = nil
-}
-
-// callHandle invokes a WebAssembly function by name and wraps its result.
-func (r *Runtime) callHandle(name string, args ...uint64) *rawHandle {
-	return newRawHandle(r, r.call(name, args...))
-}
-
-// callUnpack calls a WebAssembly function and unpacks the returned pointer.
-func (r *Runtime) callUnpack(name string, args ...uint64) (uint32, uint32) {
-	return r.mem.UnpackPtr(r.call(name, args...))
-}
-
-// malloc allocates memory in the WebAssembly linear memory and return a pointer to it.
-func (r *Runtime) malloc(size uint64) uint64 {
-	ptr, err := r.invoke(r.mallocFn, size)
-	if err != nil {
-		panic(fmt.Errorf("failed to allocate memory: %w", err))
-	}
-
-	return ptr
-}
-
-// freeHandle releases memory allocated in WebAssembly linear memory. It is a
-// no-op once the runtime is closed or interrupted: the memory goes with it.
-func (r *Runtime) freeHandle(ptr uint64) {
-	if r.interruptErr() != nil {
-		return
-	}
-
-	if _, err := r.invoke(r.freeFn, ptr); err != nil {
-		panic(fmt.Errorf("failed to free memory: %w", err))
-	}
-}
-
-// freeJsValue frees a JavaScript value in the QuickJS runtime. Like
-// FreeHandle, it is a no-op once the runtime is closed or interrupted.
-func (r *Runtime) freeJsValue(val uint64) {
-	if r.interruptErr() != nil {
-		return
-	}
-
-	r.call("QJS_FreeValue", r.ctxPtr(), val)
-}
-
-// newBytesHandle creates a handle for byte data in WebAssembly memory.
-func (r *Runtime) newBytesHandle(b []byte) *rawHandle {
-	if len(b) == 0 {
 		return nil
 	}
 
-	ptr := r.malloc(uint64(len(b)))
-	r.mem.MustWrite(uint32(ptr), b)
+	// An interrupted runtime cannot run wasm anymore and its QuickJS state
+	// may be inconsistent; releasing the store frees its memory as a whole.
+	if r.qjs != 0 && r.interruptErr() == nil {
+		err = r.freeQJS()
+	}
 
-	return newRawHandle(r, ptr)
+	r.closed = true
+	r.interrupt.unwatch()
+	r.release()
+	r.registry.Clear()
+	r.mallocFn, r.freeFn, r.mem = nil, nil, nil
+
+	return err
 }
 
-// newCString copies v into wasm memory as a NUL-terminated string.
-func (r *Runtime) newCString(v string) *rawHandle {
-	// Allocate len+1 for null terminator
-	ptr := r.malloc(uint64(len(v) + 1))
+// freeQJS frees the QuickJS runtime.
+func (r *Runtime) freeQJS() (err error) {
+	defer func() {
+		if rerr := anyToError(recover()); rerr != nil {
+			err = fmt.Errorf("failed to free QJS runtime: %w", rerr)
+		}
+	}()
 
-	// Write string data
-	r.mem.MustWrite(uint32(ptr), []byte(v))
-	// Add null terminator
-	r.mem.MustWrite(uint32(ptr)+uint32(len(v)), []byte{0})
+	qjs := r.qjs
+	r.qjs = 0
+	r.call("QJS_Free", qjs)
 
-	return newRawHandle(r, ptr)
+	return nil
 }
 
 // initializeRuntime sets up the runtime components after module instantiation.
@@ -209,14 +187,115 @@ func (r *Runtime) initializeRuntime() {
 	r.mallocFn = r.export("malloc")
 	r.freeFn = r.export("free")
 	r.mem = &wasmMemory{store: r.store, mem: r.instance.GetExport(r.store, "memory").Memory()}
-	r.handle = r.callHandle(
+	r.qjs = r.call(
 		"New_QJS",
-		uint64(r.option.MemoryLimit),
-		uint64(r.option.MaxStackSize),
-		uint64(r.option.GCThreshold),
+		uint64(r.config.MemoryLimit),
+		uint64(r.config.MaxStackSize),
+		uint64(r.config.GCThreshold),
 	)
+	r.jsCtx = r.call("QJS_GetContext", r.qjs)
+	r.global = r.borrowValue(r.call("JS_GetGlobalObject", r.jsCtx))
+}
 
-	r.ctxHandle = r.callHandle("QJS_GetContext", r.handle.raw)
+// interrupter tracks the context of the current call and stops running
+// wasm when it is done. It is kept apart from Runtime so the store's epoch
+// callback does not keep the runtime alive.
+type interrupter struct {
+	ctx context.Context // of the outermost call into wasm, nil outside calls
+	err error           // why wasm was interrupted; sticky
+
+	// watched is the context whose cancellation bumps the engine epoch.
+	// It stays registered after the call, since callers tend to reuse a
+	// context for several calls; a stale bump only costs a check.
+	watched     context.Context
+	stopWatched func() bool
+}
+
+// check runs whenever the engine epoch passes the store's deadline: on any
+// watched context being done, in any runtime of the engine.
+func (in *interrupter) check() (uint64, error) {
+	if in.ctx != nil && in.ctx.Err() != nil {
+		in.err = fmt.Errorf("%w: %w", ErrInterrupted, context.Cause(in.ctx))
+
+		return 0, in.err
+	}
+
+	return 1, nil
+}
+
+// watch makes the cancellation of ctx interrupt wasm.
+func (in *interrupter) watch(ctx context.Context, engine *wasmtime.Engine) {
+	if ctx == in.watched || ctx.Done() == nil {
+		return
+	}
+
+	in.unwatch()
+	in.watched, in.stopWatched = ctx, context.AfterFunc(ctx, engine.IncrementEpoch)
+}
+
+func (in *interrupter) unwatch() {
+	if in.stopWatched != nil {
+		in.stopWatched()
+	}
+
+	in.watched, in.stopWatched = nil, nil
+}
+
+// enter starts a call governed by ctx; the caller must defer exit. Calls
+// made while wasm is already running, from Go functions called by
+// JavaScript, stay governed by the outer call's context.
+func (r *Runtime) enter(ctx context.Context) error {
+	if err := r.interruptErr(); err != nil {
+		return err
+	}
+
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context done before the call: %w", context.Cause(ctx))
+	}
+
+	if r.callDepth == 0 {
+		r.interrupt.ctx = ctx
+		if !r.config.DisableInterruption {
+			r.interrupt.watch(ctx, r.engine)
+		}
+	}
+
+	return nil
+}
+
+// exit ends a call started by enter.
+func (r *Runtime) exit() {
+	if r.callDepth == 0 {
+		r.interrupt.ctx = nil
+	}
+}
+
+// interruptErr reports why the runtime can no longer run wasm: it is closed
+// or a call was interrupted. It returns nil otherwise.
+func (r *Runtime) interruptErr() error {
+	if r.closed {
+		return ErrRuntimeClosed
+	}
+
+	return r.interrupt.err
+}
+
+// recoverInterrupt turns the panic of a wasm call that failed because the
+// runtime is closed or was interrupted into an error. Other panics
+// propagate. It must be deferred directly.
+func recoverInterrupt(r *Runtime, err *error) {
+	rec := recover()
+	if rec == nil {
+		return
+	}
+
+	if ierr := r.interruptErr(); ierr != nil {
+		*err = ierr
+
+		return
+	}
+
+	panic(rec)
 }
 
 // export returns the cached export `name`, looking it up on first use.
@@ -256,11 +335,6 @@ func (r *Runtime) invoke(f *wasmFunc, args ...uint64) (uint64, error) {
 		return 0, err
 	}
 
-	if r.limit != nil && r.callDepth == 0 {
-		r.limit.start()
-		defer r.limit.stop()
-	}
-
 	// Calls nest when JavaScript calls back into Go, so each nesting level
 	// gets its own reusable buffer.
 	if r.callDepth == len(r.callBufs) {
@@ -283,8 +357,8 @@ func (r *Runtime) invoke(f *wasmFunc, args ...uint64) (uint64, error) {
 	defer func() { r.callDepth-- }()
 
 	if err := f.fn.CallUnchecked(r.store, vals); err != nil {
-		if r.limit != nil && r.limit.timedOut {
-			return 0, ErrExecutionTimeout
+		if ierr := r.interruptErr(); ierr != nil {
+			return 0, ierr
 		}
 
 		return 0, fmt.Errorf("wasm call failed: %w", err)
@@ -302,180 +376,154 @@ func (r *Runtime) invoke(f *wasmFunc, args ...uint64) (uint64, error) {
 	return result, nil
 }
 
-// interruptErr reports why the runtime can no longer run wasm: it is closed,
-// its context is done or a call exceeded MaxExecutionTime. It returns nil
-// otherwise.
-func (r *Runtime) interruptErr() error {
-	if r.closed {
-		return ErrRuntimeClosed
-	}
-
-	if r.limit != nil && r.limit.timedOut {
-		return ErrExecutionTimeout
-	}
-
-	if err := r.goCtx.Err(); err != nil {
-		return fmt.Errorf("context done: %w", err)
-	}
-
-	return nil
-}
-
-// recoverInterrupt turns the panic of a wasm call that failed because the
-// runtime was interrupted into an error. Other panics propagate. It must be
-// deferred directly.
-func recoverInterrupt(r *Runtime, err *error) {
-	rec := recover()
-	if rec == nil {
-		return
-	}
-
-	if ierr := r.interruptErr(); ierr != nil {
-		*err = ierr
-
-		return
-	}
-
-	panic(rec)
-}
-
+// call invokes the wasm export `name`. It panics if the call fails, which
+// only happens when the runtime is closed or interrupted, or on a bug.
 func (r *Runtime) call(name string, args ...uint64) uint64 {
 	result, err := r.invoke(r.export(name), args...)
 	if err != nil {
-		stack := debug.Stack()
-		panic(fmt.Errorf("failed to call %s: %w\nstack: %s", name, err, stack))
+		if errors.Is(err, ErrRuntimeClosed) || errors.Is(err, ErrInterrupted) {
+			panic(err)
+		}
+
+		panic(fmt.Errorf("failed to call %s: %w\nstack: %s", name, err, debug.Stack()))
 	}
 
 	return result
 }
 
-// Pool manages a collection of reusable QuickJS runtimes.
-type Pool struct {
-	pools      chan *Runtime
-	size       int
-	option     Option
-	setupFuncs []func(*Runtime) error
-	mu         sync.Mutex
-}
-
-// NewPool creates a new runtime pool with the specified size and configuration.
-func NewPool(size int, option Option, setupFuncs ...func(*Runtime) error) *Pool {
-	if size <= 0 {
-		panic("pool size must be greater than 0")
-	}
-
-	p := &Pool{
-		pools:      make(chan *Runtime, size),
-		size:       size,
-		option:     option,
-		setupFuncs: setupFuncs,
-	}
-
-	return p
-}
-
-// Get returns a runtime from the pool or creates a new one if the pool is empty.
-// The caller must call Put() to return the runtime when finished.
-func (p *Pool) Get() (*Runtime, error) {
-	if p == nil {
-		return nil, errors.New("pool is nil")
-	}
-
-	// Try to get from pool first
-	select {
-	case rt := <-p.pools:
-		return p.prepareRuntimeForUse(rt), nil
-	// Pool is empty, need to create new runtime
-	default:
-	}
-
-	// Double-check with lock to avoid race conditions
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	select {
-	case rt := <-p.pools:
-		return p.prepareRuntimeForUse(rt), nil
-	default:
-		return p.createNewRuntime()
-	}
-}
-
-// Put returns the runtime back to the pool for reuse.
-// If the pool is full, or the runtime was closed or interrupted and cannot be
-// reused, the runtime is closed instead.
-func (p *Pool) Put(rt *Runtime) {
-	if rt == nil {
-		return
-	}
-
-	if rt.interruptErr() != nil {
-		rt.Close()
-
-		return
-	}
-
-	// Update stack top before returning to pool
-	if rt.handle != nil {
-		rt.callHandle("QJS_UpdateStackTop", rt.handle.raw)
-	}
-
-	select {
-	case p.pools <- rt:
-		// Successfully returned to pool
-	default:
-		// Pool is full, close the runtime
-		rt.Close()
-	}
-}
-
-// prepareRuntimeForUse prepares a pooled runtime for use.
-func (p *Pool) prepareRuntimeForUse(rt *Runtime) *Runtime {
-	if rt != nil && rt.handle != nil {
-		rt.callHandle("QJS_UpdateStackTop", rt.handle.raw)
-	}
-
-	return rt
-}
-
-// createNewRuntime creates a new runtime with setup functions applied.
-func (p *Pool) createNewRuntime() (*Runtime, error) {
-	rt, err := New(p.option)
+// malloc allocates size bytes of wasm memory.
+func (r *Runtime) malloc(size uint64) uint64 {
+	ptr, err := r.invoke(r.mallocFn, size)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create new runtime: %w", err)
+		panic(fmt.Errorf("failed to allocate memory: %w", err))
 	}
 
-	// Apply setup functions
-	for i, setupFunc := range p.setupFuncs {
-		err := setupFunc(rt)
-		if err != nil {
-			rt.Close()
-
-			return nil, fmt.Errorf("setup function %d failed: %w", i, err)
-		}
-	}
-
-	return rt, nil
+	return ptr
 }
 
-// freeQJSRuntime frees the QJS runtime.
-func (r *Runtime) freeQJSRuntime() {
-	defer func() {
-		err := anyToError(recover())
-		if err != nil {
-			panic(fmt.Errorf("failed to free QJS runtime: %w", err))
-		}
-	}()
-
-	// Freeing twice is undefined behavior inside QuickJS, so refuse it here.
-	if !atomic.CompareAndSwapInt32(&r.handle.freed, 0, 1) {
-		panic(errors.New("already freed"))
+// free releases wasm memory from malloc or a C helper. It is a no-op once
+// the runtime is closed or interrupted: the memory goes with it.
+func (r *Runtime) free(ptr uint64) {
+	if ptr == 0 || r.interruptErr() != nil {
+		return
 	}
 
-	r.callHandle("QJS_Free", r.handle.raw)
+	if _, err := r.invoke(r.freeFn, ptr); err != nil {
+		panic(fmt.Errorf("failed to free memory: %w", err))
+	}
 }
 
-// memory returns the WebAssembly memory interface for this runtime.
-func (r *Runtime) memory() *wasmMemory {
-	return r.mem
+// freeValue releases a reference to a JS value. Like free, it is a no-op
+// once the runtime is closed or interrupted.
+func (r *Runtime) freeValue(raw uint64) {
+	if !hasRefCount(raw) || r.interruptErr() != nil {
+		return
+	}
+
+	r.call("QJS_FreeValue", r.jsCtx, raw)
+}
+
+// dupValue returns a new reference to a JS value.
+func (r *Runtime) dupValue(raw uint64) uint64 {
+	if !hasRefCount(raw) {
+		return raw
+	}
+
+	return r.call("QJS_CloneValue", r.jsCtx, raw)
+}
+
+// newCString copies s into wasm memory as a NUL-terminated string. The
+// caller frees it.
+func (r *Runtime) newCString(s string) uint64 {
+	ptr := r.malloc(uint64(len(s) + 1))
+	r.mem.MustWrite(uint32(ptr), append([]byte(s), 0))
+
+	return ptr
+}
+
+// newBuffer copies b into wasm memory. The caller frees it.
+func (r *Runtime) newBuffer(b []byte) uint64 {
+	if len(b) == 0 {
+		return 0
+	}
+
+	ptr := r.malloc(uint64(len(b)))
+	r.mem.MustWrite(uint32(ptr), b)
+
+	return ptr
+}
+
+// takeString reads and frees a string handed over by a C helper as a
+// malloc'd box holding (addr<<32 | len) of a malloc'd buffer.
+func (r *Runtime) takeString(box uint64) string {
+	return string(r.takeBytes(box))
+}
+
+// takeBytes reads and frees binary data handed over like takeString. The
+// result is a copy.
+func (r *Runtime) takeBytes(box uint64) []byte {
+	if box == 0 {
+		return nil
+	}
+
+	defer r.free(box)
+
+	addr, size := r.mem.UnpackPtr(box)
+	if addr == 0 {
+		return nil
+	}
+
+	defer r.free(uint64(addr))
+
+	if size == 0 {
+		return nil
+	}
+
+	return bytes.Clone(r.mem.MustRead(addr, uint64(size)))
+}
+
+// newValue wraps a JS value the caller owns.
+func (r *Runtime) newValue(raw uint64) *Value {
+	return &Value{rt: r, ref: raw}
+}
+
+// borrowValue wraps a JS value owned by someone else, such as the arguments
+// of a Go function called from JavaScript.
+func (r *Runtime) borrowValue(raw uint64) *Value {
+	return &Value{rt: r, ref: raw, borrowed: true}
+}
+
+// result turns the result of a C call returning a JS value into a Value, or
+// into the pending exception if the call threw.
+func (r *Runtime) result(raw uint64) (*Value, error) {
+	if tagOf(raw) == tagException {
+		return nil, r.takeException()
+	}
+
+	return r.newValue(raw), nil
+}
+
+// status turns the int result of a C call that returns -1 on exception into
+// a bool, or into the pending exception.
+func (r *Runtime) status(res uint64) (bool, error) {
+	if int32(res) < 0 {
+		return false, r.takeException()
+	}
+
+	return int32(res) != 0, nil
+}
+
+// takeException clears the pending exception and returns it as an error.
+func (r *Runtime) takeException() error {
+	exc := r.newValue(r.call("JS_GetException", r.jsCtx))
+	defer exc.Free()
+
+	return exc.toError()
+}
+
+// clearException discards a pending exception, if any.
+func (r *Runtime) clearException() {
+	if uint32(r.call("JS_HasException", r.jsCtx)) != 0 {
+		r.freeValue(r.call("JS_GetException", r.jsCtx))
+	}
 }

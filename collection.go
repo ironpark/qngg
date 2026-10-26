@@ -1,321 +1,62 @@
 package qngg
 
-import "fmt"
+import "context"
 
-// Array provides a wrapper around JavaScript arrays with Go-like methods.
-type Array struct {
-	*Value
-}
-
-// wrapArray wraps a JavaScript array value in a Go Array type.
-func wrapArray(value *Value) *Array {
-	if value == nil || !value.IsArray() {
-		return nil
-	}
-
-	return &Array{Value: value}
-}
-
-func (a *Array) ForEach(forFn func(key, value *Value)) {
-	if a == nil || a.Value == nil || forFn == nil {
-		return
-	}
-
-	a.Value.ForEach(forFn)
-}
-
-// HasIndex returns true if the given index exists in the array.
-func (a *Array) HasIndex(i int64) bool {
-	return a.HasPropertyIndex(i)
-}
-
-// Get returns the element at the given index.
-func (a *Array) Get(index int64) *Value {
-	if a == nil || a.Value == nil {
-		return nil
-	}
-
-	return a.GetPropertyIndex(index)
-}
-
-// Push appends elements to the array and returns the new length.
-func (a *Array) Push(elements ...*Value) int64 {
-	ret, err := a.InvokeJS("push", elements...)
+// arrayFrom returns Array.from(v), such as the entries of a Map or the
+// values of a Set.
+func (r *Runtime) arrayFrom(v *Value) (*Value, error) {
+	array, err := r.global.Get("Array")
 	if err != nil {
-		panic(fmt.Errorf("failed to invoke push on Array: %w", err))
+		return nil, err
 	}
+	defer array.Free()
 
-	defer ret.Free()
-
-	return ret.Int64()
+	return array.Invoke(context.Background(), "from", v)
 }
 
-// Set updates the element at the given index.
-func (a *Array) Set(index int64, value *Value) {
-	if a == nil || a.Value == nil {
-		return
+// entries calls fn with each key and value of a Map, or with each own
+// property of another object (see forEach), until fn returns an error. Both
+// values are only valid during the call.
+func (v *Value) entries(fn func(key, value *Value) error) error {
+	if !v.IsMap() {
+		return v.forEach(fn)
 	}
 
-	a.SetPropertyIndex(index, value)
-}
-
-// Delete removes the element at the given index.
-func (a *Array) Delete(index int64) bool {
-	if a == nil || a.Value == nil {
-		return false
-	}
-
-	indexValue := a.runtime.NewInt64(index)
-	defer indexValue.Free()
-
-	countValue := a.runtime.NewInt64(1)
-	defer countValue.Free()
-
-	removeList, err := a.InvokeJS("splice", indexValue, countValue)
+	pairs, err := v.rt.arrayFrom(v)
 	if err != nil {
-		panic(fmt.Errorf("failed to invoke splice on Array: %w", err))
+		return err
 	}
+	defer pairs.Free()
 
-	defer removeList.Free()
-
-	return removeList.IsArray() && removeList.Len() > 0
-}
-
-// Map provides a wrapper around JavaScript Map objects with Go-like methods.
-type Map struct {
-	*Value
-}
-
-// wrapMap wraps a JavaScript Map value in a Go Map type.
-func wrapMap(value *Value) *Map {
-	if value == nil || !value.IsMap() {
-		return nil
-	}
-
-	return &Map{Value: value}
-}
-
-// JSONStringify returns the JSON representation of the Map as an object.
-func (m *Map) JSONStringify() (string, error) {
-	object := m.CreateObject()
-	defer object.Free()
-
-	return object.JSONStringify()
-}
-
-// IsMap returns true if this is a valid Map.
-// Mainly used to satisfy ObjectOrMap.
-func (m *Map) IsMap() bool {
-	return m != nil && m.Value != nil
-}
-
-// IsObject returns true if this is a valid Map, mainly used to satisfy ObjectOrMap.
-func (m *Map) IsObject() bool {
-	return m != nil && m.Value != nil
-}
-
-// ToMap returns this Map instance, mainly used to satisfy ObjectOrMap.
-func (m *Map) ToMap() *Map {
-	return m
-}
-
-// Get retrieves the value for the given key.
-func (m *Map) Get(key *Value) *Value {
-	if m == nil || m.Value == nil || key == nil {
-		return nil
-	}
-
-	v, err := m.InvokeJS("get", key)
-	if err != nil {
-		panic(fmt.Errorf("failed to invoke get on Map: %w", err))
-	}
-
-	return v
-}
-
-// Set sets the value for the given key.
-func (m *Map) Set(key, value *Value) {
-	if m == nil || m.Value == nil || key == nil || value == nil {
-		return
-	}
-
-	result, err := m.InvokeJS("set", key, value)
-	if err != nil {
-		panic(fmt.Errorf("failed to invoke set on Map: %w", err))
-	}
-
-	result.Free()
-}
-
-// Delete removes the key-value pair.
-func (m *Map) Delete(key *Value) {
-	if m == nil || m.Value == nil || key == nil {
-		return
-	}
-
-	result, err := m.InvokeJS("delete", key)
-	if err != nil {
-		panic(fmt.Errorf("failed to invoke delete on Map: %w", err))
-	}
-
-	result.Free()
-}
-
-// Has returns true if the key exists.
-func (m *Map) Has(key *Value) bool {
-	if m == nil || m.Value == nil || key == nil {
-		return false
-	}
-
-	boolValue, err := m.InvokeJS("has", key)
-	if err != nil {
-		panic(fmt.Errorf("failed to invoke has on Map: %w", err))
-	}
-
-	defer boolValue.Free()
-
-	return boolValue.Bool()
-}
-
-// ForEach calls forFn for each key-value pair.
-func (m *Map) ForEach(forFn func(key, value *Value)) {
-	if m == nil || m.Value == nil || forFn == nil {
-		return
-	}
-
-	forEachFn := m.runtime.Function(func(t *This) (*Value, error) {
-		args := t.Args()
-		if len(args) >= minMapForeachArgs {
-			forFn(args[1], args[0])
+	for i := range uint32(pairs.Len()) {
+		if err := mapEntry(pairs, i, fn); err != nil {
+			return err
 		}
+	}
 
-		return nil, nil
-	})
-	defer forEachFn.Free()
+	return nil
+}
 
-	val, err := m.InvokeJS("forEach", forEachFn)
+// mapEntry calls fn with the key and value of the [key, value] pair at
+// index i of pairs.
+func mapEntry(pairs *Value, i uint32, fn func(key, value *Value) error) error {
+	pair, err := pairs.Index(i)
 	if err != nil {
-		panic(fmt.Errorf("failed to invoke forEach on Map: %w", err))
+		return err
 	}
+	defer pair.Free()
 
-	val.Free()
-}
-
-// CreateObject converts the Map to a JavaScript object.
-func (m *Map) CreateObject() *Value {
-	if m == nil || m.Value == nil {
-		return nil
-	}
-
-	object := m.runtime.NewObject()
-	m.ForEach(func(key, value *Value) {
-		object.SetProperty(key, value)
-	})
-
-	return object
-}
-
-// Set provides a wrapper around JavaScript Set objects with Go-like methods.
-type Set struct {
-	*Value
-}
-
-// wrapSet wraps a JavaScript Set value in a Go Set type.
-func wrapSet(value *Value) *Set {
-	if value == nil || !value.IsSet() {
-		return nil
-	}
-
-	return &Set{Value: value}
-}
-
-// JSONStringify returns the JSON representation of the Set as an array.
-func (s *Set) JSONStringify() (string, error) {
-	arr := s.ToArray()
-
-	defer arr.Free()
-
-	return arr.JSONStringify()
-}
-
-// Add adds a value to the Set.
-func (s *Set) Add(value *Value) {
-	if s == nil || s.Value == nil || value == nil {
-		return
-	}
-
-	v, err := s.InvokeJS("add", value)
+	key, err := pair.Index(0)
 	if err != nil {
-		panic(fmt.Errorf("failed to invoke add on Set: %w", err))
+		return err
 	}
+	defer key.Free()
 
-	defer v.Free()
-}
-
-// Delete removes the value from the Set.
-func (s *Set) Delete(value *Value) {
-	if s == nil || s.Value == nil || value == nil {
-		return
-	}
-
-	v, err := s.InvokeJS("delete", value)
+	value, err := pair.Index(1)
 	if err != nil {
-		panic(fmt.Errorf("failed to invoke delete on Set: %w", err))
+		return err
 	}
-
-	defer v.Free()
-}
-
-// Has returns true if the value exists.
-func (s *Set) Has(value *Value) bool {
-	if s == nil || s.Value == nil || value == nil {
-		return false
-	}
-
-	v, err := s.InvokeJS("has", value)
-	if err != nil {
-		panic(fmt.Errorf("failed to invoke has on Set: %w", err))
-	}
-
-	defer v.Free()
-
-	return v.Bool()
-}
-
-// ToArray converts the Set to an Array.
-func (s *Set) ToArray() *Array {
-	if s == nil || s.Value == nil {
-		return nil
-	}
-
-	array := s.runtime.NewArray()
-	s.ForEach(func(value *Value) {
-		array.Push(value.Clone())
-	})
-
-	return array
-}
-
-// ForEach calls forFn for each value.
-func (s *Set) ForEach(forFn func(value *Value)) {
-	if s == nil || s.Value == nil || forFn == nil {
-		return
-	}
-
-	forEachFn := s.runtime.Function(func(t *This) (*Value, error) {
-		args := t.Args()
-		if len(args) > 0 {
-			forFn(args[0])
-		}
-
-		return t.newUndefined(), nil
-	})
-	defer forEachFn.Free()
-
-	value, err := s.InvokeJS("forEach", forEachFn)
-	if err != nil {
-		panic(fmt.Errorf("failed to invoke forEach on Set: %w", err))
-	}
-
 	defer value.Free()
+
+	return fn(key, value)
 }

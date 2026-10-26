@@ -1,6 +1,7 @@
 package qngg
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/big"
@@ -8,20 +9,9 @@ import (
 	"time"
 )
 
-func ToGoValue[T any](input *Value, samples ...T) (v T, err error) {
-	registryID := input.GetPropertyStr("__registry_id")
-	if !registryID.IsUndefined() && !registryID.IsNull() {
-		registryVal, ok := input.runtime.registry.Get(uint64(registryID.Int64()))
-		if ok {
-			val, ok := registryVal.(T)
-			if !ok {
-				return v, fmt.Errorf("type assertion failed for registry value: expected %T, got %T", v, registryVal)
-			}
-
-			return val, nil
-		}
-	}
-
+// toGo converts a JS value to T. A sample of T's dynamic type may be given
+// when T is an interface.
+func toGo[T any](input *Value, samples ...T) (v T, err error) {
 	return toGoValue(newConvTracker[uint64](), input, samples...)
 }
 
@@ -48,8 +38,7 @@ func toGoValue[T any](
 
 	// If JS value is a QJSProxyValue, extract the Go value from the registry
 	if input.isProxyValue() {
-		proxyID := input.GetPropertyStr("proxyId")
-		temp, _ = input.runtime.registry.Get(uint64(proxyID.Int64()))
+		temp, _ = input.rt.registry.Get(uint64(propInt(input, "proxyId")))
 
 		return v, nil
 	}
@@ -59,7 +48,7 @@ func toGoValue[T any](
 		return v, err
 	}
 
-	if input.isGlobalInstanceOf("Date") {
+	if input.IsDate() {
 		temp, err = jsTimeToGo(input)
 
 		return v, err
@@ -71,7 +60,7 @@ func toGoValue[T any](
 		return v, err
 	}
 
-	if input.IsByteArray() {
+	if input.IsArrayBuffer() {
 		temp, err = jsArrayBufferToGo(input)
 
 		return v, err
@@ -179,52 +168,54 @@ func jsBigIntToGo[T any](input *Value, samples ...T) (v T, err error) {
 	return v, err
 }
 
-// jsTimeToGo converts a JS Date object into a time.Time value.
+// jsTimeToGo converts a JS Date object into a time.Time value in UTC.
 func jsTimeToGo(input *Value) (time.Time, error) {
-	jsTime, err := input.InvokeJS("getTime")
+	t, err := input.Time()
 	if err != nil {
 		return time.Time{}, newInvokeErr(input, err)
 	}
-	defer jsTime.Free()
 
-	ms := jsTime.Int64()
-	seconds := ms / 1000
-	nanoseconds := (ms % 1000) * int64(time.Millisecond)
-
-	return time.Unix(seconds, nanoseconds).In(time.UTC), nil
+	return t.UTC(), nil
 }
 
 // jsArrayBufferToGo converts an ArrayBuffer to a []byte.
 func jsArrayBufferToGo(input *Value) ([]byte, error) {
-	if !input.IsByteArray() {
-		return nil, ErrNotArrayBuffer
+	if !input.IsArrayBuffer() {
+		return nil, errNotArrayBuffer
 	}
 
-	return input.ToByteArray(), nil
+	return input.Bytes()
 }
 
-// jsTypedArrayToGo return the underlying byte slice from a TypedArray/DataView.
+// jsTypedArrayToGo returns a copy of the bytes viewed by a TypedArray or
+// DataView.
 func jsTypedArrayToGo(input *Value) ([]byte, error) {
-	buffer := input.GetPropertyStr("buffer")
+	buffer, err := input.Get("buffer")
+	if err != nil {
+		return nil, err
+	}
 	defer buffer.Free()
 
 	if buffer.IsUndefined() || buffer.IsNull() {
-		return nil, ErrMissingBufferProperty
+		return nil, errMissingBufferProperty
 	}
 
-	if buffer.IsByteArray() {
-		offset := uint(input.GetPropertyStr("byteOffset").Int64())
-		length := uint(input.GetPropertyStr("byteLength").Int64())
-
-		fullBytes := buffer.ToByteArray()
-		if offset+length > uint(len(fullBytes)) {
-			return nil, newMaxLengthExceededErr(length, int64(len(fullBytes)), 0)
-		}
-
-		return fullBytes[offset : offset+length], nil
+	if !buffer.IsArrayBuffer() {
+		return nil, errNotByteArray
 	}
 
-	return nil, ErrNotByteArray
+	offset, length := uint(propInt(input, "byteOffset")), uint(propInt(input, "byteLength"))
+
+	fullBytes, err := buffer.Bytes()
+	if err != nil {
+		return nil, err
+	}
+
+	if offset+length > uint(len(fullBytes)) {
+		return nil, newMaxLengthExceededErr(length, int64(len(fullBytes)), 0)
+	}
+
+	return fullBytes[offset : offset+length], nil
 }
 
 // jsSetToGo converts JavaScript Set to Go types.
@@ -241,12 +232,13 @@ func jsSetToGoWithContext[T any](
 		return v, newJsToGoErr(input, nil, "Set")
 	}
 
-	setVal := input.ToSet()
-
-	arrayVal := setVal.ToArray()
+	arrayVal, err := input.rt.arrayFrom(input)
+	if err != nil {
+		return v, err
+	}
 	defer arrayVal.Free()
 
-	return jsArrayToGoWithContext(tracker, arrayVal.Value, samples...)
+	return jsArrayToGoWithContext(tracker, arrayVal, samples...)
 }
 
 func jsArrayToGoWithContext[T any](
@@ -305,7 +297,7 @@ func jsObjectOrMapToGoMapWithContext[T any](
 		return v, newInvalidJsInputErr("object", input)
 	}
 
-	temp, obj, sample, targetType := createGoObjectTarget(input, samples...)
+	temp, sample, targetType := createGoObjectTarget(samples...)
 
 	defer func() {
 		v, err = processTempValue("JsObjectOrMapToGoMap", temp, err, sample)
@@ -318,30 +310,22 @@ func jsObjectOrMapToGoMapWithContext[T any](
 		return v, err
 	}
 
-	var forEachErr error
-
 	resultMap := reflect.MakeMap(targetType)
 	targetKeyType := targetType.Key()
 	targetValueType := targetType.Elem()
 
-	obj.ForEach(func(key, value *Value) {
-		if forEachErr != nil {
-			return
+	err = input.entries(func(key, value *Value) error {
+		targetKey, targetValue, err := mapEntryToGoWithContext(tracker, key, value, targetKeyType, targetValueType)
+		if err != nil {
+			return err
 		}
 
-		if targetKey, targetValue, err := mapEntryToGoWithContext(
-			tracker,
-			key, value,
-			targetKeyType, targetValueType,
-		); err != nil {
-			forEachErr = err
-		} else {
-			resultMap.SetMapIndex(targetKey, targetValue)
-		}
+		resultMap.SetMapIndex(targetKey, targetValue)
+
+		return nil
 	})
-
-	if forEachErr != nil {
-		return v, forEachErr
+	if err != nil {
+		return v, err
 	}
 
 	temp = resultMap.Interface()
@@ -365,7 +349,7 @@ func jsObjectOrMapToGoStructWithContext[T any](
 		return v, newInvalidJsInputErr("object", input)
 	}
 
-	temp, obj, sample, targetType := createGoObjectTarget(input, samples...)
+	temp, sample, targetType := createGoObjectTarget(samples...)
 
 	defer func() {
 		v, err = processTempValue("JsObjectOrMapToGoStruct", temp, err, sample)
@@ -381,7 +365,7 @@ func jsObjectOrMapToGoStructWithContext[T any](
 	structValue, isStructPtr := setupStructValue(targetType, &temp)
 	fieldMap := getFieldMap(structValue.Type())
 
-	if err := processObjectFields(tracker, obj, structValue, fieldMap); err != nil {
+	if err := processObjectFields(tracker, input, structValue, fieldMap); err != nil {
 		return v, err
 	}
 
@@ -409,35 +393,27 @@ func setupStructValue(targetType reflect.Type, temp *any) (reflect.Value, bool) 
 // processObjectFields processes each field in the JavaScript object.
 func processObjectFields(
 	tracker *convTracker[uint64],
-	obj objectOrMap,
+	obj *Value,
 	structValue reflect.Value,
 	fieldMap map[string]fieldPath,
 ) error {
-	var forEachErr error
-
-	obj.ForEach(func(key, value *Value) {
-		if forEachErr != nil || value.IsNull() || value.IsUndefined() {
-			return
+	return obj.entries(func(key, value *Value) error {
+		if value.IsNull() || value.IsUndefined() {
+			return nil
 		}
 
-		propName := key.String()
-
-		fieldInfo, ok := fieldMap[propName]
+		fieldInfo, ok := fieldMap[key.String()]
 		if !ok {
-			return
+			return nil
 		}
 
 		fieldValue := getFieldValue(structValue, fieldInfo.indices)
 		if !fieldValue.IsValid() {
-			return
+			return nil
 		}
 
-		if err := setFieldValue(tracker, fieldValue, value, fieldInfo); err != nil {
-			forEachErr = err
-		}
+		return setFieldValue(tracker, fieldValue, value, fieldInfo)
 	})
-
-	return forEachErr
 }
 
 // getFieldValue navigates to the target field through embedded structs.
@@ -474,7 +450,7 @@ func setFieldValue(tracker *convTracker[uint64], fieldValue reflect.Value, jsVal
 
 // setFieldWithJSONUnmarshaler handles fields with custom JSON unmarshaling.
 func setFieldWithJSONUnmarshaler(fieldValue reflect.Value, jsValue *Value, fieldInfo fieldPath) error {
-	jsonStr, err := jsValue.JSONStringify()
+	jsonStr, err := jsValue.jsonStringify()
 	if err != nil {
 		return newJsStringifyErr("object/map field "+fieldInfo.field.Name, err)
 	}
@@ -545,7 +521,7 @@ func jsObjectToGoWithContext[T any](
 	// Fallback for other types
 	tempPtr := reflect.New(targetType).Interface()
 
-	jsonString, err := input.JSONStringify()
+	jsonString, err := input.jsonStringify()
 	if err != nil {
 		return v, newJsStringifyErr("object", err)
 	}
@@ -562,11 +538,11 @@ func jsObjectToGoWithContext[T any](
 	return processTempValue("JsObjectToGo", temp, err, sample)
 }
 
-func JsFuncToGo[T any](input *Value, samples ...T) (v T, err error) {
-	return jsFuncToGo(newConvTracker[uint64](), input, samples...)
+func jsFuncToGo[T any](input *Value, samples ...T) (v T, err error) {
+	return jsFuncToGoWithContext(newConvTracker[uint64](), input, samples...)
 }
 
-func jsFuncToGo[T any](
+func jsFuncToGoWithContext[T any](
 	tracker *convTracker[uint64],
 	input *Value,
 	samples ...T,
@@ -586,9 +562,11 @@ func jsFuncToGo[T any](
 		return v, err
 	}
 
-	ctx := input.Runtime()
+	// The Go function may outlive input, so it keeps its own reference,
+	// released when the runtime is closed.
+	jsFn := input.Clone()
 	goFunc := func(args []reflect.Value) (results []reflect.Value) {
-		return createJsFunctionHandler(ctx, input, tracker, fnType, args)
+		return createJsFunctionHandler(jsFn, tracker, fnType, args)
 	}
 
 	fn := reflect.MakeFunc(fnType, goFunc)
@@ -599,7 +577,6 @@ func jsFuncToGo[T any](
 
 // createJsFunctionHandler handles the execution of JavaScript functions from Go.
 func createJsFunctionHandler(
-	ctx *Runtime,
 	input *Value,
 	tracker *convTracker[uint64],
 	fnType reflect.Type,
@@ -610,18 +587,7 @@ func createJsFunctionHandler(
 		results[i] = reflect.Zero(fnType.Out(i))
 	}
 
-	jsArgs, err := convertArgsToJS(ctx, fnType, args, results)
-	if err != nil {
-		return results
-	}
-
-	defer func() {
-		for _, arg := range jsArgs {
-			arg.Free()
-		}
-	}()
-
-	jsResult, err := ctx.Invoke(input, ctx.Global(), jsArgs...)
+	jsResult, err := input.Call(context.Background(), input.rt.global, flattenArgs(fnType, args)...)
 	if err != nil {
 		results[len(results)-1] = reflect.ValueOf(
 			fmt.Errorf("JS function execution failed: %w", err),
@@ -635,74 +601,24 @@ func createJsFunctionHandler(
 	return handleJsFunctionResult(jsResult, tracker, fnType, results)
 }
 
-// convertArgsToJS converts Go function arguments to JavaScript values.
-func convertArgsToJS(
-	ctx *Runtime,
-	fnType reflect.Type,
-	args []reflect.Value,
-	results []reflect.Value,
-) ([]*Value, error) {
-	isVariadic := fnType.IsVariadic()
+// flattenArgs returns the arguments of a call of a Go function of type
+// fnType, with the variadic slice spread out.
+func flattenArgs(fnType reflect.Type, args []reflect.Value) []any {
+	flat := make([]any, 0, len(args))
 
-	numFixedArgs := fnType.NumIn()
-	if isVariadic {
-		numFixedArgs--
-	}
-
-	expectedArgsCount := len(args)
-	if isVariadic && len(args) == numFixedArgs+1 &&
-		args[numFixedArgs].Kind() == reflect.Slice {
-		expectedArgsCount = numFixedArgs + args[numFixedArgs].Len()
-	}
-
-	jsArgs := make([]*Value, 0, expectedArgsCount)
-
-	convertArg := func(argValue any, argIndex int) error {
-		jsArg, convErr := ToJsValue(ctx, argValue)
-		if convErr != nil {
-			results[len(results)-1] = reflect.ValueOf(
-				fmt.Errorf(
-					"failed to convert go function argument at index %d '%T=%v' to JS: %w",
-					argIndex, argValue, argValue, convErr,
-				),
-			)
-
-			return convErr
-		}
-
-		jsArgs = append(jsArgs, jsArg)
-
-		return nil
-	}
-
-	if isVariadic && len(args) == numFixedArgs+1 &&
-		args[numFixedArgs].Kind() == reflect.Slice {
-		variadicSlice := args[numFixedArgs]
-
-		// Convert fixed arguments
-		for i := range numFixedArgs {
-			if err := convertArg(args[i].Interface(), i); err != nil {
-				return nil, err
+	for i, arg := range args {
+		if fnType.IsVariadic() && i == fnType.NumIn()-1 {
+			for j := range arg.Len() {
+				flat = append(flat, arg.Index(j).Interface())
 			}
+
+			break
 		}
 
-		// Convert variadic arguments
-		for i := range variadicSlice.Len() {
-			elem := variadicSlice.Index(i)
-			if err := convertArg(elem.Interface(), numFixedArgs+i); err != nil {
-				return nil, err
-			}
-		}
-	} else {
-		// Convert all arguments directly
-		for i, arg := range args {
-			if err := convertArg(arg.Interface(), i); err != nil {
-				return nil, err
-			}
-		}
+		flat = append(flat, arg.Interface())
 	}
 
-	return jsArgs, nil
+	return flat
 }
 
 // handleJsFunctionResult processes the result of a JavaScript function call.
@@ -783,7 +699,7 @@ func jsPrimitivesToGo[T any](
 	}
 
 	if input.IsError() {
-		return input.exception(), true, nil
+		return input.toError(), true, nil
 	}
 
 	if input.IsNull() || input.IsUndefined() {
@@ -795,7 +711,7 @@ func jsPrimitivesToGo[T any](
 	}
 
 	if input.IsFunction() {
-		result, err := jsFuncToGo(tracker, input, sample)
+		result, err := jsFuncToGoWithContext(tracker, input, sample)
 
 		return result, true, err
 	}

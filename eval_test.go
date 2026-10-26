@@ -1,6 +1,7 @@
 package qngg
 
 import (
+	"context"
 	"path"
 	"testing"
 
@@ -33,7 +34,7 @@ func testGlobalModeEvaluation(t *testing.T) {
 	t.Run("Top_Level_Await", func(t *testing.T) {
 		tests := []evalTest{
 			{name: "top_level_await_error_without_flag", file: "global_top_level_await_error.js", code: "await Promise.resolve(42)", expectErr: func(t *testing.T, err error) { assert.Error(t, err); assert.Contains(t, err.Error(), "SyntaxError") }},
-			{name: "top_level_await_works_with_flag", file: "global_top_level_await_works.js", code: "await Promise.resolve(42)", options: []EvalOption{FlagAsync()}, expectValue: func(t *testing.T, val *Value, err error) { assert.Equal(t, int32(42), val.Int32()) }},
+			{name: "top_level_await_works_with_flag", file: "global_top_level_await_works.js", code: "await Promise.resolve(42)", options: []EvalOption{TopLevelAwait()}, expectValue: func(t *testing.T, val *Value, err error) { assert.Equal(t, int32(42), val.Int32()) }},
 		}
 		runEvalTests(t, tests, "")
 	})
@@ -48,16 +49,16 @@ func testGlobalModeEvaluation(t *testing.T) {
 func testModuleModeEvaluation(t *testing.T) {
 	t.Run("Basic_Modules", func(t *testing.T) {
 		tests := []evalTest{
-			{name: "no_result_statement", file: "module_no_result.js", code: "const a = 55555", options: []EvalOption{TypeModule()}, expectValue: func(t *testing.T, val *Value, err error) { assert.True(t, val.IsUndefined()) }},
-			{name: "no_default_export", file: "module_no_default_export.js", code: "export const a = 55555", options: []EvalOption{TypeModule()}, expectValue: func(t *testing.T, val *Value, err error) { assert.True(t, val.IsUndefined()) }},
-			{name: "has_default_export", file: "module_has_result.js", code: "export default 55555", options: []EvalOption{TypeModule()}, expectValue: func(t *testing.T, val *Value, err error) { assert.Equal(t, int32(55555), val.Int32()) }},
+			{name: "no_result_statement", file: "module_no_result.js", code: "const a = 55555", options: []EvalOption{AsModule()}, expectValue: func(t *testing.T, val *Value, err error) { assert.True(t, val.IsUndefined()) }},
+			{name: "no_default_export", file: "module_no_default_export.js", code: "export const a = 55555", options: []EvalOption{AsModule()}, expectValue: func(t *testing.T, val *Value, err error) { assert.True(t, val.IsUndefined()) }},
+			{name: "has_default_export", file: "module_has_result.js", code: "export default 55555", options: []EvalOption{AsModule()}, expectValue: func(t *testing.T, val *Value, err error) { assert.Equal(t, int32(55555), val.Int32()) }},
 		}
 		runEvalTests(t, tests, "")
 	})
 
 	t.Run("Top_Level_Await", func(t *testing.T) {
 		tests := []evalTest{
-			{name: "module_top_level_await", file: "module_top_level_await.js", code: `async function main() { const res = await Promise.resolve(42); return res; } export default await main();`, options: []EvalOption{TypeModule()}, expectValue: func(t *testing.T, val *Value, err error) { assert.Equal(t, int32(42), val.Int32()) }},
+			{name: "module_top_level_await", file: "module_top_level_await.js", code: `async function main() { const res = await Promise.resolve(42); return res; } export default await main();`, options: []EvalOption{AsModule()}, expectValue: func(t *testing.T, val *Value, err error) { assert.Equal(t, int32(42), val.Int32()) }},
 		}
 		runEvalTests(t, tests, "")
 	})
@@ -107,13 +108,13 @@ func testLoadOperations(t *testing.T) {
 			name: "mixed_loading_scenario",
 			file: "03_mixed_load.js",
 			prepare: func(rt *Runtime) {
-				_ = must(rt.Load("mod_a.js", Code("export const getA = () => 'A';")))
-				_ = must(rt.Load("./testdata/04_load/03_mixed/mod_b"))
-				_ = must(rt.Load("./testdata/04_load/03_mixed/mod_c"))
-				bytesD := must(rt.Compile("mod_d.js", Code("export const getD = () => 'D';"), TypeModule()))
-				_ = must(rt.Load("mod_d.js", Bytecode(bytesD)))
-				bytesE := must(rt.Compile("./testdata/04_load/03_mixed/mod_e", TypeModule()))
-				_ = must(rt.Load("./testdata/04_load/03_mixed/mod_e", Bytecode(bytesE)))
+				noErr(rt.LoadModule(context.Background(), "mod_a.js", "export const getA = () => 'A';"))
+				noErr(rt.LoadModuleFile(context.Background(), "./testdata/04_load/03_mixed/mod_b"))
+				noErr(rt.LoadModuleFile(context.Background(), "./testdata/04_load/03_mixed/mod_c"))
+				bytesD := must(rt.Compile("mod_d.js", "export const getD = () => 'D';", AsModule()))
+				noErr(rt.LoadModuleBytecode(context.Background(), bytesD))
+				bytesE := must(rt.CompileFile("./testdata/04_load/03_mixed/mod_e", AsModule()))
+				noErr(rt.LoadModuleBytecode(context.Background(), bytesE))
 			},
 			code: `import { getA } from 'mod_a.js'; import { getB } from './03_mixed/mod_b'; import { getC } from './03_mixed/mod_c'; import { getD } from 'mod_d.js'; import { getE } from './03_mixed/mod_e'; export const moduleExported = getA() + getB() + getC() + getD() + getE();`,
 			expectValue: func(t *testing.T, val *Value, err error) {
@@ -128,7 +129,7 @@ func testLoadOperations(t *testing.T) {
 func runEvalTests(t *testing.T, tests []evalTest, basePath string) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(New(Option{CWD: "."}))
+			rt := must(New(Config{CWD: "."}))
 			defer rt.Close()
 
 			if test.prepare != nil {
@@ -140,18 +141,21 @@ func runEvalTests(t *testing.T, tests []evalTest, basePath string) {
 				testFile = path.Join(basePath, test.file)
 			}
 
-			var options []EvalOption
-			if test.code != "" {
-				if test.useByteCode {
-					bytecode := must(rt.Compile(testFile, Code(test.code), TypeModule()))
-					options = append(options, Bytecode(bytecode))
-				} else {
-					options = append(options, Code(test.code))
-				}
-			}
-			options = append(options, test.options...)
+			var (
+				val *Value
+				err error
+			)
 
-			val, err := rt.Eval(testFile, options...)
+			switch {
+			case test.code != "" && test.useByteCode:
+				bytecode := must(rt.Compile(testFile, test.code, test.options...))
+				val, err = rt.EvalBytecode(context.Background(), bytecode, test.options...)
+			case test.code != "":
+				val, err = rt.Eval(context.Background(), testFile, test.code, test.options...)
+			default:
+				val, err = rt.EvalFile(context.Background(), testFile, test.options...)
+			}
+
 			if val != nil {
 				defer val.Free()
 			}
@@ -179,37 +183,35 @@ func runEvalTests(t *testing.T, tests []evalTest, basePath string) {
 
 func runCompileTests(t *testing.T, tests []evalTest, basePath string) {
 	t.Run("compile_error", func(t *testing.T) {
-		rt := must(New(Option{CWD: "."}))
+		rt := must(New(Config{CWD: "."}))
 		defer rt.Close()
 
-		_, err := rt.Compile("compile_error.js", Code("const a = ("))
+		_, err := rt.Compile("compile_error.js", "const a = (")
 		assert.Error(t, err)
 	})
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(New(Option{CWD: "."}))
+			rt := must(New(Config{CWD: "."}))
 			defer rt.Close()
 
 			testFile := path.Join(basePath, test.file)
 
 			// Compile phase
-			var compileOptions []EvalOption
+			var (
+				bytecode []byte
+				err      error
+			)
 			if test.code != "" {
-				compileOptions = append(compileOptions, Code(test.code))
+				bytecode, err = rt.Compile(testFile, test.code, test.options...)
+			} else {
+				bytecode, err = rt.CompileFile(testFile, test.options...)
 			}
-			compileOptions = append(compileOptions, test.options...)
-
-			bytecode, err := rt.Compile(testFile, compileOptions...)
 			assert.NoError(t, err)
 			assert.NotEmpty(t, bytecode)
 
 			// Execute phase
-			var evalOptions []EvalOption
-			evalOptions = append(evalOptions, Bytecode(bytecode))
-			evalOptions = append(evalOptions, test.options...)
-
-			val, err := rt.Eval(testFile, evalOptions...)
+			val, err := rt.EvalBytecode(context.Background(), bytecode, test.options...)
 			defer val.Free()
 			assert.NoError(t, err)
 			if test.expectValue != nil {
@@ -222,7 +224,7 @@ func runCompileTests(t *testing.T, tests []evalTest, basePath string) {
 func runLoadTests(t *testing.T, tests []evalTest, basePath string) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(New(Option{CWD: "."}))
+			rt := must(New(Config{CWD: "."}))
 			defer rt.Close()
 
 			if test.prepare != nil {
@@ -234,17 +236,18 @@ func runLoadTests(t *testing.T, tests []evalTest, basePath string) {
 				testFile = path.Join(basePath, test.file)
 			}
 
-			var options []EvalOption
-			if test.code != "" {
-				if test.useByteCode {
-					bytecode := must(rt.Compile(testFile, TypeModule(), Code(test.code)))
-					options = append(options, Bytecode(bytecode))
-				} else {
-					options = append(options, Code(test.code))
-				}
+			var err error
+
+			switch {
+			case test.code != "" && test.useByteCode:
+				bytecode := must(rt.Compile(testFile, test.code, AsModule()))
+				err = rt.LoadModuleBytecode(context.Background(), bytecode)
+			case test.code != "":
+				err = rt.LoadModule(context.Background(), testFile, test.code)
+			default:
+				err = rt.LoadModuleFile(context.Background(), testFile)
 			}
 
-			loadVal, err := rt.Load(testFile, options...)
 			if test.expectErr != nil {
 				test.expectErr(t, err)
 				return
@@ -255,10 +258,8 @@ func runLoadTests(t *testing.T, tests []evalTest, basePath string) {
 				return
 			}
 
-			loadVal.Free()
-
 			// Test by importing the loaded module
-			val, err := rt.Eval("import_"+test.name, Code(`import { moduleExported } from '`+testFile+`'; export default moduleExported`), TypeModule())
+			val, err := rt.Eval(context.Background(), "import_"+test.name, `import { moduleExported } from '`+testFile+`'; export default moduleExported`, AsModule())
 			defer val.Free()
 			assert.NoError(t, err)
 			if test.expectValue != nil {
@@ -308,7 +309,10 @@ func TestEval(t *testing.T) {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), "ThrowError test")
 			}},
-			{name: "is_error_path_normalization", file: "error_test.js", code: `new Error("IsError test")`, expectErr: func(t *testing.T, err error) { assert.Error(t, err); assert.Contains(t, err.Error(), "IsError test") }},
+			{name: "error_objects_are_values", file: "error_test.js", code: `new Error("IsError test")`, expectValue: func(t *testing.T, val *Value, err error) {
+				assert.True(t, val.IsError())
+				assert.Equal(t, "Error: IsError test", val.String())
+			}},
 		}
 		runEvalTests(t, tests, "")
 	})
@@ -321,7 +325,7 @@ func TestModuleLoading(t *testing.T) {
 			{
 				name:    "file_not_found",
 				file:    "not_found.js",
-				options: []EvalOption{TypeModule()},
+				options: []EvalOption{AsModule()},
 				expectErr: func(t *testing.T, err error) {
 					assert.Error(t, err)
 					assert.Contains(t, err.Error(), "No such file or directory: testdata/00_loader/not_found.js")
@@ -330,7 +334,7 @@ func TestModuleLoading(t *testing.T) {
 			{
 				name:    "real_filename",
 				file:    "01_realname/file.js",
-				options: []EvalOption{TypeModule()},
+				options: []EvalOption{AsModule()},
 				expectValue: func(t *testing.T, val *Value, err error) {
 					assert.Equal(t, "Hello, World!", val.String())
 				},
@@ -344,7 +348,7 @@ func TestModuleLoading(t *testing.T) {
 			{
 				name:    "auto_index_js",
 				file:    "02_autoindexjs",
-				options: []EvalOption{TypeModule()},
+				options: []EvalOption{AsModule()},
 				expectValue: func(t *testing.T, val *Value, err error) {
 					assert.Equal(t, "autoindexjs", val.String())
 				},
@@ -352,7 +356,7 @@ func TestModuleLoading(t *testing.T) {
 			{
 				name:    "auto_index_mjs",
 				file:    "03_autoindexmjs",
-				options: []EvalOption{TypeModule()},
+				options: []EvalOption{AsModule()},
 				expectValue: func(t *testing.T, val *Value, err error) {
 					assert.Equal(t, "autoindexmjs", val.String())
 				},
@@ -360,7 +364,7 @@ func TestModuleLoading(t *testing.T) {
 			{
 				name:    "auto_ext_js",
 				file:    "04_autoextjs/file",
-				options: []EvalOption{TypeModule()},
+				options: []EvalOption{AsModule()},
 				expectValue: func(t *testing.T, val *Value, err error) {
 					assert.Equal(t, "file.js", val.String())
 				},
@@ -368,7 +372,7 @@ func TestModuleLoading(t *testing.T) {
 			{
 				name:    "auto_ext_mjs",
 				file:    "05_autoextmjs/file",
-				options: []EvalOption{TypeModule()},
+				options: []EvalOption{AsModule()},
 				expectValue: func(t *testing.T, val *Value, err error) {
 					assert.Equal(t, "file.mjs", val.String())
 				},
@@ -384,8 +388,8 @@ func TestCompilation(t *testing.T) {
 		tests := []evalTest{
 			{name: "compile_global_code", file: "compile_global_code.js", code: "55555", expectValue: func(t *testing.T, val *Value, err error) { assert.Equal(t, int32(55555), val.Int32()) }},
 			{name: "compile_global_file", file: "01_global/index.js", expectValue: func(t *testing.T, val *Value, err error) { assert.Equal(t, "Hello, World!", val.String()) }},
-			{name: "compile_module_code", file: "compile_module_code.js", code: "export default 55555", options: []EvalOption{TypeModule()}, expectValue: func(t *testing.T, val *Value, err error) { assert.Equal(t, int32(55555), val.Int32()) }},
-			{name: "compile_module_file", file: "02_module/index.js", options: []EvalOption{TypeModule()}, expectValue: func(t *testing.T, val *Value, err error) { assert.Equal(t, "Hello from lib_a", val.String()) }},
+			{name: "compile_module_code", file: "compile_module_code.js", code: "export default 55555", options: []EvalOption{AsModule()}, expectValue: func(t *testing.T, val *Value, err error) { assert.Equal(t, int32(55555), val.Int32()) }},
+			{name: "compile_module_file", file: "02_module/index.js", options: []EvalOption{AsModule()}, expectValue: func(t *testing.T, val *Value, err error) { assert.Equal(t, "Hello from lib_a", val.String()) }},
 		}
 
 		runCompileTests(t, tests, "./testdata/03_compile")

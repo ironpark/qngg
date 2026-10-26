@@ -1,9 +1,12 @@
 package qngg
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 )
+
+var contextType = reflect.TypeFor[context.Context]()
 
 // funcToJS converts a Go function to a JavaScript function.
 func funcToJS(c *Runtime, v any) (_ *Value, err error) {
@@ -42,10 +45,26 @@ func funcToJS(c *Runtime, v any) (_ *Value, err error) {
 		return nil, err
 	}
 
-	return c.Function(func(this *This) (*Value, error) {
-		goArgs, err := jsFuncArgsToGo(this.Args(), fnType)
+	// A leading context.Context parameter receives the call's context, and
+	// JavaScript arguments fill the parameters after it.
+	argsType, takesContext := fnType, false
+	if fnType.NumIn() > 0 && fnType.In(0) == contextType {
+		in := make([]reflect.Type, fnType.NumIn()-1)
+		for i := range in {
+			in[i] = fnType.In(i + 1)
+		}
+
+		argsType, takesContext = reflect.FuncOf(in, nil, fnType.IsVariadic()), true
+	}
+
+	return c.NewFunction(func(call *FunctionCall) (*Value, error) {
+		goArgs, err := jsFuncArgsToGo(call.Args(), argsType)
 		if err != nil {
 			return nil, err
+		}
+
+		if takesContext {
+			goArgs = append([]reflect.Value{reflect.ValueOf(call.Context())}, goArgs...)
 		}
 
 		var results []reflect.Value
@@ -114,7 +133,7 @@ func handlePointerArgument(jsArg *Value, argType reflect.Type) (reflect.Value, e
 	underlyingType := argType.Elem()
 	zeroVal := reflect.New(underlyingType).Elem()
 
-	goVal, err := ToGoValue(jsArg, zeroVal.Interface())
+	goVal, err := toGo(jsArg, zeroVal.Interface())
 	if err != nil {
 		return reflect.Value{}, newJsToGoErr(jsArg, err, "function param pointer to "+jsArg.Type())
 	}
@@ -178,13 +197,32 @@ func createDummyFunction(funcType reflect.Type) any {
 
 // jsArgToGo converts a single JS argument to a Go value with enhanced type handling.
 func jsArgToGo(jsArg *Value, argType reflect.Type) (reflect.Value, error) {
+	// A ProxyValue stands for the Go value it wraps, pointers included.
+	if jsArg.isProxyValue() {
+		goVal, err := toGo[any](jsArg)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+
+		rv := reflect.ValueOf(goVal)
+		if !rv.IsValid() {
+			return reflect.Zero(argType), nil
+		}
+
+		if !rv.Type().AssignableTo(argType) {
+			return reflect.Value{}, newInvalidGoTypeErr(argType.String(), goVal)
+		}
+
+		return rv, nil
+	}
+
 	if argType.Kind() == reflect.Pointer {
 		return handlePointerArgument(jsArg, argType)
 	}
 
 	goZeroVal := createNonNilSample(argType)
 
-	goVal, err := ToGoValue(jsArg, goZeroVal)
+	goVal, err := toGo(jsArg, goZeroVal)
 	if err != nil {
 		return reflect.Value{}, newJsToGoErr(jsArg, err, "function param "+jsArg.Type())
 	}
@@ -241,7 +279,7 @@ func goFuncResultToJs(c *Runtime, results []reflect.Value) (*Value, error) {
 
 		// Single remaining value -> return that value
 		if len(remaining) == 1 {
-			return ToJsValue(c, remaining[0].Interface())
+			return c.ToValue(remaining[0].Interface())
 		}
 
 		// Multiple remaining values -> return as JS array
@@ -250,12 +288,12 @@ func goFuncResultToJs(c *Runtime, results []reflect.Value) (*Value, error) {
 			jsValues[i] = result.Interface()
 		}
 
-		return ToJsValue(c, jsValues)
+		return c.ToValue(jsValues)
 	}
 
 	// Single return value -> return that value
 	if len(results) == 1 {
-		return ToJsValue(c, results[0].Interface())
+		return c.ToValue(results[0].Interface())
 	}
 
 	// Multiple return values -> return as JS array
@@ -264,5 +302,5 @@ func goFuncResultToJs(c *Runtime, results []reflect.Value) (*Value, error) {
 		jsValues[i] = result.Interface()
 	}
 
-	return ToJsValue(c, jsValues)
+	return c.ToValue(jsValues)
 }

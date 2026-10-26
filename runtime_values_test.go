@@ -3,11 +3,11 @@ package qngg
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Basic Properties Tests
@@ -19,11 +19,11 @@ func TestContextBasicProperties(t *testing.T) {
 		assert.True(t, global.IsObject())
 
 		// Check for standard JavaScript global objects
-		console := global.GetPropertyStr("console")
+		console := must(global.Get("console"))
 		assert.True(t, console.IsObject())
 		console.Free()
 
-		object := global.GetPropertyStr("Object")
+		object := must(global.Get("Object"))
 		assert.True(t, object.IsFunction())
 		object.Free()
 	})
@@ -34,24 +34,21 @@ func TestContextValueCreation(t *testing.T) {
 	_, ctx := setupRuntime(t)
 
 	t.Run("proxy_values", func(t *testing.T) {
-		goFuncWithContext := func(ctx context.Context, num int) int {
-			fmt.Printf("context check: is nil=%t, value=%v\n", ctx == nil, ctx)
-			return num * 2
-		}
-		jsFuncWithContext := must(ToJsValue(ctx, goFuncWithContext))
-		ctx.Global().SetPropertyStr("funcWithContext", jsFuncWithContext)
+		type state struct{ hits int }
+		shared := &state{}
 
-		ctx.SetFunc("$context", func(this *This) (*Value, error) {
-			val := ctx.NewProxyValue(context.Background())
-			return val, nil
-		})
+		noErr(ctx.Set("bump", func(s *state) int { s.hits++; return s.hits }))
+		proxy := ctx.NewProxyValue(shared)
+		defer proxy.Free()
+		noErr(ctx.Global().Set("shared", proxy))
 
-		result, err := ctx.Eval("test.js", Code(`
-			funcWithContext($context(), 10);
-		`))
-		assert.NoError(t, err)
+		result := must(ctx.Eval(context.Background(), "test.js", `bump(shared); bump(shared)`))
 		defer result.Free()
-		assert.Equal(t, int32(20), result.Int32())
+		assert.Equal(t, int32(2), result.Int32())
+		assert.Equal(t, 2, shared.hits, "the Go value itself is passed, not a copy")
+
+		back := must(proxy.As[*state]())
+		assert.Same(t, shared, back)
 	})
 
 	t.Run("primitive_values", func(t *testing.T) {
@@ -60,13 +57,6 @@ func TestContextValueCreation(t *testing.T) {
 			creator  func() *Value
 			verifier func(*testing.T, *Value)
 		}{
-			{
-				name:    "uninitialized",
-				creator: func() *Value { return ctx.newUninitialized() },
-				verifier: func(t *testing.T, val *Value) {
-					assert.True(t, val.IsUninitialized())
-				},
-			},
 			{
 				name:    "null",
 				creator: func() *Value { return ctx.NewNull() },
@@ -157,11 +147,11 @@ func TestContextValueCreation(t *testing.T) {
 
 	t.Run("date_values", func(t *testing.T) {
 		tm := time.Date(2023, 10, 1, 12, 0, 0, 0, time.UTC)
-		val := ctx.NewDate(&tm)
+		val := ctx.NewDate(tm)
 		defer val.Free()
 		assert.True(t, val.IsDate())
 		// Compare milliseconds due to JavaScript Date precision
-		assert.Equal(t, tm.UnixNano()/1e6, val.DateTime().UnixNano()/1e6)
+		assert.Equal(t, tm.UnixNano()/1e6, must(val.Time()).UnixNano()/1e6)
 	})
 }
 
@@ -174,30 +164,29 @@ func TestContextObjectsAndCollections(t *testing.T) {
 		defer obj.Free()
 		assert.True(t, obj.IsObject())
 
-		obj.SetPropertyStr("name", ctx.NewString("John"))
-		obj.SetPropertyStr("age", ctx.NewInt32(30))
+		noErr(obj.Set("name", ctx.NewString("John")))
+		noErr(obj.Set("age", ctx.NewInt32(30)))
 
-		assert.Equal(t, "John", obj.GetPropertyStr("name").String())
-		assert.Equal(t, int32(30), obj.GetPropertyStr("age").Int32())
+		assert.Equal(t, "John", must(obj.Get("name")).String())
+		assert.Equal(t, int32(30), must(obj.Get("age")).Int32())
 	})
 
 	t.Run("json_parsing", func(t *testing.T) {
-		jsonObj := ctx.ParseJSON(`{"name":"John","age":30,"isActive":true,"tags":["developer","golang"]}`)
+		jsonObj := must(ctx.ParseJSON(`{"name":"John","age":30,"isActive":true,"tags":["developer","golang"]}`))
 		defer jsonObj.Free()
 
 		assert.True(t, jsonObj.IsObject())
-		assert.Equal(t, "John", jsonObj.GetPropertyStr("name").String())
-		assert.Equal(t, int32(30), jsonObj.GetPropertyStr("age").Int32())
-		assert.True(t, jsonObj.GetPropertyStr("isActive").Bool())
+		assert.Equal(t, "John", must(jsonObj.Get("name")).String())
+		assert.Equal(t, int32(30), must(jsonObj.Get("age")).Int32())
+		assert.True(t, must(jsonObj.Get("isActive")).Bool())
 
-		tags := jsonObj.GetPropertyStr("tags")
+		tags := must(jsonObj.Get("tags"))
 		defer tags.Free()
 		assert.True(t, tags.IsArray())
 
-		tagsArray := must(tags.ToArray())
-		assert.Equal(t, int64(2), tagsArray.Len())
+		assert.Equal(t, int64(2), tags.Len())
 
-		tag0 := tagsArray.Get(0)
+		tag0 := must(tags.Index(0))
 		defer tag0.Free()
 		assert.Equal(t, "developer", tag0.String())
 	})
@@ -207,69 +196,35 @@ func TestContextObjectsAndCollections(t *testing.T) {
 func TestContextErrorHandling(t *testing.T) {
 	_, ctx := setupRuntime(t)
 
-	t.Run("exception_throwing", func(t *testing.T) {
+	t.Run("errors_returned_from_functions_are_thrown", func(t *testing.T) {
 		testCases := []struct {
-			name           string
-			throwFunc      func() *Value
-			expectedErrMsg string
+			name     string
+			err      error
+			wantType string
+			wantMsg  string
 		}{
-			{
-				name: "throw_error",
-				throwFunc: func() *Value {
-					return ctx.ThrowError(errors.New("custom error"))
-				},
-				expectedErrMsg: "custom error",
-			},
-			{
-				name: "throw_syntax_error",
-				throwFunc: func() *Value {
-					return ctx.ThrowSyntaxError("syntax %s", "error")
-				},
-				expectedErrMsg: "syntax error",
-			},
-			{
-				name: "throw_type_error",
-				throwFunc: func() *Value {
-					return ctx.ThrowTypeError("type %s", "error")
-				},
-				expectedErrMsg: "type error",
-			},
-			{
-				name: "throw_reference_error",
-				throwFunc: func() *Value {
-					return ctx.ThrowReferenceError("reference %s", "error")
-				},
-				expectedErrMsg: "reference error",
-			},
-			{
-				name: "throw_range_error",
-				throwFunc: func() *Value {
-					return ctx.ThrowRangeError("range %s", "error")
-				},
-				expectedErrMsg: "range error",
-			},
-			{
-				name: "throw_internal_error",
-				throwFunc: func() *Value {
-					return ctx.ThrowInternalError("internal %s", "error")
-				},
-				expectedErrMsg: "internal error",
-			},
+			{"go_error", errors.New("custom error"), "Error", "Error: custom error"},
+			{"syntax_error", &Error{Name: "SyntaxError", Message: "syntax error"}, "SyntaxError", "SyntaxError: syntax error"},
+			{"type_error", &Error{Name: "TypeError", Message: "type error"}, "TypeError", "TypeError: type error"},
+			{"reference_error", &Error{Name: "ReferenceError", Message: "reference error"}, "ReferenceError", "ReferenceError: reference error"},
+			{"range_error", &Error{Name: "RangeError", Message: "range error"}, "RangeError", "RangeError: range error"},
+			{"internal_error", &Error{Name: "InternalError", Message: "internal error"}, "InternalError", "InternalError: internal error"},
+			{"custom_name", &Error{Name: "MyError", Message: "mine"}, "Error", "MyError: mine"},
 		}
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				// Clear any lingering exceptions from previous tests
-				if ctx.hasException() {
-					_ = ctx.exception()
-				}
+				noErr(ctx.SetFunc("fail", func(*FunctionCall) (*Value, error) { return nil, tc.err }))
 
-				val := tc.throwFunc()
-				defer val.Free()
+				_, err := ctx.Eval(context.Background(), "throw.js", "fail()")
+				var jsErr *Error
+				require.ErrorAs(t, err, &jsErr)
+				assert.Contains(t, err.Error(), tc.wantMsg)
 
-				assert.True(t, ctx.hasException())
-				err := ctx.exception()
-				assert.Contains(t, err.Error(), tc.expectedErrMsg)
+				caught := must(ctx.Eval(context.Background(), "catch.js",
+					"try { fail() } catch (e) { e instanceof "+tc.wantType+" }"))
+				defer caught.Free()
+				assert.True(t, caught.Bool(), "thrown error should be a %s", tc.wantType)
 			})
 		}
 	})
@@ -280,38 +235,33 @@ func TestContextScriptExecution(t *testing.T) {
 	_, ctx := setupRuntime(t)
 
 	t.Run("eval_basic", func(t *testing.T) {
-		result := must(ctx.Eval("test_eval.js", Code(`1 + 2`)))
+		result := must(ctx.Eval(context.Background(), "test_eval.js", `1 + 2`))
 		defer result.Free()
 		assert.Equal(t, int32(3), result.Int32())
 	})
 
 	t.Run("eval_with_module_type", func(t *testing.T) {
-		result := must(ctx.Eval("test_module.js",
-			Code(`export default 42;`),
-			TypeModule()))
+		result := must(ctx.Eval(context.Background(), "test_module.js", `export default 42;`, AsModule()))
 		defer result.Free()
 		assert.Equal(t, int32(42), result.Int32())
 	})
 
 	t.Run("compile_and_execute", func(t *testing.T) {
-		bytecode := must(ctx.Compile("test_compile.js", Code(`2 * 3`)))
+		bytecode := must(ctx.Compile("test_compile.js", `2 * 3`))
 		assert.NotEmpty(t, bytecode)
 
-		result := must(ctx.Eval("test_bytecode.js", Bytecode(bytecode)))
+		result := must(ctx.EvalBytecode(context.Background(), bytecode))
 		defer result.Free()
 		assert.Equal(t, int32(6), result.Int32())
 	})
 
 	t.Run("load_and_import", func(t *testing.T) {
 		moduleCode := `export const value = 42;`
-		loaded := must(ctx.Load("test_load.js", Code(moduleCode)))
-		defer loaded.Free()
+		noErr(ctx.LoadModule(context.Background(), "test_load.js", moduleCode))
 
-		result := must(ctx.Eval("test_import.js",
-			Code(`
+		result := must(ctx.Eval(context.Background(), "test_import.js", `
 			import { value } from 'test_load.js';
-			export default value`),
-			TypeModule()))
+			export default value`, AsModule()))
 		defer result.Free()
 		assert.Equal(t, int32(42), result.Int32())
 	})
@@ -332,7 +282,6 @@ func TestContextFunctionBinding(t *testing.T) {
 type functionTestCase struct {
 	name              string
 	fn                Function
-	asyncFn           AsyncFunction
 	code              string
 	expectErrorString string
 	expectError       func(*testing.T, error)
@@ -344,7 +293,7 @@ func testSynchronousFunctions(t *testing.T) {
 	t.Run("basic_function_registration", func(t *testing.T) {
 		_, ctx := setupRuntime(t)
 
-		ctx.SetFunc("testFunc", func(this *This) (*Value, error) {
+		ctx.SetFunc("testFunc", func(this *FunctionCall) (*Value, error) {
 			args := this.Args()
 			if len(args) > 0 {
 				return this.Runtime().NewString("Hello " + args[0].String()), nil
@@ -352,11 +301,11 @@ func testSynchronousFunctions(t *testing.T) {
 			return this.Runtime().NewString("Hello World"), nil
 		})
 
-		result := must(ctx.Eval("test.js", Code(`testFunc("John")`)))
+		result := must(ctx.Eval(context.Background(), "test.js", `testFunc("John")`))
 		defer result.Free()
 		assert.Equal(t, "Hello John", result.String())
 
-		result2 := must(ctx.Eval("test2.js", Code("testFunc()")))
+		result2 := must(ctx.Eval(context.Background(), "test2.js", "testFunc()"))
 		defer result2.Free()
 		assert.Equal(t, "Hello World", result2.String())
 	})
@@ -382,14 +331,11 @@ func testAsynchronousFunctions(t *testing.T) {
 	t.Run("basic_async_function", func(t *testing.T) {
 		_, ctx := setupRuntime(t)
 
-		ctx.SetAsyncFunc("asyncTestFunc", func(this *This) {
-			this.Promise().Resolve(this.Runtime().NewString("async result"))
-		})
+		noErr(ctx.SetAsyncFunc("asyncTestFunc", func(this *FunctionCall) (*Value, error) {
+			return this.Runtime().NewString("async result"), nil
+		}))
 
-		result := must(ctx.Eval(
-			"test_async.js",
-			Code(`async function run() { return await asyncTestFunc(); }; run()`),
-		))
+		result := must(ctx.Eval(context.Background(), "test_async.js", `async function run() { return await asyncTestFunc(); }; run()`))
 		defer result.Free()
 		assert.Equal(t, "async result", result.String())
 	})
@@ -410,62 +356,27 @@ func testAsynchronousFunctions(t *testing.T) {
 	})
 }
 
-// Atoms Tests
-func TestContextAtoms(t *testing.T) {
-	_, ctx := setupRuntime(t)
-
-	t.Run("atom_from_string", func(t *testing.T) {
-		atom := ctx.newAtom("test")
-		defer atom.Free()
-
-		str := atom.String()
-		assert.Equal(t, "test", str)
-
-		val := atom.ToValue()
-		defer val.Free()
-		assert.Equal(t, "test", val.String())
-	})
-
-	t.Run("atom_from_index", func(t *testing.T) {
-		atom := ctx.newAtomIndex(42)
-		defer atom.Free()
-
-		val := atom.ToValue()
-		defer val.Free()
-		assert.NotEmpty(t, val.String())
-	})
-}
-
 func createErrorHandlingTests() []functionTestCase {
 	return []functionTestCase{
 		{
 			name:              "return_error",
 			expectErrorString: "error string",
-			fn: func(this *This) (*Value, error) {
-				return this.newUndefined(), errors.New("error string")
+			fn: func(this *FunctionCall) (*Value, error) {
+				return this.Runtime().NewUndefined(), errors.New("error string")
 			},
 		},
 		{
-			name:              "throw_string",
-			expectErrorString: "throw string",
-			fn: func(this *This) (*Value, error) {
-				this.Runtime().Throw(this.Runtime().NewString("throw string"))
-				return this.newUndefined(), nil
+			name:              "return_typed_error",
+			expectErrorString: "TypeError: bad type",
+			fn: func(this *FunctionCall) (*Value, error) {
+				return nil, &Error{Name: "TypeError", Message: "bad type"}
 			},
 		},
 		{
-			name:              "throw_bool",
-			expectErrorString: "true",
-			fn: func(this *This) (*Value, error) {
-				this.Runtime().Throw(this.Runtime().NewBool(true))
-				return this.newUndefined(), nil
-			},
-		},
-		{
-			name:              "throw_custom_error",
-			expectErrorString: "custom error",
-			fn: func(this *This) (*Value, error) {
-				return this.Runtime().ThrowError(errors.New("custom error")), nil
+			name:              "panic",
+			expectErrorString: "panic in Go function: boom",
+			fn: func(this *FunctionCall) (*Value, error) {
+				panic("boom")
 			},
 		},
 	}
@@ -475,7 +386,7 @@ func createReturnValueTests() []functionTestCase {
 	return []functionTestCase{
 		{
 			name: "return_string",
-			fn: func(this *This) (*Value, error) {
+			fn: func(this *FunctionCall) (*Value, error) {
 				return this.Runtime().NewString("Hello world"), nil
 			},
 			expectValue: func(t *testing.T, val *Value) {
@@ -484,7 +395,7 @@ func createReturnValueTests() []functionTestCase {
 		},
 		{
 			name: "return_number",
-			fn: func(this *This) (*Value, error) {
+			fn: func(this *FunctionCall) (*Value, error) {
 				return this.Runtime().NewInt32(12345), nil
 			},
 			expectValue: func(t *testing.T, val *Value) {
@@ -493,7 +404,7 @@ func createReturnValueTests() []functionTestCase {
 		},
 		{
 			name: "return_bool",
-			fn: func(this *This) (*Value, error) {
+			fn: func(this *FunctionCall) (*Value, error) {
 				return this.Runtime().NewBool(true), nil
 			},
 			expectValue: func(t *testing.T, val *Value) {
@@ -502,8 +413,8 @@ func createReturnValueTests() []functionTestCase {
 		},
 		{
 			name: "return_undefined",
-			fn: func(this *This) (*Value, error) {
-				return this.newUndefined(), nil
+			fn: func(this *FunctionCall) (*Value, error) {
+				return this.Runtime().NewUndefined(), nil
 			},
 			expectValue: func(t *testing.T, val *Value) {
 				assert.True(t, val.IsUndefined())
@@ -517,7 +428,7 @@ func createArgumentHandlingTests() []functionTestCase {
 		{
 			name: "string_argument",
 			code: `goFunc('World')`,
-			fn: func(this *This) (*Value, error) {
+			fn: func(this *FunctionCall) (*Value, error) {
 				return this.Runtime().NewString(
 					"Hello " + this.Args()[0].String(),
 				), nil
@@ -529,7 +440,7 @@ func createArgumentHandlingTests() []functionTestCase {
 		{
 			name: "numeric_arguments",
 			code: `goFunc(10, 20)`,
-			fn: func(this *This) (*Value, error) {
+			fn: func(this *FunctionCall) (*Value, error) {
 				return this.Runtime().NewInt32(
 					this.Args()[0].Int32() + this.Args()[1].Int32(),
 				), nil
@@ -541,11 +452,11 @@ func createArgumentHandlingTests() []functionTestCase {
 		{
 			name: "object_argument",
 			code: `goFunc({"name": "John Doe", "age": 30})`,
-			fn: func(this *This) (*Value, error) {
-				obj := this.Args()[0].toObject()
+			fn: func(this *FunctionCall) (*Value, error) {
+				obj := this.Args()[0].Clone()
 				defer obj.Free()
 				return this.Runtime().NewString(
-					"Hello " + obj.GetPropertyStr("name").String(),
+					"Hello " + must(obj.Get("name")).String(),
 				), nil
 			},
 			expectValue: func(t *testing.T, val *Value) {
@@ -560,22 +471,22 @@ func createAsyncErrorHandlingTests() []functionTestCase {
 		{
 			name:              "reject_string",
 			expectErrorString: "throw string",
-			asyncFn: func(this *This) {
-				this.Promise().Reject(this.Runtime().NewString("throw string"))
+			fn: func(this *FunctionCall) (*Value, error) {
+				return nil, errors.New("throw string")
 			},
 		},
 		{
 			name:              "reject_number",
 			expectErrorString: "12345",
-			asyncFn: func(this *This) {
-				this.Promise().Reject(this.Runtime().NewInt32(12345))
+			fn: func(this *FunctionCall) (*Value, error) {
+				panic(12345)
 			},
 		},
 		{
 			name:              "throw_in_async",
 			expectErrorString: "syntax error",
-			asyncFn: func(this *This) {
-				this.Runtime().ThrowSyntaxError("syntax error")
+			fn: func(this *FunctionCall) (*Value, error) {
+				return nil, &Error{Name: "SyntaxError", Message: "syntax error"}
 			},
 		},
 	}
@@ -585,8 +496,8 @@ func createAsyncReturnValueTests() []functionTestCase {
 	return []functionTestCase{
 		{
 			name: "resolve_string",
-			asyncFn: func(this *This) {
-				this.Promise().Resolve(this.Runtime().NewString("Hello world"))
+			fn: func(this *FunctionCall) (*Value, error) {
+				return this.Runtime().NewString("Hello world"), nil
 			},
 			expectValue: func(t *testing.T, val *Value) {
 				assert.Equal(t, "Hello world", val.String())
@@ -594,8 +505,8 @@ func createAsyncReturnValueTests() []functionTestCase {
 		},
 		{
 			name: "resolve_number",
-			asyncFn: func(this *This) {
-				this.Promise().Resolve(this.Runtime().NewInt32(12345))
+			fn: func(this *FunctionCall) (*Value, error) {
+				return this.Runtime().NewInt32(12345), nil
 			},
 			expectValue: func(t *testing.T, val *Value) {
 				assert.Equal(t, int32(12345), val.Int32())
@@ -609,10 +520,10 @@ func createAsyncArgumentHandlingTests() []functionTestCase {
 		{
 			name: "async_string_argument",
 			code: `await goAsyncFunc('World')`,
-			asyncFn: func(this *This) {
-				this.Promise().Resolve(this.Runtime().NewString(
+			fn: func(this *FunctionCall) (*Value, error) {
+				return this.Runtime().NewString(
 					"Hello " + this.Args()[0].String(),
-				))
+				), nil
 			},
 			expectValue: func(t *testing.T, val *Value) {
 				assert.Equal(t, "Hello World", val.String())
@@ -621,10 +532,10 @@ func createAsyncArgumentHandlingTests() []functionTestCase {
 		{
 			name: "async_numeric_arguments",
 			code: `await goAsyncFunc(10, 20)`,
-			asyncFn: func(this *This) {
-				this.Promise().Resolve(this.Runtime().NewInt32(
+			fn: func(this *FunctionCall) (*Value, error) {
+				return this.Runtime().NewInt32(
 					this.Args()[0].Int32() + this.Args()[1].Int32(),
-				))
+				), nil
 			},
 			expectValue: func(t *testing.T, val *Value) {
 				assert.Equal(t, int32(30), val.Int32())
@@ -637,7 +548,7 @@ func createAsyncArgumentHandlingTests() []functionTestCase {
 func runFunctionTests(t *testing.T, tests []functionTestCase, isAsync bool) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(New())
+			rt := must(New(Config{}))
 			defer rt.Close()
 
 			code := test.code
@@ -652,21 +563,17 @@ func runFunctionTests(t *testing.T, tests []functionTestCase, isAsync bool) {
 			funcName := "goFunc"
 			if isAsync {
 				funcName = "goAsyncFunc"
-				rt.SetAsyncFunc(funcName, test.asyncFn)
+				noErr(rt.SetAsyncFunc(funcName, test.fn))
 			} else {
-				rt.SetFunc(funcName, test.fn)
+				noErr(rt.SetFunc(funcName, test.fn))
 			}
 
 			var val *Value
 			var err error
 			if isAsync {
-				val, err = rt.Eval(
-					test.name+".js",
-					Code(code),
-					FlagAsync(),
-				)
+				val, err = rt.Eval(context.Background(), test.name+".js", code, TopLevelAwait())
 			} else {
-				val, err = rt.Eval(test.name+".js", Code(code))
+				val, err = rt.Eval(context.Background(), test.name+".js", code)
 			}
 			defer val.Free()
 
