@@ -1,12 +1,16 @@
 package qjs
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	json "encoding/json/v2"
 	"fmt"
 	"reflect"
 	"strings"
 )
 
+// Min returns the smaller of a and b.
+//
+// Deprecated: use the built-in min.
 func Min(a, b int) int {
 	if a < b {
 		return a
@@ -19,16 +23,28 @@ func IsImplementError(rtype reflect.Type) bool {
 	return rtype.Implements(reflect.TypeFor[error]())
 }
 
-// IsImplementsJSONUnmarshaler checks if a type implements json.Unmarshaler.
+// IsImplementsJSONUnmarshaler checks if a type implements json.Unmarshaler
+// or json.UnmarshalerFrom.
 func IsImplementsJSONUnmarshaler(t reflect.Type) bool {
-	unmarshalerType := reflect.TypeFor[json.Unmarshaler]()
+	implements := func(t reflect.Type) bool {
+		return t.Implements(reflect.TypeFor[json.Unmarshaler]()) ||
+			t.Implements(reflect.TypeFor[json.UnmarshalerFrom]())
+	}
 
-	return t.Implements(unmarshalerType) || reflect.PointerTo(t).Implements(unmarshalerType)
+	return implements(t) || implements(reflect.PointerTo(t))
+}
+
+// unmarshalJSON decodes the output of JS JSON.stringify into out. Strings in
+// JS may hold lone surrogates, which JSON.stringify escapes, so invalid UTF-8
+// is accepted (and replaced) rather than rejected.
+func unmarshalJSON(s string, out any) error {
+	return json.Unmarshal([]byte(s), out, jsontext.AllowInvalidUTF8(true)) //nolint:wrapcheck // wrapped by callers
 }
 
 // GetGoTypeName creates a descriptive string for complex types.
 func GetGoTypeName(input any) string {
 	var t reflect.Type
+
 	switch v := input.(type) {
 	case reflect.Type:
 		t = v
@@ -140,7 +156,6 @@ func IsConvertibleToJs(rType reflect.Type, visited map[reflect.Type]bool, detail
 		return nil
 	case reflect.Struct:
 		for field := range rType.Fields() {
-			field := field
 			jsonTagName, _, _ := strings.Cut(field.Tag.Get("json"), ",")
 
 			if !field.IsExported() || jsonTagName == "-" {

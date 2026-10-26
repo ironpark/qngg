@@ -804,7 +804,7 @@ func TestJsArrayToGo(t *testing.T) {
 			jsCode:    `[{"wrongKey": "wrong value"}]`,
 			sample:    struct{ RequiredValue int }{},
 			expectErr: true,
-			errMsg:    "cannot unmarshal array into Go",
+			errMsg:    "cannot unmarshal JSON array into Go",
 		},
 		{
 			name:      "custom_unmarshaler_error",
@@ -1137,7 +1137,7 @@ func TestJsObjectOrMapToGoMap(t *testing.T) {
 			jsCode:    `({"valid": 1, "invalid": {"nested": "object"}, "alsoInvalid": [1,2,3]})`,
 			sample:    map[string]int{},
 			expectErr: true,
-			errMsg:    "cannot unmarshal object into Go value of type int",
+			errMsg:    "cannot unmarshal JSON object into Go int",
 		},
 		{
 			name:      "circular_reference",
@@ -1432,7 +1432,7 @@ func TestJsObjectOrMapToGoStruct(t *testing.T) {
 			jsCode:    `({"Complex": {"real": 1, "imag": 2}})`,
 			sample:    struct{ Complex int }{},
 			expectErr: true,
-			errMsg:    "cannot unmarshal object into Go value of type int",
+			errMsg:    "cannot unmarshal JSON object into Go int",
 		},
 		{
 			name:   "field_tags_with_options",

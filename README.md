@@ -453,7 +453,7 @@ goFuncWithContext := func(c context.Context, num int) int {
 }
 
 // Convert Go function to JavaScript function
-jsFuncWithContext, err := qjs.ToJSValue(ctx, goFuncWithContext)
+jsFuncWithContext, err := qjs.ToJsValue(ctx, goFuncWithContext)
 if err != nil {
 	log.Fatal("Func conversion error:", err)
 }
@@ -524,7 +524,7 @@ func main() {
 
 	ctx.Global().SetPropertyStr("goInt", ctx.NewInt32(55))
 	ctx.Global().SetPropertyStr("goString", ctx.NewString("Hello, World!"))
-	jsUser, err := qjs.ToJSValue(ctx, User{ID: 1, Name: "Alice", Age: 25})
+	jsUser, err := qjs.ToJsValue(ctx, User{ID: 1, Name: "Alice", Age: 25})
 	if err != nil {
 		log.Fatalf("Failed to convert User to JS value: %v", err)
 	}
@@ -545,7 +545,7 @@ func main() {
 	}
 	defer result.Free()
 
-	goPost, err := qjs.JsValueToGo[Post](result)
+	goPost, err := qjs.ToGoValue[Post](result)
 	if err != nil {
 		log.Fatalf("Failed to convert JS value to Post: %v", err)
 	}
@@ -705,8 +705,8 @@ value.Free()                             // Release memory
 ...
 
 // ProxyValue Operations
-qjs.JsValueToGo[T](value)               // Extract Go value from ProxyValue
-qjs.ToJSValue(ctx, goValue)             // Convert Go value to JS (auto-detects ProxyValue need)
+qjs.ToGoValue[T](value)                 // Extract Go value from ProxyValue
+qjs.ToJsValue(ctx, goValue)             // Convert Go value to JS (auto-detects ProxyValue need)
 ...
 ```
 

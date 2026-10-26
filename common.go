@@ -1,7 +1,6 @@
 package qjs
 
 import (
-	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"math"
@@ -417,7 +416,7 @@ func (ac *JsArrayToGoConverter[T]) convertToSlice(jsArray *Array, jsLen int64) (
 		sliceValue = reflect.Append(sliceValue, elemValue)
 	}
 
-	sliceT, _ := sliceValue.Interface().(T)
+	sliceT, _ := reflect.TypeAssert[T](sliceValue)
 
 	return sliceT, nil
 }
@@ -452,7 +451,7 @@ func (ac *JsArrayToGoConverter[T]) convertToArray(jsArray *Array, jsLen int64) (
 		goArrayValue.Index(int(i)).Set(elemValue)
 	}
 
-	arrayT, _ := goArrayValue.Interface().(T)
+	arrayT, _ := reflect.TypeAssert[T](goArrayValue)
 
 	return arrayT, nil
 }
@@ -472,11 +471,11 @@ func (ac *JsArrayToGoConverter[T]) convertViaJSON(jsArray *Array) (T, error) {
 	}
 
 	temp := reflect.New(ac.targetType).Interface()
-	if err = json.Unmarshal([]byte(jsonString), temp); err != nil {
+	if err = unmarshalJSON(jsonString, temp); err != nil {
 		return ac.sample, fmt.Errorf("can not unmarshal json: %w, input=%s", err, jsonString)
 	}
 
-	arrayT, _ := reflect.ValueOf(temp).Elem().Interface().(T)
+	arrayT, _ := reflect.TypeAssert[T](reflect.ValueOf(temp).Elem())
 
 	return arrayT, nil
 }

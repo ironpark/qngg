@@ -1,7 +1,6 @@
 package qjs
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -467,42 +466,22 @@ func setFieldValue(tracker *Tracker[uint64], fieldValue reflect.Value, jsValue *
 	fieldType := fieldInfo.field.Type
 
 	if IsImplementsJSONUnmarshaler(fieldType) {
-		return setFieldWithJSONUnmarshaler(fieldValue, jsValue, fieldInfo, fieldType)
+		return setFieldWithJSONUnmarshaler(fieldValue, jsValue, fieldInfo)
 	}
 
 	return setFieldWithDirectConversion(tracker, fieldValue, jsValue, fieldInfo, fieldType)
 }
 
-// setFieldWithJSONUnmarshaler handles fields that implement json.Unmarshaler.
-func setFieldWithJSONUnmarshaler(
-	fieldValue reflect.Value,
-	jsValue *Value,
-	fieldInfo FieldPath,
-	fieldType reflect.Type,
-) error {
+// setFieldWithJSONUnmarshaler handles fields with custom JSON unmarshaling.
+func setFieldWithJSONUnmarshaler(fieldValue reflect.Value, jsValue *Value, fieldInfo FieldPath) error {
 	jsonStr, err := jsValue.JSONStringify()
 	if err != nil {
 		return newJsStringifyErr("object/map field "+fieldInfo.field.Name, err)
 	}
 
-	var (
-		unmarshaler      json.Unmarshaler
-		unmarshalerValue reflect.Value
-	)
-
-	if fieldType.Kind() == reflect.Pointer {
-		unmarshaler, _ = reflect.New(fieldType.Elem()).Interface().(json.Unmarshaler)
-		unmarshalerValue = reflect.ValueOf(unmarshaler)
-	} else {
-		unmarshaler, _ = reflect.New(fieldType).Interface().(json.Unmarshaler)
-		unmarshalerValue = reflect.ValueOf(unmarshaler).Elem()
-	}
-
-	if err := unmarshaler.UnmarshalJSON([]byte(jsonStr)); err != nil {
+	if err := unmarshalJSON(jsonStr, fieldValue.Addr().Interface()); err != nil {
 		return fmt.Errorf("cannot unmarshal json: %w, %s=%s", err, fieldInfo.field.Name, jsonStr)
 	}
-
-	fieldValue.Set(unmarshalerValue)
 
 	return nil
 }
@@ -571,7 +550,7 @@ func jsObjectToGo[T any](
 		return v, newJsStringifyErr("object", err)
 	}
 
-	if err = json.Unmarshal([]byte(jsonString), tempPtr); err != nil {
+	if err = unmarshalJSON(jsonString, tempPtr); err != nil {
 		err = fmt.Errorf("can not unmarshal json: %w, input=%s", err, jsonString)
 
 		return processTempValue("JsObjectToGo", nil, err, sample)

@@ -606,10 +606,18 @@ func (v *Value) JSONStringify() (_ string, err error) {
 		}
 	}()
 
-	result := v.Call("QJS_JSONStringify", v.Ctx(), v.Raw())
-	defer result.handle.Free()
+	// QJS_JSONStringify in qjs.wasm returns its string after freeing it, so
+	// call the JS function and read the result through QJS_ToCString.
+	jsonObj := v.context.Global().GetPropertyStr("JSON")
+	defer jsonObj.Free()
 
-	return result.handle.String(), nil
+	result, err := jsonObj.InvokeJS("stringify", v)
+	if err != nil {
+		return "", fmt.Errorf("failed to stringify JS value: %w", err)
+	}
+	defer result.Free()
+
+	return result.String(), nil
 }
 
 // DateTime returns the date value of the value.

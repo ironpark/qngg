@@ -67,7 +67,7 @@ func JsFuncArgsToGo(jsArgs []*Value, fnType reflect.Type) ([]reflect.Value, erro
 	numJSArgs := len(jsArgs)
 
 	if fnType.IsVariadic() {
-		fixedArgs := Min(numGoArgs-1, numJSArgs)
+		fixedArgs := min(numGoArgs-1, numJSArgs)
 		for i := range fixedArgs {
 			goVal, err := JsArgToGo(jsArgs[i], fnType.In(i))
 			if err != nil {
@@ -87,7 +87,7 @@ func JsFuncArgsToGo(jsArgs []*Value, fnType reflect.Type) ([]reflect.Value, erro
 	}
 
 	// Limit JS args to Go args count to avoid index out of bounds
-	argsToProcess := Min(numJSArgs, numGoArgs)
+	argsToProcess := min(numJSArgs, numGoArgs)
 	for i := range argsToProcess {
 		goVal, err := JsArgToGo(jsArgs[i], fnType.In(i))
 		if err != nil {
@@ -227,7 +227,7 @@ func GoFuncResultToJs(c *Context, results []reflect.Value) (*Value, error) {
 	if IsImplementError(lastResult.Type()) {
 		// Last return is non-nil error -> throw in JS context
 		if !lastResult.IsNil() {
-			resultErr, _ := lastResult.Interface().(error)
+			resultErr, _ := reflect.TypeAssert[error](lastResult)
 
 			return nil, resultErr
 		}
