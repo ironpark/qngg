@@ -231,10 +231,10 @@ func TestRuntime(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		rt := must(qngg.New(qngg.Option{Context: ctx}))
 		ptr := rt.Malloc(1024)
-		cancel() // Cancel context to simulate error
-		assert.Panics(t, func() {
+		cancel() // The runtime is unusable once its context is done...
+		assert.NotPanics(t, func() {
 			rt.FreeHandle(ptr)
-		}, "FreeHandle should panic on invalid handle")
+		}, "...but freeing is a no-op since its memory goes with it")
 	})
 
 	t.Run("CustomQuickJSWasmBytesGlobalCache", func(t *testing.T) {

@@ -213,7 +213,7 @@ func genModeGlobalTests(t *testing.T) []modeGlobalTest {
 func runModeGlobalTests(t *testing.T, tests []modeGlobalTest, isScript bool) {
 	for _, test := range tests {
 		t.Run(test.file, func(t *testing.T) {
-			runtime := must(qngg.New(qngg.Option{MaxStackSize: 512 * 1024}))
+			runtime := must(qngg.New(qngg.Option{CWD: ".", MaxStackSize: 512 * 1024}))
 			defer runtime.Close()
 			var val *qngg.Value
 			var err error
@@ -309,7 +309,7 @@ func genModeModuleTests(t *testing.T) []modeModuleTest {
 func runModeModuleTests(t *testing.T, tests []modeModuleTest, isScript bool) {
 	for _, test := range tests {
 		t.Run(test.moduleDir, func(t *testing.T) {
-			runtime := must(qngg.New())
+			runtime := must(qngg.New(qngg.Option{CWD: "."}))
 			defer runtime.Close()
 
 			if !isScript {

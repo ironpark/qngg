@@ -250,7 +250,8 @@ func (l *execLimit) check() (uint64, error) {
 	return 1, nil
 }
 
-// newWasiConfig exposes the working directory as "/" and wires stdout/stderr.
+// newWasiConfig grants the capabilities configured in the options: the CWD
+// mount and stdout/stderr. Anything not granted here is unavailable to wasm.
 func (r *Runtime) newWasiConfig() (wasi *wasmtime.WasiConfig, err error) {
 	wasi = wasmtime.NewWasiConfig()
 
@@ -260,20 +261,30 @@ func (r *Runtime) newWasiConfig() (wasi *wasmtime.WasiConfig, err error) {
 		}
 	}()
 
-	if err := wasi.PreopenDir(r.option.CWD, "/", true); err != nil {
-		return nil, fmt.Errorf("failed to mount %s: %w", r.option.CWD, err)
+	if cwd := r.option.CWD; cwd != "" {
+		if err := wasi.PreopenDir(cwd, "/", r.option.WritableCWD); err != nil {
+			return nil, fmt.Errorf("failed to mount %s: %w", cwd, err)
+		}
 	}
 
-	if r.option.Stdout == os.Stdout {
+	switch out := r.option.Stdout; out {
+	case nil:
+	case os.Stdout:
 		wasi.InheritStdout()
-	} else if err := wasi.SetStdoutWriter(r.option.Stdout); err != nil {
-		return nil, fmt.Errorf("failed to set stdout: %w", err)
+	default:
+		if err := wasi.SetStdoutWriter(out); err != nil {
+			return nil, fmt.Errorf("failed to set stdout: %w", err)
+		}
 	}
 
-	if r.option.Stderr == os.Stderr {
+	switch out := r.option.Stderr; out {
+	case nil:
+	case os.Stderr:
 		wasi.InheritStderr()
-	} else if err := wasi.SetStderrWriter(r.option.Stderr); err != nil {
-		return nil, fmt.Errorf("failed to set stderr: %w", err)
+	default:
+		if err := wasi.SetStderrWriter(out); err != nil {
+			return nil, fmt.Errorf("failed to set stderr: %w", err)
+		}
 	}
 
 	return wasi, nil

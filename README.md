@@ -35,6 +35,9 @@ Migrating from `github.com/fastschema/qjs`:
 - `SetProperty`, `SetPropertyStr` and `SetPropertyIndex` take ownership of the value; do not `Free` it afterwards.
 - `Min` was removed; use the built-in `min`.
 - `Option.MaxExecutionTime` is now a `time.Duration` and is enforced (it was an ignored `int`).
+- JavaScript gets no filesystem unless `Option.CWD` is set, and that directory is read-only unless `Option.WritableCWD` is set (the process working directory used to be mounted read-write).
+- Output is discarded unless `Option.Stdout`/`Option.Stderr` are set (it used to go to the process's stdout/stderr).
+- `Pool.Put` closes runtimes that were closed or interrupted instead of reusing them.
 
 | `go test -bench .` (Apple M1 Ultra) | QJS on Wazero | QNGG |
 | --- | --- | --- |
@@ -690,7 +693,8 @@ qngg.JsFuncToGo[F](value)                // JS function to a typed Go function
 
 ```go
 type Option struct {
-    CWD                string          // Host directory mounted as "/" (default: process working directory)
+    CWD                string          // Host directory mounted as "/" (default: no filesystem)
+    WritableCWD        bool            // Allow JavaScript to write under CWD (default: read-only)
     Context            context.Context // Context passed to Go functions called from JS
     CloseOnContextDone bool            // Interrupt running JavaScript when Context is done
     MemoryLimit        int             // QuickJS heap limit in bytes
@@ -698,7 +702,7 @@ type Option struct {
     GCThreshold        int             // GC trigger threshold in bytes
     CacheDir           string          // Directory for compiled module cache files
     DisableBuildCache  bool            // Do not reuse in-memory compiled modules
-    Stdout, Stderr     io.Writer       // Output of console.log and friends
+    Stdout, Stderr     io.Writer       // Output of console.log and friends (default: discarded)
     QuickJSWasmBytes   []byte          // Custom QuickJS wasm build
     ProxyFunction      any             // Custom JsFunctionProxy
     StartFunctionName  string          // Wasm start function to call on creation
@@ -739,7 +743,8 @@ system temp directory).
 **Security**
 
 - **Sandboxed execution**: QuickJS runs inside WebAssembly linear memory, so JavaScript cannot touch Go memory.
-- **Filesystem**: only `CWD` is visible, mounted read-write as `/`. Scripts can read and write files there through `qjs:std`, so point `CWD` at a dedicated directory when running untrusted code.
+- **Filesystem**: none by default. With `CWD` set, only that directory is visible, as `/`, and it is read-only unless `WritableCWD` is set. WASI enforces this, so `qjs:std`/`qjs:os` cannot reach anything else.
+- **Environment and output**: no environment variables are passed, and output is discarded unless `Stdout`/`Stderr` are set.
 - **No network access**: no sockets are exposed to JavaScript.
 - **Interruptible**: `MaxExecutionTime` and `CloseOnContextDone` stop runaway scripts.
 - **No CGO**: the Wasmtime native library is loaded at runtime through purego.

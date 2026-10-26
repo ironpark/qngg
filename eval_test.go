@@ -129,7 +129,7 @@ func testLoadOperations(t *testing.T) {
 func runEvalTests(t *testing.T, tests []evalTest, basePath string) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(qngg.New())
+			rt := must(qngg.New(qngg.Option{CWD: "."}))
 			defer rt.Close()
 
 			if test.prepare != nil {
@@ -180,7 +180,7 @@ func runEvalTests(t *testing.T, tests []evalTest, basePath string) {
 
 func runCompileTests(t *testing.T, tests []evalTest, basePath string) {
 	t.Run("compile_error", func(t *testing.T) {
-		rt := must(qngg.New())
+		rt := must(qngg.New(qngg.Option{CWD: "."}))
 		defer rt.Close()
 
 		_, err := rt.Compile("compile_error.js", qngg.Code("const a = ("))
@@ -189,7 +189,7 @@ func runCompileTests(t *testing.T, tests []evalTest, basePath string) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(qngg.New())
+			rt := must(qngg.New(qngg.Option{CWD: "."}))
 			defer rt.Close()
 
 			testFile := path.Join(basePath, test.file)
@@ -223,7 +223,7 @@ func runCompileTests(t *testing.T, tests []evalTest, basePath string) {
 func runLoadTests(t *testing.T, tests []evalTest, basePath string) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(qngg.New())
+			rt := must(qngg.New(qngg.Option{CWD: "."}))
 			defer rt.Close()
 
 			if test.prepare != nil {

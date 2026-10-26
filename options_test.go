@@ -1,6 +1,7 @@
 package qngg_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -23,47 +24,64 @@ func TestEvalOptions(t *testing.T) {
 	})
 
 	t.Run("CWDOption", func(t *testing.T) {
-		// Store original working directory to restore later
-		originalCwd, err := os.Getwd()
-		require.NoError(t, err)
+		readFile := `(() => {
+			const f = std.open("/hello.txt", "r");
+			if (!f) return "no access";
+			const s = f.readAsString(); f.close(); return s;
+		})()`
+		writeFile := `(() => {
+			const f = std.open("/new.txt", "w");
+			if (!f) return "no access";
+			f.puts("written"); f.close(); return "ok";
+		})()`
 
-		t.Cleanup(func() {
-			_ = os.Chdir(originalCwd)
+		eval := func(t *testing.T, option qngg.Option, code string) string {
+			t.Helper()
+			rt := must(qngg.New(option))
+			defer rt.Close()
+			val, err := rt.Eval("test.js", qngg.Code(code))
+			require.NoError(t, err)
+			defer val.Free()
+			return val.String()
+		}
+
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("hello"), 0o644))
+
+		t.Run("no_filesystem_by_default", func(t *testing.T) {
+			assert.Equal(t, "no access", eval(t, qngg.Option{}, readFile))
 		})
 
-		t.Run("default_cwd_from_os_getwd", func(t *testing.T) {
-			runtime, err := qngg.New()
-			require.NoError(t, err)
-			runtime.Close()
+		t.Run("read_only_by_default", func(t *testing.T) {
+			assert.Equal(t, "hello", eval(t, qngg.Option{CWD: dir}, readFile))
+			assert.Equal(t, "no access", eval(t, qngg.Option{CWD: dir}, writeFile))
+			assert.NoFileExists(t, filepath.Join(dir, "new.txt"))
 		})
 
-		t.Run("explicit_cwd_provided", func(t *testing.T) {
-			tempDir := t.TempDir()
-			runtime, err := qngg.New(qngg.Option{CWD: tempDir})
-			require.NoError(t, err)
-			runtime.Close()
+		t.Run("writable", func(t *testing.T) {
+			assert.Equal(t, "ok", eval(t, qngg.Option{CWD: dir, WritableCWD: true}, writeFile))
+			assert.FileExists(t, filepath.Join(dir, "new.txt"))
 		})
 
-		t.Run("deleted_working_directory", func(t *testing.T) {
-			// Create a temporary directory and change to it
-			tempDir := t.TempDir()
-			subDir := filepath.Join(tempDir, "workdir")
-			err := os.Mkdir(subDir, 0755)
-			require.NoError(t, err, "Failed to create subdirectory")
-
-			// Change to the subdirectory
-			err = os.Chdir(subDir)
-			require.NoError(t, err)
-
-			// Remove the current working directory while we're in it
-			err = os.RemoveAll(subDir)
-			require.NoError(t, err)
-
-			_, err = qngg.New()
-			_ = os.Chdir(originalCwd)
+		t.Run("missing_directory", func(t *testing.T) {
+			_, err := qngg.New(qngg.Option{CWD: filepath.Join(dir, "missing")})
 			assert.Error(t, err)
-			assert.Contains(t, err.Error(), "failed to get runtime options")
 		})
+	})
+
+	t.Run("StdoutOption", func(t *testing.T) {
+		var out bytes.Buffer
+		rt := must(qngg.New(qngg.Option{Stdout: &out}))
+		defer rt.Close()
+		val := must(rt.Eval("test.js", qngg.Code(`console.log("hi")`)))
+		val.Free()
+		assert.Equal(t, "hi\n", out.String())
+
+		// Without a writer, output is discarded rather than inherited.
+		quiet := must(qngg.New())
+		defer quiet.Close()
+		val = must(quiet.Eval("test.js", qngg.Code(`console.log("hi"); 1`)))
+		val.Free()
 	})
 
 	t.Run("CodeOption", func(t *testing.T) {

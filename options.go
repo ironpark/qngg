@@ -2,9 +2,7 @@ package qngg
 
 import (
 	"context"
-	"fmt"
 	"io"
-	"os"
 	"time"
 )
 
@@ -32,7 +30,13 @@ const (
 )
 
 type Option struct {
-	CWD               string
+	// CWD is a host directory exposed to JavaScript as "/", used for module
+	// loading and the qjs:std/qjs:os file APIs. Empty means JavaScript has no
+	// filesystem access at all. The directory is read-only unless WritableCWD
+	// is set.
+	CWD string
+	// WritableCWD lets JavaScript create, modify and delete files under CWD.
+	WritableCWD       bool
 	StartFunctionName string
 	Context           context.Context
 	// CloseOnContextDone interrupts running JavaScript when Context is done.
@@ -51,8 +55,10 @@ type Option struct {
 	GCThreshold      int
 	QuickJSWasmBytes []byte
 	ProxyFunction    any
-	Stdout           io.Writer
-	Stderr           io.Writer
+	// Stdout and Stderr receive console.log/console.error and std.out/std.err
+	// output. Nil discards it.
+	Stdout io.Writer
+	Stderr io.Writer
 }
 
 // EvalOption configures JavaScript evaluation behavior in QuickJS context.
@@ -225,17 +231,11 @@ func (o *EvalOption) Free() {
 	}
 }
 
-func getRuntimeOption(registry *ProxyRegistry, options ...Option) (option Option, err error) {
+func getRuntimeOption(registry *ProxyRegistry, options ...Option) (option Option) {
 	if len(options) == 0 {
 		option = Option{}
 	} else {
 		option = options[0]
-	}
-
-	if option.CWD == "" {
-		if option.CWD, err = os.Getwd(); err != nil {
-			return Option{}, fmt.Errorf("cannot get current working directory: %w", err)
-		}
 	}
 
 	if option.Context == nil {
@@ -246,13 +246,5 @@ func getRuntimeOption(registry *ProxyRegistry, options ...Option) (option Option
 		option.ProxyFunction = createFuncProxyWithRegistry(registry)
 	}
 
-	if option.Stdout == nil {
-		option.Stdout = os.Stdout
-	}
-
-	if option.Stderr == nil {
-		option.Stderr = os.Stderr
-	}
-
-	return option, nil
+	return option
 }

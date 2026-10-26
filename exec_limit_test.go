@@ -68,3 +68,31 @@ func TestCloseAfterContextCanceled(t *testing.T) {
 
 	assert.NotPanics(t, rt.Close)
 }
+
+func TestUseAfterClose(t *testing.T) {
+	rt := must(qngg.New())
+	val := must(rt.Eval("test.js", qngg.Code("({a: 1})")))
+	rt.Close()
+	rt.Close() // idempotent
+
+	_, err := rt.Eval("test.js", qngg.Code("1"))
+	assert.ErrorIs(t, err, qngg.ErrRuntimeClosed)
+	assert.NotPanics(t, val.Free, "values freed after Close go with the runtime")
+}
+
+func TestPoolDiscardsInterruptedRuntimes(t *testing.T) {
+	pool := qngg.NewPool(1, qngg.Option{MaxExecutionTime: 50 * time.Millisecond})
+
+	rt := must(pool.Get())
+	_, err := rt.Eval("loop.js", qngg.Code("for (;;) {}"))
+	require.ErrorIs(t, err, qngg.ErrExecutionTimeout)
+	pool.Put(rt) // must not panic, and must not be handed out again
+
+	next := must(pool.Get())
+	defer pool.Put(next)
+	assert.NotSame(t, rt, next)
+	val, err := next.Eval("test.js", qngg.Code("1 + 1"))
+	require.NoError(t, err)
+	defer val.Free()
+	assert.Equal(t, int32(2), val.Int32())
+}

@@ -42,6 +42,7 @@ type Runtime struct {
 	handle    *Handle
 	context   *Context
 	registry  *ProxyRegistry
+	closed    bool
 }
 
 // New creates a QuickJS runtime with optional configuration.
@@ -61,10 +62,7 @@ func New(options ...Option) (runtime *Runtime, err error) {
 
 	proxyRegistry := NewProxyRegistry()
 
-	option, err := getRuntimeOption(proxyRegistry, options...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get runtime options: %w", err)
-	}
+	option := getRuntimeOption(proxyRegistry, options...)
 
 	proxy, ok := option.ProxyFunction.(JsFunctionProxy)
 	if !ok {
@@ -137,35 +135,29 @@ func (r *Runtime) String() string {
 }
 
 // Close cleanly shuts down the runtime and frees all associated resources.
+// Calling Close more than once is a no-op; using the runtime or its values
+// afterwards fails with ErrRuntimeClosed.
 func (r *Runtime) Close() {
-	if r == nil {
+	if r == nil || r.closed {
 		return
 	}
 
 	// Free QJS runtime handle. An interrupted runtime cannot run wasm anymore
 	// and its QuickJS state may be inconsistent; releasing the store below
 	// frees its memory as a whole.
-	if r.handle != nil {
-		if r.interruptErr() == nil {
-			r.FreeQJSRuntime()
-		}
-
-		r.handle = nil
+	if r.handle != nil && r.interruptErr() == nil {
+		r.FreeQJSRuntime()
 	}
 
+	r.closed = true
+	r.handle = nil
 	r.release()
-
-	// Clear references
-	if r.context != nil {
-		r.context = nil
-	}
 
 	if r.registry != nil {
 		r.registry.Clear()
 		r.registry = nil
 	}
 
-	// Clear function references
 	r.malloc = nil
 	r.free = nil
 	r.mem = nil
@@ -211,15 +203,25 @@ func (r *Runtime) Malloc(size uint64) uint64 {
 	return ptr
 }
 
-// FreeHandle releases memory allocated in WebAssembly linear memory.
+// FreeHandle releases memory allocated in WebAssembly linear memory. It is a
+// no-op once the runtime is closed or interrupted: the memory goes with it.
 func (r *Runtime) FreeHandle(ptr uint64) {
+	if r.interruptErr() != nil {
+		return
+	}
+
 	if _, err := r.invoke(r.free, ptr); err != nil {
 		panic(fmt.Errorf("failed to free memory: %w", err))
 	}
 }
 
-// FreeJsValue frees a JavaScript value in the QuickJS runtime.
+// FreeJsValue frees a JavaScript value in the QuickJS runtime. Like
+// FreeHandle, it is a no-op once the runtime is closed or interrupted.
 func (r *Runtime) FreeJsValue(val uint64) {
+	if r.interruptErr() != nil {
+		return
+	}
+
 	r.Call("QJS_FreeValue", r.context.Raw(), val)
 }
 
@@ -347,9 +349,14 @@ func (r *Runtime) invoke(f *wasmFunc, args ...uint64) (uint64, error) {
 	return result, nil
 }
 
-// interruptErr reports why the runtime can no longer run wasm: its context
-// is done or a call exceeded MaxExecutionTime. It returns nil otherwise.
+// interruptErr reports why the runtime can no longer run wasm: it is closed,
+// its context is done or a call exceeded MaxExecutionTime. It returns nil
+// otherwise.
 func (r *Runtime) interruptErr() error {
+	if r.closed {
+		return ErrRuntimeClosed
+	}
+
 	if r.limit != nil && r.limit.timedOut {
 		return ErrExecutionTimeout
 	}
@@ -442,9 +449,16 @@ func (p *Pool) Get() (*Runtime, error) {
 }
 
 // Put returns the runtime back to the pool for reuse.
-// If the pool is full, the runtime is closed to prevent resource leaks.
+// If the pool is full, or the runtime was closed or interrupted and cannot be
+// reused, the runtime is closed instead.
 func (p *Pool) Put(rt *Runtime) {
 	if rt == nil {
+		return
+	}
+
+	if rt.interruptErr() != nil {
+		rt.Close()
+
 		return
 	}
 
