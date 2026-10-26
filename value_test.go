@@ -435,7 +435,6 @@ func TestValuePropertyOperations(t *testing.T) {
 		defer obj.Free()
 
 		val := ctx.NewString("value")
-		defer val.Free()
 
 		obj.SetPropertyStr("prop", val)
 
@@ -453,7 +452,6 @@ func TestValuePropertyOperations(t *testing.T) {
 		defer key.Free()
 
 		val := ctx.NewString("value")
-		defer val.Free()
 
 		obj.SetProperty(key, val)
 
@@ -468,7 +466,6 @@ func TestValuePropertyOperations(t *testing.T) {
 		defer arr.Free()
 
 		val := ctx.NewString("value")
-		defer val.Free()
 
 		arr.SetPropertyIndex(0, val)
 
@@ -483,7 +480,6 @@ func TestValuePropertyOperations(t *testing.T) {
 		defer obj.Free()
 
 		val := ctx.NewString("value")
-		defer val.Free()
 
 		obj.SetPropertyStr("prop", val)
 
@@ -504,7 +500,6 @@ func TestValuePropertyOperations(t *testing.T) {
 		defer obj.Free()
 
 		val := ctx.NewString("value")
-		defer val.Free()
 
 		obj.SetPropertyStr("prop", val)
 		assert.True(t, obj.HasProperty("prop"))
@@ -838,4 +833,27 @@ func TestValuePromiseOperations(t *testing.T) {
 		assert.Error(t, promise.Resolve())
 		assert.Error(t, promise.Reject())
 	})
+}
+
+func TestValueStringConversionsDoNotLeak(t *testing.T) {
+	rt, ctx := setupTestContext(t)
+	defer rt.Close()
+
+	str := must(ctx.Eval("test.js", qjs.Code(`"x".repeat(4096)`)))
+	defer str.Free()
+	obj := must(ctx.Eval("test.js", qjs.Code(`({ a: "x".repeat(4096) })`)))
+	defer obj.Free()
+	buf := must(ctx.Eval("test.js", qjs.Code(`new ArrayBuffer(4096)`)))
+	defer buf.Free()
+
+	before := rt.Mem().Size()
+	for range 2000 {
+		_ = str.String()
+		_, _ = obj.JSONStringify()
+		_ = buf.ToByteArray()
+	}
+
+	// Each iteration copies ~12KiB out of wasm; leaking it would grow memory
+	// by about 24MiB.
+	assert.Less(t, rt.Mem().Size()-before, uint32(1<<20))
 }

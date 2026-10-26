@@ -169,7 +169,6 @@ func TestParameters(t *testing.T) {
 			return len(y) + 1
 		})
 		assert.NoError(t, err)
-		defer goFunc.Free()
 		ctx.Global().SetPropertyStr("testFunc", goFunc)
 		_, err = ctx.Eval("test.js", qjs.Code(`testFunc("invalid", 2)`))
 		require.Error(t, err)

@@ -193,6 +193,11 @@ func (h *Handle) String() string {
 		return ""
 	}
 
+	// The C side hands over a malloc'd copy of the string.
+	if addr, _ := h.runtime.mem.UnpackPtr(h.raw); addr != 0 {
+		defer h.runtime.FreeHandle(uint64(addr))
+	}
+
 	return h.runtime.mem.StringFromPackedPtr(h.raw)
 }
 

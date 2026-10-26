@@ -8,17 +8,6 @@ import (
 	"strings"
 )
 
-// Min returns the smaller of a and b.
-//
-// Deprecated: use the built-in min.
-func Min(a, b int) int {
-	if a < b {
-		return a
-	}
-
-	return b
-}
-
 func IsImplementError(rtype reflect.Type) bool {
 	return rtype.Implements(reflect.TypeFor[error]())
 }

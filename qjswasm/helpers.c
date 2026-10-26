@@ -271,7 +271,7 @@ bool QJS_IsException(JSValue val)
 
 bool QJS_IsError(JSContext *ctx, JSValue val)
 {
-    return JS_IsError(ctx, val);
+    return JS_IsError(val);
 }
 
 bool QJS_IsUninitialized(JSValue val)
@@ -347,30 +347,54 @@ bool QJS_IsArray(JSValue v)
 }
 
 /**
- * Converts a JSValue to a C string and returns a packed uint64_t value
- * containing both the string's memory address (high 32 bits) and length (low 32 bits).
- * NOTE: The caller must free the string memory after use with JS_FreeCString().
- * NOTE: This assumes a 32-bit memory model (as in WebAssembly 1.0).
+ * Packs a malloc'd buffer into a malloc'd uint64_t holding its address (high
+ * 32 bits) and length (low 32 bits). The caller frees both. On allocation
+ * failure `data` is freed and NULL is returned.
  */
-uint64_t *QJS_ToCString(JSContext *ctx, JSValueConst val)
+static uint64_t *pack_buffer(void *data, size_t len)
 {
-    const char *str = JS_ToCString(ctx, val);
+    uint64_t *result = malloc(sizeof(uint64_t));
+    if (!result)
+    {
+        free(data);
+        return NULL;
+    }
+
+    *result = ((uint64_t)(uintptr_t)data << 32) | (uint32_t)len;
+    return result;
+}
+
+/**
+ * Copies a string obtained from JS_ToCString and friends into malloc'd memory,
+ * releases the original and packs the copy with pack_buffer.
+ */
+static uint64_t *pack_cstring(JSContext *ctx, const char *str)
+{
     if (!str)
     {
         return NULL;
     }
 
     size_t len = strlen(str);
-    uint64_t *result = malloc(sizeof(uint64_t));
-    if (!result)
+    char *copy = malloc(len + 1);
+    if (copy)
     {
-        JS_FreeCString(ctx, str);
-        return NULL; // Allocation failure
+        memcpy(copy, str, len + 1);
     }
+    JS_FreeCString(ctx, str);
 
-    // Store the address of the string in the high 32 bits and the length in the low 32 bits
-    *result = ((uint64_t)(uintptr_t)str << 32) | (uint32_t)len;
-    return result;
+    return copy ? pack_buffer(copy, len) : NULL;
+}
+
+/**
+ * Converts a JSValue to a C string and returns a packed uint64_t value
+ * containing both the string's memory address (high 32 bits) and length (low 32 bits).
+ * NOTE: The caller must free both the returned pointer and the string.
+ * NOTE: This assumes a 32-bit memory model (as in WebAssembly 1.0).
+ */
+uint64_t *QJS_ToCString(JSContext *ctx, JSValueConst val)
+{
+    return pack_cstring(ctx, JS_ToCString(ctx, val));
 }
 
 int64_t QJS_ToInt64(JSContext *ctx, JSValue val)
@@ -494,26 +518,11 @@ JSValue QJS_NewFloat64(JSContext *ctx, uint64_t bits)
 /**
  * Converts a JSAtom to a C string and returns a packed uint64_t value
  * containing both the string's memory address (high 32 bits) and length (low 32 bits).
- * NOTE: The caller must free the string memory after use.
+ * NOTE: The caller must free both the returned pointer and the string.
  */
 uint64_t *QJS_AtomToCString(JSContext *ctx, JSAtom atom)
 {
-    const char *str = JS_AtomToCString(ctx, atom);
-    if (!str)
-    {
-        return NULL;
-    }
-
-    size_t len = strlen(str);
-    uint64_t *result = malloc(sizeof(uint64_t));
-    if (!result)
-    {
-        JS_FreeCString(ctx, str);
-        return NULL; // Allocation failure
-    }
-    // Store the address of the string in the high 32 bits and the length in the low 32 bits
-    *result = ((uint64_t)(uintptr_t)str << 32) | (uint32_t)len;
-    return result;
+    return pack_cstring(ctx, JS_AtomToCString(ctx, atom));
 }
 
 // returns a packed uint64_t value containing both the string's memory address (high 32 bits) and length (low 32 bits).
@@ -563,48 +572,29 @@ uint64_t *QJS_GetArrayBuffer(JSContext *ctx, JSValue obj)
 {
     size_t len = 0;
     uint8_t *arr = JS_GetArrayBuffer(ctx, &len, obj);
-
     if (!arr)
     {
         return NULL;
     }
 
-    uint64_t *result = malloc(sizeof(uint64_t));
-    if (!result)
+    // The buffer belongs to the ArrayBuffer; hand out a copy the caller owns.
+    uint8_t *copy = malloc(len ? len : 1);
+    if (!copy)
     {
-        return NULL; // Allocation failure
+        return NULL;
     }
+    memcpy(copy, arr, len);
 
-    // Store the address of the arr in the high 32 bits and the length in the low 32 bits
-    *result = ((uint64_t)(uintptr_t)arr << 32) | (uint32_t)len;
-    return result;
+    return pack_buffer(copy, len);
 }
 
 uint64_t *QJS_JSONStringify(JSContext *ctx, JSValue v)
 {
-    JSValue ref = JS_JSONStringify(ctx, v, JS_NewNull(), JS_NewNull());
-    const char *ptr = JS_ToCString(ctx, ref);
-
-    if (!ptr)
-    {
-        JS_FreeValue(ctx, ref);
-        return NULL;
-    }
-
-    size_t len = strlen(ptr);
-    uint64_t *result = malloc(sizeof(uint64_t));
-    if (!result)
-    {
-        JS_FreeValue(ctx, ref);
-        JS_FreeCString(ctx, ptr);
-        return NULL; // Allocation failure
-    }
-
-    // Store the address of the string in the high 32 bits and the length in the low 32 bits
-    *result = ((uint64_t)(uintptr_t)ptr << 32) | (uint32_t)len;
+    JSValue ref = JS_JSONStringify(ctx, v, JS_NULL, JS_NULL);
+    const char *str = JS_ToCString(ctx, ref);
     JS_FreeValue(ctx, ref);
-    JS_FreeCString(ctx, ptr);
-    return result;
+
+    return pack_cstring(ctx, str);
 }
 
 int QJS_SetPropertyUint32(JSContext *ctx, JSValue this_obj, uint64_t idx, JSValue val)

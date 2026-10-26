@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 
 	"github.com/fastschema/qjs/internal/wasmtime"
 )
@@ -115,6 +116,11 @@ func (r *Runtime) FreeQJSRuntime() {
 			panic(fmt.Errorf("failed to free QJS runtime: %w", err))
 		}
 	}()
+
+	// Freeing twice is undefined behavior inside QuickJS, so refuse it here.
+	if !atomic.CompareAndSwapInt32(&r.handle.freed, 0, 1) {
+		panic(errors.New("already freed"))
+	}
 
 	r.Call("QJS_Free", r.handle.raw)
 }

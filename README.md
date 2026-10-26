@@ -803,12 +803,13 @@ defer result.Free()
 git clone --recursive https://github.com/fastschema/qjs.git
 cd qjs
 
-# Install WASI SDK (Linux/macOS)
-curl -L https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-20/wasi-sdk-20.0-linux.tar.gz | tar xz
-sudo mv wasi-sdk-20.0 /opt/wasi-sdk
+# Install WASI SDK 34 and binaryen (pick the archives for your platform)
+curl -L https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz | tar xz
+sudo mv wasi-sdk-34.0-x86_64-linux /opt/wasi-sdk
+curl -L https://github.com/WebAssembly/binaryen/releases/download/version_133/binaryen-version_133-x86_64-linux.tar.gz | tar xz
 
-# Build WebAssembly module
-make build
+# Build WebAssembly module (QuickJS-NG v0.17.0)
+make build WASM_OPT=$PWD/binaryen-version_133/bin/wasm-opt
 
 # Run tests
 go test ./...

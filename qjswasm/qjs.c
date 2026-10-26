@@ -44,7 +44,7 @@ QJSRuntime *New_QJS(
   /* initialize the standard objects */
   js_std_init_handlers(runtime);
   /* loader for ES6 modules */
-  JS_SetModuleLoaderFunc(runtime, NULL, QJS_ModuleLoader, NULL);
+  JS_SetModuleLoaderFunc2(runtime, NULL, QJS_ModuleLoader, js_module_check_attributes, NULL);
   /* exit on unhandled promise rejections */
   // JS_SetHostPromiseRejectionTracker(runtime, js_std_promise_rejection_tracker, NULL);
 

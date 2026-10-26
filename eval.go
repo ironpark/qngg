@@ -44,15 +44,10 @@ func compile(c *Context, file string, flags ...EvalOptionFunc) (_ []byte, err er
 		return nil, err
 	}
 
-	defer result.Free()
+	defer result.handle.Free()
 
-	bytecodeBytes := result.Bytes()
-
-	// Bytecode: Create independent copy to avoid memory corruption
-	bytes := make([]byte, len(bytecodeBytes))
-	copy(bytes, bytecodeBytes)
-
-	return bytes, nil
+	// Bytes returns a copy and frees the C buffer.
+	return result.Bytes(), nil
 }
 
 func normalizeJsValue(c *Context, value *Value) (*Value, error) {

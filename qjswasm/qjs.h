@@ -93,7 +93,8 @@ QJSRuntime *New_QJS(
     size_t max_execution_time,
     size_t gc_threshold);
 void QJS_UpdateStackTop(QJSRuntime *qjs);
-JSModuleDef *QJS_ModuleLoader(JSContext *ctx, const char *module_name, void *opaque);
+JSModuleDef *QJS_ModuleLoader(JSContext *ctx, const char *module_name, void *opaque,
+                              JSValueConst attributes);
 JSValue QJS_Load(JSContext *ctx, QJSEvalOptions opts);
 JSValue QJS_Eval(JSContext *ctx, QJSEvalOptions opts);
 unsigned char *QJS_Compile(JSContext *c, QJSEvalOptions opts, size_t *outSize);

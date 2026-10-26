@@ -650,7 +650,6 @@ func TestChannelToJSObjectValue(t *testing.T) {
 		chRValue := reflect.ValueOf(ch)
 		chValue, err := qjs.ChannelToJSObjectValue(ctx, chRType, chRValue)
 		require.NoError(t, err)
-		defer chValue.Free()
 
 		assert.True(t, chValue.IsObject())
 		ctx.Global().SetPropertyStr("ch", chValue)
@@ -808,7 +807,6 @@ func TestGoChannelToJs(t *testing.T) {
 		chType := reflect.TypeOf(goChan)
 		chValue := reflect.ValueOf(goChan)
 		jsChan := must(qjs.ChannelToJSObjectValue(ctx, chType, chValue))
-		defer jsChan.Free()
 		assert.True(t, jsChan.IsObject())
 		ctx.Global().SetPropertyStr("goChan", jsChan)
 
@@ -843,7 +841,6 @@ func TestGoChannelToJs(t *testing.T) {
 		chType := reflect.TypeOf(bufferedChan)
 		chValue := reflect.ValueOf(bufferedChan)
 		jsChan := must(qjs.ChannelToJSObjectValue(ctx, chType, chValue))
-		defer jsChan.Free()
 		ctx.Global().SetPropertyStr("bufferedChan", jsChan)
 
 		bufferedChan <- 100
@@ -895,7 +892,6 @@ func TestGoChannelToJs(t *testing.T) {
 		chType := reflect.TypeOf(sendOnlyChan)
 		chValue := reflect.ValueOf(sendOnlyChan)
 		jsChan := must(qjs.ChannelToJSObjectValue(ctx, chType, chValue))
-		defer jsChan.Free()
 		assert.True(t, jsChan.IsObject())
 		ctx.Global().SetPropertyStr("sendOnlyChan", jsChan)
 
@@ -918,7 +914,6 @@ func TestGoChannelToJs(t *testing.T) {
 		chType := reflect.TypeOf(receiveOnlyChan)
 		chValue := reflect.ValueOf(receiveOnlyChan)
 		jsChan := must(qjs.ChannelToJSObjectValue(ctx, chType, chValue))
-		defer jsChan.Free()
 		assert.True(t, jsChan.IsObject())
 		ctx.Global().SetPropertyStr("receiveOnlyChan", jsChan)
 

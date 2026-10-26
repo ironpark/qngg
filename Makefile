@@ -1,41 +1,33 @@
-.PHONY: build build-debug clean
+.PHONY: build build-debug clean test lint
+
+# Toolchain used to build qjs.wasm: wasi-sdk 34 and binaryen 133.
+WASI_SDK ?= /opt/wasi-sdk
+WASM_OPT ?= wasm-opt
+BUILD_DIR := qjswasm/quickjs/build
+
+CMAKE_FLAGS := \
+		-DQJS_BUILD_LIBC=ON \
+		-DQJS_BUILD_CLI_WITH_MIMALLOC=OFF \
+		-DWASI_SDK_PREFIX=$(WASI_SDK) \
+		-DCMAKE_TOOLCHAIN_FILE=$(WASI_SDK)/share/cmake/wasi-sdk-p1.cmake \
+		-DCMAKE_PROJECT_INCLUDE=$(CURDIR)/qjswasm/qjswasm.cmake
+
+define build_wasm
+	@echo "Configuring and building qjs..."
+	rm -rf $(BUILD_DIR)
+	cmake -S qjswasm/quickjs -B $(BUILD_DIR) $(CMAKE_FLAGS) $(1)
+	cmake --build $(BUILD_DIR) --target qjswasm --parallel
+	$(WASM_OPT) -O3 --strip-dwarf --strip-producers $(BUILD_DIR)/qjswasm -o qjs.wasm
+endef
 
 build:
-		@echo "Configuring and building qjs..."
-		cd qjswasm/quickjs && \
-		rm -rf build && \
-		cmake -B build \
-				-DQJS_BUILD_LIBC=ON \
-				-DQJS_BUILD_CLI_WITH_MIMALLOC=OFF \
-				-DCMAKE_TOOLCHAIN_FILE=/opt/wasi-sdk/share/cmake/wasi-sdk.cmake \
-				-DCMAKE_PROJECT_INCLUDE=../qjswasm.cmake
-		@echo "Building qjs target..."
-		make -C qjswasm/quickjs/build qjswasm -j$(nproc)
-		@echo "Copying build/qjswasm to top-level as qjs.wasm..."
-		cp qjswasm/quickjs/build/qjswasm qjs.wasm
-
-		wasm-opt -O3 qjs.wasm -o qjs.wasm
+	$(call build_wasm,)
 
 build-debug:
-		@echo "Configuring and building qjs with runtime address debug..."
-		cd qjswasm/quickjs && \
-		rm -rf build && \
-		cmake -B build \
-				-DQJS_BUILD_LIBC=ON \
-				-DQJS_BUILD_CLI_WITH_MIMALLOC=OFF \
-				-DQJS_DEBUG_RUNTIME_ADDRESS=ON \
-				-DCMAKE_TOOLCHAIN_FILE=/opt/wasi-sdk/share/cmake/wasi-sdk.cmake \
-				-DCMAKE_PROJECT_INCLUDE=../qjswasm.cmake
-		@echo "Building qjs target..."
-		make -C qjswasm/quickjs/build qjswasm -j$(nproc)
-		@echo "Copying build/qjswasm to top-level as qjs.wasm..."
-		cp qjswasm/quickjs/build/qjswasm qjs.wasm
-
-		wasm-opt -O3 qjs.wasm -o qjs.wasm
+	$(call build_wasm,-DQJS_DEBUG_RUNTIME_ADDRESS=ON)
 
 clean:
-	@echo "Cleaning build directory..."
-	cd quickjs && rm -rf build
+	rm -rf $(BUILD_DIR)
 
 test:
 	./test.sh

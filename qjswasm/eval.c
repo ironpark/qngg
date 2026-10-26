@@ -202,7 +202,8 @@ static JSModuleDef *js_module_loader_json(JSContext *ctx, const char *module_nam
 }
 
 /* Module loader with support for appending common suffixes and JSON modules */
-JSModuleDef *QJS_ModuleLoader(JSContext *ctx, const char *module_name, void *opaque)
+JSModuleDef *QJS_ModuleLoader(JSContext *ctx, const char *module_name, void *opaque,
+                              JSValueConst attributes)
 {
     module_name = detect_entry_point((char *)module_name);
     if (!module_name)
@@ -214,7 +215,7 @@ JSModuleDef *QJS_ModuleLoader(JSContext *ctx, const char *module_name, void *opa
         return js_module_loader_json(ctx, module_name);
     }
 
-    JSModuleDef *mod = js_module_loader(ctx, module_name, opaque);
+    JSModuleDef *mod = js_module_loader(ctx, module_name, opaque, attributes);
     return mod;
 }
 

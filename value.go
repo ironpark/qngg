@@ -276,6 +276,8 @@ func (v *Value) GetProperty(name *Value) *Value {
 	return v.Call("JS_GetProperty", v.Ctx(), v.Raw(), atom.Raw())
 }
 
+// SetProperty sets the value of the property with the given name.
+// The property takes ownership of val; do not free val afterwards.
 func (v *Value) SetProperty(name, val *Value) {
 	atom := v.Call("JS_ValueToAtom", v.Ctx(), name.Raw())
 	v.Call("JS_SetProperty", v.Ctx(), v.Raw(), atom.Raw(), val.Raw())
@@ -290,6 +292,7 @@ func (v *Value) GetPropertyStr(name string) *Value {
 }
 
 // SetPropertyStr sets the value of the property with the given name.
+// The property takes ownership of val; do not free val afterwards.
 func (v *Value) SetPropertyStr(name string, val *Value) {
 	if val != nil {
 		nameVal := v.context.NewStringHandle(name)
@@ -357,6 +360,7 @@ func (v *Value) InvokeJS(fname string, args ...*Value) (*Value, error) {
 }
 
 // SetPropertyIndex sets the value of the property with the given index.
+// The property takes ownership of val; do not free val afterwards.
 func (v *Value) SetPropertyIndex(index int64, val *Value) {
 	v.Call("JS_SetPropertyUint32", v.Ctx(), v.Raw(), uint64(index), val.Raw())
 }
@@ -381,10 +385,8 @@ func (v *Value) ByteLen() int64 {
 
 // ToByteArray returns the byte array of the ArrayBuffer.
 func (v *Value) ToByteArray() []byte {
-	v2 := v.Clone()
-
-	result := v2.context.Call("QJS_GetArrayBuffer", v2.context.Raw(), v2.Raw())
-	defer result.Free()
+	result := v.Call("QJS_GetArrayBuffer", v.Ctx(), v.Raw())
+	defer result.handle.Free()
 
 	return result.handle.Bytes()
 }
@@ -606,18 +608,10 @@ func (v *Value) JSONStringify() (_ string, err error) {
 		}
 	}()
 
-	// QJS_JSONStringify in qjs.wasm returns its string after freeing it, so
-	// call the JS function and read the result through QJS_ToCString.
-	jsonObj := v.context.Global().GetPropertyStr("JSON")
-	defer jsonObj.Free()
+	result := v.Call("QJS_JSONStringify", v.Ctx(), v.Raw())
+	defer result.handle.Free()
 
-	result, err := jsonObj.InvokeJS("stringify", v)
-	if err != nil {
-		return "", fmt.Errorf("failed to stringify JS value: %w", err)
-	}
-	defer result.Free()
-
-	return result.String(), nil
+	return result.handle.String(), nil
 }
 
 // DateTime returns the date value of the value.

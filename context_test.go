@@ -44,7 +44,6 @@ func TestContextValueCreation(t *testing.T) {
 			return num * 2
 		}
 		jsFuncWithContext := must(qjs.ToJsValue(ctx, goFuncWithContext))
-		defer jsFuncWithContext.Free()
 		ctx.Global().SetPropertyStr("funcWithContext", jsFuncWithContext)
 
 		ctx.SetFunc("$context", func(this *qjs.This) (*qjs.Value, error) {
