@@ -550,15 +550,16 @@ func TestAsyncFunctions(t *testing.T) {
 		})`)))
 		defer result.Free()
 
-		promise := result.GetPropertyStr("promise")
-		assert.True(t, promise.IsPromise())
-
-		// Wait for the goroutine to complete before awaiting the promise
+		// Wait for the goroutine to complete before touching the context again:
+		// a runtime must not be used from multiple goroutines concurrently.
 		select {
 		case <-done:
 		case <-time.After(1 * time.Second):
 			t.Fatal("Timeout waiting for async goroutine to complete")
 		}
+
+		promise := result.GetPropertyStr("promise")
+		assert.True(t, promise.IsPromise())
 
 		a := must(promise.Await())
 		assert.Equal(t, "async result", a.String())
@@ -765,7 +766,7 @@ func TestProxyRegistryOperations(t *testing.T) {
 		registry := qjs.NewProxyRegistry()
 
 		// Register multiple functions
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			registry.Register(func() int { return i })
 		}
 

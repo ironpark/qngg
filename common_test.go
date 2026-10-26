@@ -166,7 +166,7 @@ func TestFieldMapperDoubleCheckLocking(t *testing.T) {
 	const numAttempts = 100
 	for range numAttempts {
 		fm := qjs.NewFieldMapper()
-		structType := reflect.TypeOf(ConcurrencyTestStruct{})
+		structType := reflect.TypeFor[ConcurrencyTestStruct]()
 
 		const numGoroutines = 200 // Very high contention
 		var wg sync.WaitGroup
@@ -216,13 +216,13 @@ func TestJsNumericToGoConverterErrorHandling(t *testing.T) {
 		// Valid numeric types (should not error)
 		{
 			name:       "valid_int_type",
-			targetType: reflect.TypeOf(int(0)),
+			targetType: reflect.TypeFor[int](),
 			floatVal:   42.0,
 			expectErr:  false,
 		},
 		{
 			name:       "valid_float64_type",
-			targetType: reflect.TypeOf(float64(0)),
+			targetType: reflect.TypeFor[float64](),
 			floatVal:   3.14,
 			expectErr:  false,
 		},
@@ -230,7 +230,7 @@ func TestJsNumericToGoConverterErrorHandling(t *testing.T) {
 		// Invalid types that will trigger FloatToInt error
 		{
 			name:       "string_type_error",
-			targetType: reflect.TypeOf(""),
+			targetType: reflect.TypeFor[string](),
 			floatVal:   42.0,
 			expectErr:  true,
 			errMsg:     "unsupported numeric type: string",
@@ -244,14 +244,14 @@ func TestJsNumericToGoConverterErrorHandling(t *testing.T) {
 		},
 		{
 			name:       "slice_type_error",
-			targetType: reflect.TypeOf([]int{}),
+			targetType: reflect.TypeFor[[]int](),
 			floatVal:   42.0,
 			expectErr:  true,
 			errMsg:     "unsupported numeric type: slice",
 		},
 		{
 			name:       "map_type_error",
-			targetType: reflect.TypeOf(map[string]int{}),
+			targetType: reflect.TypeFor[map[string]int](),
 			floatVal:   42.0,
 			expectErr:  true,
 			errMsg:     "unsupported numeric type: map",
@@ -385,14 +385,14 @@ func TestFloatToIntUintptrConversion(t *testing.T) {
 
 func TestStringToNumeric(t *testing.T) {
 	t.Run("empty_string_error", func(t *testing.T) {
-		result, err := qjs.StringToNumeric("", reflect.TypeOf(int(0)))
+		result, err := qjs.StringToNumeric("", reflect.TypeFor[int]())
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "empty string cannot be converted to number")
 	})
 
 	t.Run("pointer_type_error_propagation", func(t *testing.T) {
-		ptrType := reflect.TypeOf((*int)(nil))
+		ptrType := reflect.TypeFor[*int]()
 		result, err := qjs.StringToNumeric("invalid_number", ptrType)
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -400,7 +400,7 @@ func TestStringToNumeric(t *testing.T) {
 	})
 
 	t.Run("unsupported_type_error", func(t *testing.T) {
-		result, err := qjs.StringToNumeric("42", reflect.TypeOf("string"))
+		result, err := qjs.StringToNumeric("42", reflect.TypeFor[string]())
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "cannot convert JS string")
@@ -421,9 +421,9 @@ func TestStringToNumeric(t *testing.T) {
 		}
 
 		targetTypes := []reflect.Type{
-			reflect.TypeOf(int(0)),
-			reflect.TypeOf(float32(0)),
-			reflect.TypeOf(float64(0)),
+			reflect.TypeFor[int](),
+			reflect.TypeFor[float32](),
+			reflect.TypeFor[float64](),
 		}
 
 		for _, invalidStr := range invalidStrings {

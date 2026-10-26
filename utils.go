@@ -16,12 +16,12 @@ func Min(a, b int) int {
 }
 
 func IsImplementError(rtype reflect.Type) bool {
-	return rtype.Implements(reflect.TypeOf((*error)(nil)).Elem())
+	return rtype.Implements(reflect.TypeFor[error]())
 }
 
 // IsImplementsJSONUnmarshaler checks if a type implements json.Unmarshaler.
 func IsImplementsJSONUnmarshaler(t reflect.Type) bool {
-	unmarshalerType := reflect.TypeOf((*json.Unmarshaler)(nil)).Elem()
+	unmarshalerType := reflect.TypeFor[json.Unmarshaler]()
 
 	return t.Implements(unmarshalerType) || reflect.PointerTo(t).Implements(unmarshalerType)
 }
@@ -37,7 +37,7 @@ func GetGoTypeName(input any) string {
 	}
 
 	switch t.Kind() {
-	case reflect.Ptr:
+	case reflect.Pointer:
 		return "*" + GetGoTypeName(t.Elem())
 	case reflect.Slice:
 		return "[]" + GetGoTypeName(t.Elem())
@@ -78,8 +78,8 @@ func CreateGoFuncSignature(fnType reflect.Type) string {
 		}
 
 		returns := []string{}
-		for i := range fnType.NumOut() {
-			returns = append(returns, GetGoTypeName(fnType.Out(i)))
+		for out := range fnType.Outs() {
+			returns = append(returns, GetGoTypeName(out))
 		}
 
 		parts = append(parts, strings.Join(returns, ", "))
@@ -99,7 +99,7 @@ func IsConvertibleToJs(rType reflect.Type, visited map[reflect.Type]bool, detail
 	}
 
 	visited[rType] = true
-	if rType.Kind() == reflect.Ptr {
+	if rType.Kind() == reflect.Pointer {
 		return IsConvertibleToJs(rType.Elem(), visited, detail)
 	}
 
@@ -139,8 +139,8 @@ func IsConvertibleToJs(rType reflect.Type, visited map[reflect.Type]bool, detail
 
 		return nil
 	case reflect.Struct:
-		for i := range rType.NumField() {
-			field := rType.Field(i)
+		for field := range rType.Fields() {
+			field := field
 			jsonTagName, _, _ := strings.Cut(field.Tag.Get("json"), ",")
 
 			if !field.IsExported() || jsonTagName == "-" {
@@ -162,7 +162,7 @@ func IsConvertibleToJs(rType reflect.Type, visited map[reflect.Type]bool, detail
 
 // IsNumericType checks if a reflect.Type represents a numeric type.
 func IsNumericType(t reflect.Type) bool {
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 

@@ -742,8 +742,8 @@ func TestJSValueConversion(t *testing.T) {
 
 		t.Run("EmbeddedStruct", func(t *testing.T) {
 			s := EmbeddedStructTest{
-				EmbeddedStruct: EmbeddedStruct{Name: "embedded", Age: 25},
-				NewField:       "new",
+				Name: "embedded", Age: 25,
+				NewField: "new",
 			}
 			testValueConversion(t, ctx, s, func(result *qjs.Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
@@ -1028,8 +1028,8 @@ func TestJSValueConversion(t *testing.T) {
 			}
 
 			s := StructWithBadEmbedded{
-				BadEmbedded: BadEmbedded{UnsafePtr: unsafe.Pointer(&[]byte{1}[0])},
-				GoodField:   "good",
+				UnsafePtr: unsafe.Pointer(&[]byte{1}[0]),
+				GoodField: "good",
 			}
 
 			testErrorCase(t, ctx, s, "unsafe.Pointer")

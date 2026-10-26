@@ -230,12 +230,12 @@ func (m *Mem) ReadString(addr, maxlen uint32) (string, error) {
 	}
 
 	// Find null terminator
-	nullIndex := bytes.IndexByte(buf, StringTerminator)
-	if nullIndex < 0 {
+	before, _, ok := bytes.Cut(buf, []byte{StringTerminator})
+	if !ok {
 		return "", ErrNoNullTerminator
 	}
 
-	return string(buf[:nullIndex]), nil
+	return string(before), nil
 }
 
 // WriteString writes a null-terminated string to WebAssembly memory.

@@ -297,7 +297,7 @@ func TestConcurrentRuntimeUsage(t *testing.T) {
 		const numThreads = 10
 		var wg sync.WaitGroup
 
-		for i := 0; i < numThreads; i++ {
+		for i := range numThreads {
 			wg.Add(1)
 			go func(threadID int) {
 				defer wg.Done()

@@ -56,7 +56,7 @@ func TestIsConvertibleToJs(t *testing.T) {
 				AnotherField int
 			}
 
-			err := qjs.IsConvertibleToJs(reflect.TypeOf(TestStruct{}), make(map[reflect.Type]bool), "test")
+			err := qjs.IsConvertibleToJs(reflect.TypeFor[TestStruct](), make(map[reflect.Type]bool), "test")
 			assert.NoError(t, err, "Struct with exported fields should be convertible")
 		})
 
@@ -66,7 +66,7 @@ func TestIsConvertibleToJs(t *testing.T) {
 				privateField string
 			}
 
-			err := qjs.IsConvertibleToJs(reflect.TypeOf(TestStruct{}), make(map[reflect.Type]bool), "test")
+			err := qjs.IsConvertibleToJs(reflect.TypeFor[TestStruct](), make(map[reflect.Type]bool), "test")
 			assert.NoError(t, err, "Struct with unexported fields should be convertible (unexported fields ignored)")
 		})
 
@@ -76,7 +76,7 @@ func TestIsConvertibleToJs(t *testing.T) {
 				privateField unsafe.Pointer
 			}
 
-			err := qjs.IsConvertibleToJs(reflect.TypeOf(TestStruct{}), make(map[reflect.Type]bool), "test")
+			err := qjs.IsConvertibleToJs(reflect.TypeFor[TestStruct](), make(map[reflect.Type]bool), "test")
 			assert.NoError(t, err, "Struct should be convertible when unsupported types are in unexported fields")
 		})
 	})
@@ -89,7 +89,7 @@ func TestIsConvertibleToJs(t *testing.T) {
 				AnotherField int
 			}
 
-			err := qjs.IsConvertibleToJs(reflect.TypeOf(TestStruct{}), make(map[reflect.Type]bool), "test")
+			err := qjs.IsConvertibleToJs(reflect.TypeFor[TestStruct](), make(map[reflect.Type]bool), "test")
 			assert.NoError(t, err, "Struct should be convertible when unsupported types have json:\"-\" tag")
 		})
 
@@ -99,7 +99,7 @@ func TestIsConvertibleToJs(t *testing.T) {
 				UnsupportedField unsafe.Pointer `json:"-"`
 			}
 
-			err := qjs.IsConvertibleToJs(reflect.TypeOf(TestStruct{}), make(map[reflect.Type]bool), "test")
+			err := qjs.IsConvertibleToJs(reflect.TypeFor[TestStruct](), make(map[reflect.Type]bool), "test")
 			assert.NoError(t, err, "Struct should be convertible with JSON rename tags")
 		})
 
@@ -109,7 +109,7 @@ func TestIsConvertibleToJs(t *testing.T) {
 				UnsupportedField unsafe.Pointer
 			}
 
-			err := qjs.IsConvertibleToJs(reflect.TypeOf(TestStruct{}), make(map[reflect.Type]bool), "test")
+			err := qjs.IsConvertibleToJs(reflect.TypeFor[TestStruct](), make(map[reflect.Type]bool), "test")
 			assert.Error(t, err, "Struct should not be convertible with exported unsupported fields")
 			assert.Contains(t, err.Error(), "TestStruct.UnsupportedField", "Error should mention the problematic field")
 		})
@@ -122,7 +122,7 @@ func TestIsConvertibleToJs(t *testing.T) {
 				AnotherOmitted unsafe.Pointer `json:"-,"`
 			}
 
-			err := qjs.IsConvertibleToJs(reflect.TypeOf(TestStruct{}), make(map[reflect.Type]bool), "test")
+			err := qjs.IsConvertibleToJs(reflect.TypeFor[TestStruct](), make(map[reflect.Type]bool), "test")
 			assert.NoError(t, err, "Struct should handle complex JSON tags correctly")
 		})
 	})
@@ -133,7 +133,7 @@ func TestIsConvertibleToJs(t *testing.T) {
 			Self *RecursiveStruct
 		}
 
-		err := qjs.IsConvertibleToJs(reflect.TypeOf(RecursiveStruct{}), make(map[reflect.Type]bool), "test")
+		err := qjs.IsConvertibleToJs(reflect.TypeFor[RecursiveStruct](), make(map[reflect.Type]bool), "test")
 		assert.NoError(t, err, "Recursive struct should be convertible")
 	})
 
@@ -147,7 +147,7 @@ func TestIsConvertibleToJs(t *testing.T) {
 				Name  string
 			}
 
-			err := qjs.IsConvertibleToJs(reflect.TypeOf(Outer{}), make(map[reflect.Type]bool), "test")
+			err := qjs.IsConvertibleToJs(reflect.TypeFor[Outer](), make(map[reflect.Type]bool), "test")
 			assert.NoError(t, err, "Nested convertible structs should be convertible")
 		})
 
@@ -160,7 +160,7 @@ func TestIsConvertibleToJs(t *testing.T) {
 				Name  string
 			}
 
-			err := qjs.IsConvertibleToJs(reflect.TypeOf(Outer{}), make(map[reflect.Type]bool), "test")
+			err := qjs.IsConvertibleToJs(reflect.TypeFor[Outer](), make(map[reflect.Type]bool), "test")
 			assert.Error(t, err, "Nested struct with unsupported fields should not be convertible")
 		})
 
@@ -174,7 +174,7 @@ func TestIsConvertibleToJs(t *testing.T) {
 				Name  string
 			}
 
-			err := qjs.IsConvertibleToJs(reflect.TypeOf(Outer{}), make(map[reflect.Type]bool), "test")
+			err := qjs.IsConvertibleToJs(reflect.TypeFor[Outer](), make(map[reflect.Type]bool), "test")
 			assert.NoError(t, err, "Nested struct with omitted unsupported fields should be convertible")
 		})
 
@@ -187,7 +187,7 @@ func TestIsConvertibleToJs(t *testing.T) {
 				Name string
 			}
 
-			err := qjs.IsConvertibleToJs(reflect.TypeOf(Outer{}), make(map[reflect.Type]bool), "test")
+			err := qjs.IsConvertibleToJs(reflect.TypeFor[Outer](), make(map[reflect.Type]bool), "test")
 			assert.NoError(t, err, "Struct with embedded pointer to struct should be convertible")
 		})
 
@@ -200,7 +200,7 @@ func TestIsConvertibleToJs(t *testing.T) {
 				Name string
 			}
 
-			err := qjs.IsConvertibleToJs(reflect.TypeOf(Outer{}), make(map[reflect.Type]bool), "test")
+			err := qjs.IsConvertibleToJs(reflect.TypeFor[Outer](), make(map[reflect.Type]bool), "test")
 			assert.Error(t, err, "Struct with embedded pointer containing unsupported fields should not be convertible")
 		})
 
@@ -214,7 +214,7 @@ func TestIsConvertibleToJs(t *testing.T) {
 				Name string
 			}
 
-			err := qjs.IsConvertibleToJs(reflect.TypeOf(Outer{}), make(map[reflect.Type]bool), "test")
+			err := qjs.IsConvertibleToJs(reflect.TypeFor[Outer](), make(map[reflect.Type]bool), "test")
 			assert.NoError(t, err, "Struct with embedded pointer containing omitted unsupported fields should be convertible")
 		})
 	})
@@ -225,14 +225,14 @@ func TestIsConvertibleToJs(t *testing.T) {
 			OmittedField unsafe.Pointer `json:"-"`
 		}
 
-		err := qjs.IsConvertibleToJs(reflect.TypeOf(&TestStruct{}), make(map[reflect.Type]bool), "test")
+		err := qjs.IsConvertibleToJs(reflect.TypeFor[*TestStruct](), make(map[reflect.Type]bool), "test")
 		assert.NoError(t, err, "Pointer to convertible struct should be convertible")
 	})
 }
 
 func TestGetGoTypeName(t *testing.T) {
 	// Test input handling - reflect.Type vs value
-	assert.Equal(t, "int", qjs.GetGoTypeName(reflect.TypeOf(42)))
+	assert.Equal(t, "int", qjs.GetGoTypeName(reflect.TypeFor[int]()))
 	assert.Equal(t, "int", qjs.GetGoTypeName(42))
 
 	// Test nil input panics

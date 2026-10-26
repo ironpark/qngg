@@ -642,7 +642,7 @@ go get github.com/fastschema/qjs
 import "github.com/fastschema/qjs"
 ```
 
-**Compatible with Go 1.22.0+**
+**Compatible with Go 1.27+**
 
 ## Architecture
 
@@ -770,7 +770,7 @@ defer result.Free()
 
 ### Prerequisites
 
-- Go 1.23.0+
+- Go 1.27+
 - WASI SDK (for WebAssembly compilation)
 - CMake 3.16+
 - Make

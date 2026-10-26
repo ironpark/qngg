@@ -42,12 +42,11 @@ func createGlobalCompiledModule(
 	disableBuildCache bool,
 	cacheDir string,
 	quickjsWasmBytes ...[]byte,
-) (err error) {
+) (qjsBytes []byte, err error) {
 	// Protect global compilation state with mutex
 	compilationMutex.Lock()
 	defer compilationMutex.Unlock()
 
-	var qjsBytes []byte
 	if len(quickjsWasmBytes) > 0 && len(quickjsWasmBytes[0]) > 0 {
 		qjsBytes = quickjsWasmBytes[0]
 	} else {
@@ -63,7 +62,7 @@ func createGlobalCompiledModule(
 		if cacheDir == "" {
 			cache = wazero.NewCompilationCache()
 		} else if cache, err = wazero.NewCompilationCacheWithDir(cacheDir); err != nil {
-			return fmt.Errorf("failed to create compilation cache with dir %s: %w", cacheDir, err)
+			return nil, fmt.Errorf("failed to create compilation cache with dir %s: %w", cacheDir, err)
 		}
 
 		cachedRuntimeConfig = wazero.
@@ -73,13 +72,13 @@ func createGlobalCompiledModule(
 		wrt := wazero.NewRuntimeWithConfig(ctx, cachedRuntimeConfig)
 
 		if compiledQJSModule, err = wrt.CompileModule(ctx, qjsBytes); err != nil {
-			return fmt.Errorf("failed to compile qjs module: %w", err)
+			return nil, fmt.Errorf("failed to compile qjs module: %w", err)
 		}
 
 		cachedBytesHash = currentHash
 	}
 
-	return nil
+	return qjsBytes, nil
 }
 
 // New creates a QuickJS runtime with optional configuration.
@@ -99,13 +98,14 @@ func New(options ...Option) (runtime *Runtime, err error) {
 		return nil, fmt.Errorf("failed to get runtime options: %w", err)
 	}
 
-	if err := createGlobalCompiledModule(
+	qjsBytes, err := createGlobalCompiledModule(
 		option.Context,
 		option.CloseOnContextDone,
 		option.DisableBuildCache,
 		option.CacheDir,
 		option.QuickJSWasmBytes,
-	); err != nil {
+	)
+	if err != nil {
 		return nil, fmt.Errorf("failed to create global compiled module: %w", err)
 	}
 
@@ -135,9 +135,16 @@ func New(options ...Option) (runtime *Runtime, err error) {
 	fsConfig := wazero.
 		NewFSConfig().
 		WithDirMount(runtime.option.CWD, "/")
+	// A CompiledModule can only be instantiated by the runtime that compiled it,
+	// so compile per runtime; the shared compilation cache makes this cheap.
+	compiled, err := runtime.wrt.CompileModule(option.Context, qjsBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to compile qjs module: %w", err)
+	}
+
 	if runtime.module, err = runtime.wrt.InstantiateModule(
 		option.Context,
-		compiledQJSModule,
+		compiled,
 		wazero.NewModuleConfig().
 			WithStartFunctions(option.StartFunctionName).
 			WithSysWalltime().

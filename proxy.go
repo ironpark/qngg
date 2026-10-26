@@ -12,7 +12,7 @@ import (
 // ProxyRegistry stores Go functions that can be called from JavaScript.
 // It provides thread-safe registration and retrieval of functions with automatic ID generation.
 type ProxyRegistry struct {
-	nextID  uint64
+	nextID  atomic.Uint64
 	mu      sync.RWMutex
 	proxies map[uint64]any
 }
@@ -31,7 +31,7 @@ func (r *ProxyRegistry) Register(fn any) uint64 {
 		return 0
 	}
 
-	id := atomic.AddUint64(&r.nextID, 1)
+	id := r.nextID.Add(1)
 	r.mu.Lock()
 	r.proxies[id] = fn
 	r.mu.Unlock()

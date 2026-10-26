@@ -6,6 +6,7 @@ import (
 	"hash/fnv"
 	"math"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -174,7 +175,7 @@ func (fm *FieldMapper) processFields(
 
 		// Handle embedded fields
 		fieldType := field.Type
-		if fieldType.Kind() == reflect.Ptr {
+		if fieldType.Kind() == reflect.Pointer {
 			fieldType = fieldType.Elem()
 		}
 
@@ -287,7 +288,7 @@ type JsNumericToGoConverter struct {
 }
 
 func NewJsNumericToGoConverter(targetType reflect.Type) *JsNumericToGoConverter {
-	isPointer := targetType.Kind() == reflect.Ptr
+	isPointer := targetType.Kind() == reflect.Pointer
 	if isPointer {
 		targetType = targetType.Elem()
 	}
@@ -554,13 +555,7 @@ func NumericBoundsCheck(floatVal float64, targetKind reflect.Kind) error {
 
 // IsTypedArray returns true if the input is TypedArray or DataView.
 func IsTypedArray(input *Value) bool {
-	for _, typeName := range typedArrayTypes {
-		if input.IsGlobalInstanceOf(typeName) {
-			return true
-		}
-	}
-
-	return false
+	return slices.ContainsFunc(typedArrayTypes, input.IsGlobalInstanceOf)
 }
 
 // processTempValue validates if temp is a valid result for the given T type.
@@ -604,7 +599,7 @@ func processTempValue[T any](prefix string, temp any, err error, samples ...T) (
 func StringToNumeric(s string, targetType reflect.Type) (result any, err error) {
 	s = strings.TrimSpace(s)
 
-	if targetType.Kind() == reflect.Ptr {
+	if targetType.Kind() == reflect.Pointer {
 		elemType := targetType.Elem()
 
 		result, err := StringToNumeric(s, elemType)
@@ -717,7 +712,7 @@ func createGoObjectTarget[T any](input ObjectOrMap, samples ...T) (
 
 	target = reflect.TypeOf(sample)
 	if target == nil {
-		target = reflect.TypeOf(map[string]any{})
+		target = reflect.TypeFor[map[string]any]()
 	}
 
 	temp = reflect.New(target).Interface()
@@ -763,7 +758,7 @@ func isFloatWholeNumber(floatVal float64) bool {
 
 func isGoStruct(goType reflect.Type) bool {
 	return goType.Kind() == reflect.Struct ||
-		(goType.Kind() == reflect.Ptr && goType.Elem().Kind() == reflect.Struct)
+		(goType.Kind() == reflect.Pointer && goType.Elem().Kind() == reflect.Struct)
 }
 
 // VerifyGoFunc validates that a function signature is compatible with JS conversion.
@@ -773,8 +768,8 @@ func VerifyGoFunc(fnType reflect.Type, sample any) error {
 	}
 
 	// Validate that all return values are convertible to JS
-	for i := range fnType.NumOut() {
-		err := IsConvertibleToJs(fnType.Out(i), make(map[reflect.Type]bool), "func return")
+	for out := range fnType.Outs() {
+		err := IsConvertibleToJs(out, make(map[reflect.Type]bool), "func return")
 		if err != nil {
 			return err
 		}
