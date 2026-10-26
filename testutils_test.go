@@ -1,4 +1,4 @@
-package qjs_test
+package qngg_test
 
 import (
 	"errors"
@@ -9,13 +9,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fastschema/qjs"
+	"github.com/ironpark/qngg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func setupTestContext(_ *testing.T) (*qjs.Runtime, *qjs.Context) {
-	runtime := must(qjs.New())
+func setupTestContext(_ *testing.T) (*qngg.Runtime, *qngg.Context) {
+	runtime := must(qngg.New())
 	ctx := runtime.Context()
 	// t.Cleanup(runtime.Close)
 	return runtime, ctx
@@ -95,13 +95,13 @@ func glob(path string, exts ...string) ([]string, error) {
 type modeGlobalTest struct {
 	file      string
 	wantError bool
-	expect    func(val *qjs.Value, err error)
+	expect    func(val *qngg.Value, err error)
 }
 
 type modeModuleTest struct {
 	moduleDir string
 	wantError bool
-	expect    func(val *qjs.Value, err error)
+	expect    func(val *qngg.Value, err error)
 }
 
 func genModeGlobalTests(t *testing.T) []modeGlobalTest {
@@ -109,7 +109,7 @@ func genModeGlobalTests(t *testing.T) []modeGlobalTest {
 		{
 			file:      "01_invalid_syntax.js",
 			wantError: true,
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.Nil(t, val)
 				assert.Error(t, err)
 			},
@@ -117,7 +117,7 @@ func genModeGlobalTests(t *testing.T) []modeGlobalTest {
 		{
 			wantError: true,
 			file:      "02_throw_error.js",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.Nil(t, val)
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), "script error")
@@ -125,43 +125,43 @@ func genModeGlobalTests(t *testing.T) []modeGlobalTest {
 		},
 		{
 			file: "03_result_no_value.js",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.True(t, val.IsUndefined())
 			},
 		},
 		{
 			file: "04_result_number.js",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.Equal(t, int32(3), val.Int32())
 			},
 		},
 		{
 			file: "05_result_string.js",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.Equal(t, "Hello, World!", val.String())
 			},
 		},
 		{
 			file: "06_result_boolean.js",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.True(t, val.Bool())
 			},
 		},
 		{
 			file: "07_result_null.js",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.True(t, val.IsNull())
 			},
 		},
 		{
 			file: "08_result_undefined.js",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.True(t, val.IsUndefined())
 			},
 		},
 		{
 			file: "09_result_object.js",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.True(t, val.IsObject())
 				obj := val.Object()
 				defer obj.Free()
@@ -174,14 +174,14 @@ func genModeGlobalTests(t *testing.T) []modeGlobalTest {
 		{
 			wantError: true,
 			file:      "10_top_level_await_not_supported.js",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.Nil(t, val)
 				assert.Error(t, err)
 			},
 		},
 		{
 			file: "11_empty_script.js",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				// An empty script should return undefined without error.
 				assert.True(t, val.IsUndefined())
 				assert.NoError(t, err)
@@ -189,13 +189,13 @@ func genModeGlobalTests(t *testing.T) []modeGlobalTest {
 		},
 		{
 			file: "12_function.js",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.True(t, val.IsFunction())
 			},
 		},
 		{
 			file: "13_array.js",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				// Assuming arrays are returned as objects with numeric keys.
 				assert.True(t, val.IsArray())
 				arrObj := val.Object()
@@ -213,9 +213,9 @@ func genModeGlobalTests(t *testing.T) []modeGlobalTest {
 func runModeGlobalTests(t *testing.T, tests []modeGlobalTest, isScript bool) {
 	for _, test := range tests {
 		t.Run(test.file, func(t *testing.T) {
-			runtime := must(qjs.New(qjs.Option{MaxStackSize: 512 * 1024}))
+			runtime := must(qngg.New(qngg.Option{MaxStackSize: 512 * 1024}))
 			defer runtime.Close()
-			var val *qjs.Value
+			var val *qngg.Value
 			var err error
 
 			fileName := path.Join("./testdata/01_global", test.file)
@@ -223,7 +223,7 @@ func runModeGlobalTests(t *testing.T, tests []modeGlobalTest, isScript bool) {
 				script := fileContent(fileName)
 				val, err = runtime.Eval(
 					fileName,
-					qjs.Code(script),
+					qngg.Code(script),
 				)
 			} else {
 				val, err = runtime.Eval(fileName)
@@ -243,7 +243,7 @@ func genModeModuleTests(t *testing.T) []modeModuleTest {
 		{
 			moduleDir: "01_invalid_syntax",
 			wantError: true,
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.Nil(t, val)
 				assert.Error(t, err)
 			},
@@ -251,7 +251,7 @@ func genModeModuleTests(t *testing.T) []modeModuleTest {
 		{
 			moduleDir: "02_throw_error",
 			wantError: true,
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.Nil(t, val)
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), "module error")
@@ -259,45 +259,45 @@ func genModeModuleTests(t *testing.T) []modeModuleTest {
 		},
 		{
 			moduleDir: "03_default_export_return_value",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.Equal(t, int32(3), val.Int32())
 			},
 		},
 		{
 			moduleDir: "04_without_default_export_return_undefined",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.True(t, val.IsUndefined())
 			},
 		},
 		{
 			moduleDir: "05_import_not_exist",
 			wantError: true,
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.Nil(t, val)
 				assert.Error(t, err)
 			},
 		},
 		{
 			moduleDir: "06_import_export",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.Equal(t, int32(6), val.Int32())
 			},
 		},
 		{
 			moduleDir: "07_export_fn_call",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.Equal(t, int32(20), val.Int32())
 			},
 		},
 		{
 			moduleDir: "08_export_empty",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.True(t, val.IsUndefined())
 			},
 		},
 		{
 			moduleDir: "09_side_effect",
-			expect: func(val *qjs.Value, err error) {
+			expect: func(val *qngg.Value, err error) {
 				assert.True(t, val.IsUndefined())
 			},
 		},
@@ -309,14 +309,14 @@ func genModeModuleTests(t *testing.T) []modeModuleTest {
 func runModeModuleTests(t *testing.T, tests []modeModuleTest, isScript bool) {
 	for _, test := range tests {
 		t.Run(test.moduleDir, func(t *testing.T) {
-			runtime := must(qjs.New())
+			runtime := must(qngg.New())
 			defer runtime.Close()
 
 			if !isScript {
 				moduleMainFile := filepath.Join("./testdata/02_module", test.moduleDir, "999_index.js")
 				val, err := runtime.Eval(
 					moduleMainFile,
-					qjs.TypeModule(),
+					qngg.TypeModule(),
 				)
 				defer val.Free()
 				if !test.wantError {
@@ -338,8 +338,8 @@ func runModeModuleTests(t *testing.T, tests []modeModuleTest, isScript bool) {
 				depScript := fileContent(depPath)
 				val, err := runtime.Load(
 					depPath,
-					qjs.Code(depScript),
-					qjs.TypeModule(),
+					qngg.Code(depScript),
+					qngg.TypeModule(),
 				)
 				defer val.Free()
 				assert.NoError(t, err)
@@ -349,8 +349,8 @@ func runModeModuleTests(t *testing.T, tests []modeModuleTest, isScript bool) {
 			mainScript := fileContent(mainPath)
 			val, err := runtime.Eval(
 				mainPath,
-				qjs.Code(mainScript),
-				qjs.TypeModule(),
+				qngg.Code(mainScript),
+				qngg.TypeModule(),
 			)
 			defer val.Free()
 

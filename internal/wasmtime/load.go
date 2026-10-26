@@ -10,8 +10,8 @@ import (
 	"sync"
 
 	"github.com/ebitengine/purego"
-	"github.com/fastschema/qjs/internal/atomicfile"
-	"github.com/fastschema/qjs/internal/wasmtime/embedded"
+	"github.com/ironpark/qngg/internal/atomicfile"
+	"github.com/ironpark/qngg/internal/wasmtime/embedded"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -20,7 +20,7 @@ const Version = embedded.Version
 
 // LibraryPathEnv names an environment variable that, when set, points at a
 // Wasmtime C API shared library to load instead of the embedded one.
-const LibraryPathEnv = "QJS_WASMTIME_LIB"
+const LibraryPathEnv = "QNGG_WASMTIME_LIB"
 
 // # How the native library is bound
 //
@@ -126,7 +126,7 @@ func extractLibrary(compressed []byte) (string, error) {
 
 	var errs []error
 	for _, base := range cacheBases() {
-		dir := filepath.Join(base, "qjs", "wasmtime", dirName)
+		dir := filepath.Join(base, "qngg", "wasmtime", dirName)
 		path := filepath.Join(dir, embedded.Name)
 		if _, err := os.Stat(path); err == nil {
 			return path, nil

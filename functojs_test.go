@@ -1,4 +1,4 @@
-package qjs_test
+package qngg_test
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/fastschema/qjs"
+	"github.com/ironpark/qngg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,8 +45,8 @@ func (c *Calculator) SetName(name string) error {
 	return nil
 }
 
-func createAndRegisterJSFunc(t *testing.T, ctx *qjs.Context, name string, fn any) *qjs.Value {
-	jsFunc := must(qjs.FuncToJS(ctx, fn))
+func createAndRegisterJSFunc(t *testing.T, ctx *qngg.Context, name string, fn any) *qngg.Value {
+	jsFunc := must(qngg.FuncToJS(ctx, fn))
 	assert.True(t, jsFunc.IsFunction())
 	ctx.Global().SetPropertyStr(name, jsFunc)
 	return jsFunc
@@ -56,7 +56,7 @@ func TestBasicConversion(t *testing.T) {
 	_, ctx := setupTestContext(t)
 
 	t.Run("InvalidTypes", func(t *testing.T) {
-		_, err := qjs.FuncToJS(ctx, "not a function")
+		_, err := qngg.FuncToJS(ctx, "not a function")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "expected GO type function")
 	})
@@ -65,7 +65,7 @@ func TestBasicConversion(t *testing.T) {
 		// Simple function
 		jsFunc := createAndRegisterJSFunc(t, ctx, "add", func(a, b int) int { return a + b })
 		defer jsFunc.Free()
-		result := must(ctx.Eval("test.js", qjs.Code("add(5, 3)")))
+		result := must(ctx.Eval("test.js", qngg.Code("add(5, 3)")))
 		defer result.Free()
 		assert.Equal(t, int32(8), result.Int32())
 
@@ -77,11 +77,11 @@ func TestBasicConversion(t *testing.T) {
 			return a / b, nil
 		})
 		defer jsFunc2.Free()
-		result2 := must(ctx.Eval("test.js", qjs.Code("divide(10, 2)")))
+		result2 := must(ctx.Eval("test.js", qngg.Code("divide(10, 2)")))
 		defer result2.Free()
 		assert.InEpsilon(t, float64(5), result2.Float64(), 0.0001)
 
-		_, err := ctx.Eval("test.js", qjs.Code("divide(10, 0)"))
+		_, err := ctx.Eval("test.js", qngg.Code("divide(10, 0)"))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "division by zero")
 
@@ -93,33 +93,33 @@ func TestBasicConversion(t *testing.T) {
 			return nil
 		})
 		defer jsFunc3.Free()
-		result3 := must(ctx.Eval("test.js", qjs.Code("errorOnly(false)")))
+		result3 := must(ctx.Eval("test.js", qngg.Code("errorOnly(false)")))
 		defer result3.Free()
 		assert.True(t, result3.IsUndefined())
 
 		// No return value
 		jsFunc4 := createAndRegisterJSFunc(t, ctx, "print", func(msg string) { fmt.Printf("Message: %s\n", msg) })
 		defer jsFunc4.Free()
-		result4 := must(ctx.Eval("test.js", qjs.Code(`print("hello")`)))
+		result4 := must(ctx.Eval("test.js", qngg.Code(`print("hello")`)))
 		defer result4.Free()
 		assert.True(t, result4.IsUndefined())
 	})
 
 	t.Run("NilHandling", func(t *testing.T) {
 		// Nil value
-		result := must(qjs.FuncToJS(ctx, nil))
+		result := must(qngg.FuncToJS(ctx, nil))
 		defer result.Free()
 		assert.True(t, result.IsNull())
 
 		// Nil function
 		var nilFunc func()
-		jsFunc := must(qjs.FuncToJS(ctx, nilFunc))
+		jsFunc := must(qngg.FuncToJS(ctx, nilFunc))
 		defer jsFunc.Free()
 		assert.True(t, jsFunc.IsNull())
 
 		// Nil function pointer
 		var nilFuncPtr *func()
-		jsNilPtr := must(qjs.FuncToJS(ctx, nilFuncPtr))
+		jsNilPtr := must(qngg.FuncToJS(ctx, nilFuncPtr))
 		defer jsNilPtr.Free()
 		assert.True(t, jsNilPtr.IsNull())
 	})
@@ -129,7 +129,7 @@ func TestBasicConversion(t *testing.T) {
 		funcPtr := &addFunc
 		jsFunc := createAndRegisterJSFunc(t, ctx, "funcPtr", funcPtr)
 		defer jsFunc.Free()
-		result := must(ctx.Eval("test.js", qjs.Code("funcPtr(7, 8)")))
+		result := must(ctx.Eval("test.js", qngg.Code("funcPtr(7, 8)")))
 		defer result.Free()
 		assert.Equal(t, int32(15), result.Int32())
 	})
@@ -143,7 +143,7 @@ func TestParameters(t *testing.T) {
 			return a + b + c + d + e
 		})
 
-		result := must(ctx.Eval("test.js", qjs.Code(`manyParamFunc(1, 2, 3, 4, 5)`)))
+		result := must(ctx.Eval("test.js", qngg.Code(`manyParamFunc(1, 2, 3, 4, 5)`)))
 		defer result.Free()
 		assert.Equal(t, int32(15), result.Int32())
 
@@ -151,7 +151,7 @@ func TestParameters(t *testing.T) {
 			return a + b + c
 		})
 
-		result2 := must(ctx.Eval("test.js", qjs.Code(`paramFunc(10)`)))
+		result2 := must(ctx.Eval("test.js", qngg.Code(`paramFunc(10)`)))
 		defer result2.Free()
 		assert.Equal(t, int32(10), result2.Int32())
 
@@ -159,18 +159,18 @@ func TestParameters(t *testing.T) {
 			return a * 2
 		})
 
-		result3 := must(ctx.Eval("test.js", qjs.Code(`paramFunc2(5, 10, 15)`)))
+		result3 := must(ctx.Eval("test.js", qngg.Code(`paramFunc2(5, 10, 15)`)))
 		defer result3.Free()
 		assert.Equal(t, int32(10), result3.Int32())
 	})
 
 	t.Run("InvalidParameterTypes", func(t *testing.T) {
-		goFunc, err := qjs.FuncToJS(ctx, func(x int, y ...int) int {
+		goFunc, err := qngg.FuncToJS(ctx, func(x int, y ...int) int {
 			return len(y) + 1
 		})
 		assert.NoError(t, err)
 		ctx.Global().SetPropertyStr("testFunc", goFunc)
-		_, err = ctx.Eval("test.js", qjs.Code(`testFunc("invalid", 2)`))
+		_, err = ctx.Eval("test.js", qngg.Code(`testFunc("invalid", 2)`))
 		require.Error(t, err)
 	})
 
@@ -179,7 +179,7 @@ func TestParameters(t *testing.T) {
 			return fmt.Sprintf("string:%s,int:%d,float:%.1f,bool:%t", s, i, f, b)
 		})
 
-		result := must(ctx.Eval("test.js", qjs.Code(`basicTypesFunc("test", 42, 3.14, true)`)))
+		result := must(ctx.Eval("test.js", qngg.Code(`basicTypesFunc("test", 42, 3.14, true)`)))
 		defer result.Free()
 		assert.Equal(t, "string:test,int:42,float:3.1,bool:true", result.String())
 	})
@@ -193,11 +193,11 @@ func TestParameters(t *testing.T) {
 				return fmt.Sprintf("processed %d items, value=%v", len(data), data["value"]), nil
 			})
 
-			result := must(ctx.Eval("test.js", qjs.Code(`processData({name: "test", value: 42})`)))
+			result := must(ctx.Eval("test.js", qngg.Code(`processData({name: "test", value: 42})`)))
 			defer result.Free()
 			assert.Equal(t, "processed 2 items, value=42", result.String())
 
-			_, err := ctx.Eval("test.js", qjs.Code(`processData({})`))
+			_, err := ctx.Eval("test.js", qngg.Code(`processData({})`))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "empty data")
 		})
@@ -207,7 +207,7 @@ func TestParameters(t *testing.T) {
 				return fmt.Sprintf("array: %v", arr)
 			})
 
-			result := must(ctx.Eval("test.js", qjs.Code(`arrayFunc([1, 2, 3])`)))
+			result := must(ctx.Eval("test.js", qngg.Code(`arrayFunc([1, 2, 3])`)))
 			defer result.Free()
 			assert.Contains(t, result.String(), "array:")
 		})
@@ -222,15 +222,15 @@ func TestParameters(t *testing.T) {
 				return fmt.Sprintf("value: %d", *ptr)
 			})
 
-			result1 := must(ctx.Eval("test.js", qjs.Code(`pointerFunc(42)`)))
+			result1 := must(ctx.Eval("test.js", qngg.Code(`pointerFunc(42)`)))
 			defer result1.Free()
 			assert.Equal(t, "value: 42", result1.String())
 
-			result2 := must(ctx.Eval("test.js", qjs.Code(`pointerFunc(null)`)))
+			result2 := must(ctx.Eval("test.js", qngg.Code(`pointerFunc(null)`)))
 			defer result2.Free()
 			assert.Equal(t, "nil", result2.String())
 
-			result3 := must(ctx.Eval("test.js", qjs.Code(`pointerFunc(undefined)`)))
+			result3 := must(ctx.Eval("test.js", qngg.Code(`pointerFunc(undefined)`)))
 			defer result3.Free()
 			assert.Equal(t, "nil", result3.String())
 		})
@@ -243,7 +243,7 @@ func TestParameters(t *testing.T) {
 				return fmt.Sprintf("value: %s", *ptr)
 			})
 
-			result4 := must(ctx.Eval("test.js", qjs.Code(`ptrStringFunc("hello")`)))
+			result4 := must(ctx.Eval("test.js", qngg.Code(`ptrStringFunc("hello")`)))
 			defer result4.Free()
 			assert.Equal(t, "value: hello", result4.String())
 
@@ -254,7 +254,7 @@ func TestParameters(t *testing.T) {
 				return fmt.Sprintf("value: %.2f", *ptr)
 			})
 
-			result5 := must(ctx.Eval("test.js", qjs.Code(`ptrParamFunc(3.14159)`)))
+			result5 := must(ctx.Eval("test.js", qngg.Code(`ptrParamFunc(3.14159)`)))
 			defer result5.Free()
 			assert.Equal(t, "value: 3.14", result5.String())
 		})
@@ -267,7 +267,7 @@ func TestParameters(t *testing.T) {
 				return *ptr
 			})
 
-			_, err := ctx.Eval("test.js", qjs.Code(`ptrFunc(new Date())`))
+			_, err := ctx.Eval("test.js", qngg.Code(`ptrFunc(new Date())`))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "cannot convert JS function argument")
 		})
@@ -290,7 +290,7 @@ func TestParameters(t *testing.T) {
 			}
 
 			for _, test := range tests {
-				result := must(ctx.Eval("test.js", qjs.Code(test.input)))
+				result := must(ctx.Eval("test.js", qngg.Code(test.input)))
 				defer result.Free()
 				assert.Contains(t, result.String(), test.contains)
 			}
@@ -302,12 +302,12 @@ func TestParameters(t *testing.T) {
 			})
 
 			// Test whole number conversion to int
-			result := must(ctx.Eval("test.js", qjs.Code(`anyFunc(42)`)))
+			result := must(ctx.Eval("test.js", qngg.Code(`anyFunc(42)`)))
 			defer result.Free()
 			assert.Contains(t, result.String(), "int64: 42")
 
 			// Test fractional number conversion to float64
-			result2 := must(ctx.Eval("test.js", qjs.Code(`anyFunc(3.14)`)))
+			result2 := must(ctx.Eval("test.js", qngg.Code(`anyFunc(3.14)`)))
 			defer result2.Free()
 			assert.Contains(t, result2.String(), "float64")
 			assert.Contains(t, result2.String(), "3.14")
@@ -320,11 +320,11 @@ func TestParameters(t *testing.T) {
 				return callback(value)
 			})
 
-			result := must(ctx.Eval("test.js", qjs.Code(`higherOrderFunc(x => x * 2, 21)`)))
+			result := must(ctx.Eval("test.js", qngg.Code(`higherOrderFunc(x => x * 2, 21)`)))
 			defer result.Free()
 			assert.Equal(t, int32(42), result.Int32())
 
-			_, err := ctx.Eval("test.js", qjs.Code(`higherOrderFunc(x => { throw new Error("callback error"); }, 10)`))
+			_, err := ctx.Eval("test.js", qngg.Code(`higherOrderFunc(x => { throw new Error("callback error"); }, 10)`))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "callback error")
 		})
@@ -334,7 +334,7 @@ func TestParameters(t *testing.T) {
 				return callback()
 			})
 
-			_, err2 := ctx.Eval("test.js", qjs.Code(`callbackTest(42)`))
+			_, err2 := ctx.Eval("test.js", qngg.Code(`callbackTest(42)`))
 			require.Error(t, err2)
 			assert.Contains(t, err2.Error(), "cannot convert JS function argument")
 		})
@@ -350,15 +350,15 @@ func TestParameters(t *testing.T) {
 				return total
 			})
 
-			result1 := must(ctx.Eval("test.js", qjs.Code("sumFunc(1, 2, 3, 4, 5)")))
+			result1 := must(ctx.Eval("test.js", qngg.Code("sumFunc(1, 2, 3, 4, 5)")))
 			defer result1.Free()
 			assert.Equal(t, int32(15), result1.Int32())
 
-			result2 := must(ctx.Eval("test.js", qjs.Code("sumFunc()")))
+			result2 := must(ctx.Eval("test.js", qngg.Code("sumFunc()")))
 			defer result2.Free()
 			assert.Equal(t, int32(0), result2.Int32())
 
-			result3 := must(ctx.Eval("test.js", qjs.Code("sumFunc(42)")))
+			result3 := must(ctx.Eval("test.js", qngg.Code("sumFunc(42)")))
 			defer result3.Free()
 			assert.Equal(t, int32(42), result3.Int32())
 		})
@@ -372,11 +372,11 @@ func TestParameters(t *testing.T) {
 				return fmt.Sprintf("%s: %d", prefix, total)
 			})
 
-			result1 := must(ctx.Eval("test.js", qjs.Code(`partialSumFunc("Total", 1, 2, 3)`)))
+			result1 := must(ctx.Eval("test.js", qngg.Code(`partialSumFunc("Total", 1, 2, 3)`)))
 			defer result1.Free()
 			assert.Equal(t, "Total: 6", result1.String())
 
-			result2 := must(ctx.Eval("test.js", qjs.Code(`partialSumFunc("Total")`)))
+			result2 := must(ctx.Eval("test.js", qngg.Code(`partialSumFunc("Total")`)))
 			defer result2.Free()
 			assert.Equal(t, "Total: 0", result2.String())
 		})
@@ -386,7 +386,7 @@ func TestParameters(t *testing.T) {
 				return fmt.Sprintf(format, args...)
 			})
 
-			result := must(ctx.Eval("test.js", qjs.Code(`formatFunc("Hello %s, you are %d years old", "John", 25)`)))
+			result := must(ctx.Eval("test.js", qngg.Code(`formatFunc("Hello %s, you are %d years old", "John", 25)`)))
 			defer result.Free()
 			assert.Equal(t, "Hello John, you are 25 years old", result.String())
 		})
@@ -400,7 +400,7 @@ func TestParameters(t *testing.T) {
 				return fmt.Sprintf("total: %d", total)
 			})
 
-			_, err := ctx.Eval("test.js", qjs.Code(`variadicIntFunc(1, 2, 1000)`))
+			_, err := ctx.Eval("test.js", qngg.Code(`variadicIntFunc(1, 2, 1000)`))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "cannot convert JS function argument")
 		})
@@ -416,7 +416,7 @@ func TestReturnValues(t *testing.T) {
 				return nil
 			})
 			defer jsFunc.Free()
-			result := must(ctx.Eval("test.js", qjs.Code(`nilFunc()`)))
+			result := must(ctx.Eval("test.js", qngg.Code(`nilFunc()`)))
 			defer result.Free()
 			assert.True(t, result.IsNull())
 		})
@@ -428,7 +428,7 @@ func TestReturnValues(t *testing.T) {
 				}
 			})
 			defer jsFunc.Free()
-			result := must(ctx.Eval("test.js", qjs.Code(`const func = returningFunc(); func(4)`)))
+			result := must(ctx.Eval("test.js", qngg.Code(`const func = returningFunc(); func(4)`)))
 			defer result.Free()
 			assert.Equal(t, int32(12), result.Int32())
 		})
@@ -440,7 +440,7 @@ func TestReturnValues(t *testing.T) {
 		})
 		defer jsFunc.Free()
 
-		result := must(ctx.Eval("test.js", qjs.Code(`singleReturnNilError()`)))
+		result := must(ctx.Eval("test.js", qngg.Code(`singleReturnNilError()`)))
 		defer result.Free()
 		assert.Equal(t, "single", result.String())
 	})
@@ -451,7 +451,7 @@ func TestReturnValues(t *testing.T) {
 		})
 		defer jsFunc.Free()
 
-		result := must(ctx.Eval("test.js", qjs.Code(`onlyNilError()`)))
+		result := must(ctx.Eval("test.js", qngg.Code(`onlyNilError()`)))
 		defer result.Free()
 		assert.True(t, result.IsUndefined())
 	})
@@ -462,7 +462,7 @@ func TestReturnValues(t *testing.T) {
 		})
 		defer jsFunc.Free()
 
-		result := must(ctx.Eval("test.js", qjs.Code(`twoReturnsNilError()`)))
+		result := must(ctx.Eval("test.js", qngg.Code(`twoReturnsNilError()`)))
 		defer result.Free()
 		assert.True(t, result.IsArray())
 
@@ -481,7 +481,7 @@ func TestReturnValues(t *testing.T) {
 		})
 		defer jsFunc.Free()
 
-		result := must(ctx.Eval("test.js", qjs.Code(`threeReturns()`)))
+		result := must(ctx.Eval("test.js", qngg.Code(`threeReturns()`)))
 		defer result.Free()
 		assert.True(t, result.IsArray())
 
@@ -504,7 +504,7 @@ func TestReturnValues(t *testing.T) {
 		})
 		defer jsFunc.Free()
 
-		result := must(ctx.Eval("test.js", qjs.Code(`fiveReturns()`)))
+		result := must(ctx.Eval("test.js", qngg.Code(`fiveReturns()`)))
 		defer result.Free()
 		assert.True(t, result.IsArray())
 
@@ -532,13 +532,13 @@ func TestReturnValues(t *testing.T) {
 
 	t.Run("UnsupportedReturnTypes", func(t *testing.T) {
 		t.Run("UnsafePointerReturnTypes", func(t *testing.T) {
-			_, err4 := qjs.FuncToJS(ctx, func() *unsafe.Pointer {
+			_, err4 := qngg.FuncToJS(ctx, func() *unsafe.Pointer {
 				return nil
 			})
 			require.Error(t, err4)
 			assert.Contains(t, err4.Error(), "cannot convert Go func return 'unsafe.Pointer")
 
-			_, err5 := qjs.FuncToJS(ctx, func() **unsafe.Pointer {
+			_, err5 := qngg.FuncToJS(ctx, func() **unsafe.Pointer {
 				return nil
 			})
 			require.Error(t, err5)
@@ -546,7 +546,7 @@ func TestReturnValues(t *testing.T) {
 		})
 
 		t.Run("ArrayWithUnsupportedElements", func(t *testing.T) {
-			_, err3 := qjs.FuncToJS(ctx, func() [2]unsafe.Pointer {
+			_, err3 := qngg.FuncToJS(ctx, func() [2]unsafe.Pointer {
 				return [2]unsafe.Pointer{}
 			})
 			require.Error(t, err3)
@@ -558,11 +558,11 @@ func TestReturnValues(t *testing.T) {
 				Name string
 				Ptr  unsafe.Pointer
 			}
-			_, err2 := qjs.FuncToJS(ctx, func() StructWithUnsafePtr {
+			_, err2 := qngg.FuncToJS(ctx, func() StructWithUnsafePtr {
 				return StructWithUnsafePtr{Name: "test", Ptr: unsafe.Pointer(&[]byte{1}[0])}
 			})
 			require.Error(t, err2)
-			assert.Contains(t, err2.Error(), "cannot convert Go 'qjs_test.StructWithUnsafePtr.Ptr' to JS")
+			assert.Contains(t, err2.Error(), "cannot convert Go 'qngg_test.StructWithUnsafePtr.Ptr' to JS")
 			assert.Contains(t, err2.Error(), "cannot convert Go func return 'unsafe.Pointer")
 
 			// Nested validation
@@ -571,16 +571,16 @@ func TestReturnValues(t *testing.T) {
 					PtrField unsafe.Pointer
 				}
 			}
-			_, err5 := qjs.FuncToJS(ctx, func() StructWithNestedUnsafePtr {
+			_, err5 := qngg.FuncToJS(ctx, func() StructWithNestedUnsafePtr {
 				return StructWithNestedUnsafePtr{}
 			})
 			require.Error(t, err5)
-			assert.Contains(t, err5.Error(), "cannot convert Go 'qjs_test.StructWithNestedUnsafePtr.Field' to JS")
+			assert.Contains(t, err5.Error(), "cannot convert Go 'qngg_test.StructWithNestedUnsafePtr.Field' to JS")
 			assert.Contains(t, err5.Error(), "cannot convert Go func return 'unsafe.Pointer")
 		})
 
 		t.Run("ComplexNestedValidation", func(t *testing.T) {
-			_, err := qjs.FuncToJS(ctx, func() map[string]unsafe.Pointer {
+			_, err := qngg.FuncToJS(ctx, func() map[string]unsafe.Pointer {
 				return nil
 			})
 			require.Error(t, err)
@@ -589,11 +589,11 @@ func TestReturnValues(t *testing.T) {
 			type StructWithUnsafeField struct {
 				Field unsafe.Pointer
 			}
-			_, err2 := qjs.FuncToJS(ctx, func() StructWithUnsafeField {
+			_, err2 := qngg.FuncToJS(ctx, func() StructWithUnsafeField {
 				return StructWithUnsafeField{}
 			})
 			require.Error(t, err2)
-			assert.Contains(t, err2.Error(), "cannot convert Go 'qjs_test.StructWithUnsafeField.Field' to JS")
+			assert.Contains(t, err2.Error(), "cannot convert Go 'qngg_test.StructWithUnsafeField.Field' to JS")
 			assert.Contains(t, err2.Error(), "cannot convert Go func return 'unsafe.Pointer'")
 		})
 	})
@@ -608,19 +608,19 @@ func TestMethodBinding(t *testing.T) {
 
 			jsAddMethod := createAndRegisterJSFunc(t, ctx, "calcAdd", calc.Add)
 			defer jsAddMethod.Free()
-			result := must(ctx.Eval("test.js", qjs.Code("calcAdd(10, 20)")))
+			result := must(ctx.Eval("test.js", qngg.Code("calcAdd(10, 20)")))
 			defer result.Free()
 			assert.Equal(t, int32(30), result.Int32())
 
 			jsMultiplyMethod := createAndRegisterJSFunc(t, ctx, "calcMultiply", calc.Multiply)
 			defer jsMultiplyMethod.Free()
-			result2 := must(ctx.Eval("test.js", qjs.Code("calcMultiply(3.5, 2.0)")))
+			result2 := must(ctx.Eval("test.js", qngg.Code("calcMultiply(3.5, 2.0)")))
 			defer result2.Free()
 			assert.Equal(t, float64(7), result2.Float64())
 
 			jsSumMethod := createAndRegisterJSFunc(t, ctx, "calcSum", calc.Sum)
 			defer jsSumMethod.Free()
-			result3 := must(ctx.Eval("test.js", qjs.Code("calcSum(1, 2, 3)")))
+			result3 := must(ctx.Eval("test.js", qngg.Code("calcSum(1, 2, 3)")))
 			defer result3.Free()
 			assert.Equal(t, int32(6), result3.Int32())
 		})
@@ -631,12 +631,12 @@ func TestMethodBinding(t *testing.T) {
 			jsSetNameMethod := createAndRegisterJSFunc(t, ctx, "setName", calc.SetName)
 			defer jsSetNameMethod.Free()
 
-			result := must(ctx.Eval("test.js", qjs.Code(`setName("NewName")`)))
+			result := must(ctx.Eval("test.js", qngg.Code(`setName("NewName")`)))
 			defer result.Free()
 			assert.True(t, result.IsUndefined() || result.IsNull())
 			assert.Equal(t, "NewName", calc.Name)
 
-			_, err := ctx.Eval("test.js", qjs.Code(`setName("")`))
+			_, err := ctx.Eval("test.js", qngg.Code(`setName("")`))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "name cannot be empty")
 		})
@@ -698,7 +698,7 @@ func TestCreateNonNilSample(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sample := qjs.CreateNonNilSample(reflect.TypeOf(tt.input))
+			sample := qngg.CreateNonNilSample(reflect.TypeOf(tt.input))
 
 			assert.IsType(t, tt.expectedType, sample)
 

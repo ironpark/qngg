@@ -1,4 +1,4 @@
-package qjs_test
+package qngg_test
 
 import (
 	"fmt"
@@ -8,7 +8,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/fastschema/qjs"
+	"github.com/ironpark/qngg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +30,7 @@ func TestParseTimezone(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				result := qjs.ParseTimezone(tc.timezone)
+				result := qngg.ParseTimezone(tc.timezone)
 				assert.NotNil(t, result)
 				assert.Equal(t, tc.expected, result.String())
 			})
@@ -68,7 +68,7 @@ func TestParseTimezone(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				result := qjs.ParseTimezone(tc.timezone)
+				result := qngg.ParseTimezone(tc.timezone)
 				assert.NotNil(t, result)
 				assert.Equal(t, tc.expectedName, result.String())
 
@@ -96,7 +96,7 @@ func TestParseTimezone(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				result := qjs.ParseTimezone(tc.timezone)
+				result := qngg.ParseTimezone(tc.timezone)
 				assert.NotNil(t, result)
 				assert.Equal(t, tc.expected, result.String())
 			})
@@ -130,7 +130,7 @@ func TestParseTimezone(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				result := qjs.ParseTimezone(tc.timezone)
+				result := qngg.ParseTimezone(tc.timezone)
 				assert.NotNil(t, result)
 				assert.Equal(t, "UTC", result.String(), "Should fallback to UTC for: %s", tc.reason)
 			})
@@ -165,7 +165,7 @@ type EmbeddedConcurrencyStruct struct {
 func TestFieldMapperDoubleCheckLocking(t *testing.T) {
 	const numAttempts = 100
 	for range numAttempts {
-		fm := qjs.NewFieldMapper()
+		fm := qngg.NewFieldMapper()
 		structType := reflect.TypeFor[ConcurrencyTestStruct]()
 
 		const numGoroutines = 200 // Very high contention
@@ -267,7 +267,7 @@ func TestJsNumericToGoConverterErrorHandling(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			converter := qjs.NewJsNumericToGoConverter(tc.targetType)
+			converter := qngg.NewJsNumericToGoConverter(tc.targetType)
 			result, err := converter.Convert(tc.floatVal)
 
 			if tc.expectErr {
@@ -284,15 +284,15 @@ func TestJsNumericToGoConverterErrorHandling(t *testing.T) {
 
 // TestJsArrayToGoConverterErrorWrapping tests that errors are properly wrapped with newJsToGoErr
 func TestJsArrayToGoConverterErrorWrapping(t *testing.T) {
-	rt := must(qjs.New())
+	rt := must(qngg.New())
 	defer rt.Close()
 
 	// Create a non-array value
-	jsValue, err := rt.Eval("test.js", qjs.Code("123"))
+	jsValue, err := rt.Eval("test.js", qngg.Code("123"))
 	assert.NoError(t, err)
 	defer jsValue.Free()
 
-	converter := qjs.NewJsArrayToGoConverter[[]int](jsValue)
+	converter := qngg.NewJsArrayToGoConverter[[]int](jsValue)
 	_, err = converter.Convert()
 
 	assert.Error(t, err)
@@ -305,11 +305,11 @@ func TestJsArrayToGoConverterErrorWrapping(t *testing.T) {
 
 // TestJsArrayToGoConverterJSONStringifyError tests the JSONStringify error.
 func TestJsArrayToGoConverterJSONStringifyError(t *testing.T) {
-	rt := must(qjs.New())
+	rt := must(qngg.New())
 	defer rt.Close()
 
 	// Create a JS array with circular reference that will fail JSONStringify
-	jsValue, err := rt.Eval("test.js", qjs.Code(`
+	jsValue, err := rt.Eval("test.js", qngg.Code(`
 		const obj = {};
 		obj.self = obj; // circular reference
 		[obj]  // array containing circular reference object
@@ -323,7 +323,7 @@ func TestJsArrayToGoConverterJSONStringifyError(t *testing.T) {
 	}
 
 	// This should trigger the JSONStringify error path in convertViaJSON
-	converter := qjs.NewJsArrayToGoConverter[TestStruct](jsValue)
+	converter := qngg.NewJsArrayToGoConverter[TestStruct](jsValue)
 	_, err = converter.Convert()
 
 	assert.Error(t, err)
@@ -367,7 +367,7 @@ func TestFloatToIntUintptrConversion(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := qjs.FloatToInt(tc.floatVal, tc.targetKind)
+			result, err := qngg.FloatToInt(tc.floatVal, tc.targetKind)
 
 			if tc.expectError {
 				assert.Error(t, err)
@@ -385,7 +385,7 @@ func TestFloatToIntUintptrConversion(t *testing.T) {
 
 func TestStringToNumeric(t *testing.T) {
 	t.Run("empty_string_error", func(t *testing.T) {
-		result, err := qjs.StringToNumeric("", reflect.TypeFor[int]())
+		result, err := qngg.StringToNumeric("", reflect.TypeFor[int]())
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "empty string cannot be converted to number")
@@ -393,14 +393,14 @@ func TestStringToNumeric(t *testing.T) {
 
 	t.Run("pointer_type_error_propagation", func(t *testing.T) {
 		ptrType := reflect.TypeFor[*int]()
-		result, err := qjs.StringToNumeric("invalid_number", ptrType)
+		result, err := qngg.StringToNumeric("invalid_number", ptrType)
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "cannot convert JS string")
 	})
 
 	t.Run("unsupported_type_error", func(t *testing.T) {
-		result, err := qjs.StringToNumeric("42", reflect.TypeFor[string]())
+		result, err := qngg.StringToNumeric("42", reflect.TypeFor[string]())
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "cannot convert JS string")
@@ -429,7 +429,7 @@ func TestStringToNumeric(t *testing.T) {
 		for _, invalidStr := range invalidStrings {
 			for _, targetType := range targetTypes {
 				t.Run(fmt.Sprintf("invalid_%s_to_%s", invalidStr, targetType.Kind()), func(t *testing.T) {
-					result, err := qjs.StringToNumeric(invalidStr, targetType)
+					result, err := qngg.StringToNumeric(invalidStr, targetType)
 					assert.Error(t, err)
 					assert.Nil(t, result)
 					assert.Contains(t, err.Error(), "cannot convert JS string")
@@ -442,13 +442,13 @@ func TestStringToNumeric(t *testing.T) {
 // TestAnyToError tests the AnyToError function for panic recovery.
 func TestAnyToError(t *testing.T) {
 	t.Run("nil_input_returns_nil", func(t *testing.T) {
-		result := qjs.AnyToError(nil)
+		result := qngg.AnyToError(nil)
 		assert.Nil(t, result)
 	})
 
 	t.Run("error_input_returns_same_error", func(t *testing.T) {
 		originalErr := fmt.Errorf("original error message")
-		result := qjs.AnyToError(originalErr)
+		result := qngg.AnyToError(originalErr)
 
 		assert.NotNil(t, result)
 		assert.Equal(t, originalErr, result)
@@ -480,7 +480,7 @@ func TestAnyToError(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
-				result := qjs.AnyToError(tc.input)
+				result := qngg.AnyToError(tc.input)
 
 				assert.NotNil(t, result)
 				assert.Equal(t, tc.expected, result.Error())
@@ -493,7 +493,7 @@ func TestCreateGoBindFuncType(t *testing.T) {
 	t.Run("valid_functions", func(t *testing.T) {
 		t.Run("nil_function_is_valid", func(t *testing.T) {
 			var nilFunc func()
-			fnType, err := qjs.CreateGoBindFuncType(nilFunc)
+			fnType, err := qngg.CreateGoBindFuncType(nilFunc)
 			assert.NoError(t, err)
 			assert.NotNil(t, fnType)
 			assert.Equal(t, reflect.Func, fnType.Kind())
@@ -501,7 +501,7 @@ func TestCreateGoBindFuncType(t *testing.T) {
 
 		t.Run("no_return_values", func(t *testing.T) {
 			fn := func() {}
-			fnType, err := qjs.CreateGoBindFuncType(fn)
+			fnType, err := qngg.CreateGoBindFuncType(fn)
 			assert.NoError(t, err)
 			assert.NotNil(t, fnType)
 			assert.Equal(t, reflect.Func, fnType.Kind())
@@ -509,7 +509,7 @@ func TestCreateGoBindFuncType(t *testing.T) {
 
 		t.Run("single_return_value", func(t *testing.T) {
 			fn := func() string { return "" }
-			fnType, err := qjs.CreateGoBindFuncType(fn)
+			fnType, err := qngg.CreateGoBindFuncType(fn)
 			assert.NoError(t, err)
 			assert.NotNil(t, fnType)
 			assert.Equal(t, reflect.Func, fnType.Kind())
@@ -517,7 +517,7 @@ func TestCreateGoBindFuncType(t *testing.T) {
 
 		t.Run("two_return_values_with_error", func(t *testing.T) {
 			fn := func() (string, error) { return "", nil }
-			fnType, err := qjs.CreateGoBindFuncType(fn)
+			fnType, err := qngg.CreateGoBindFuncType(fn)
 			assert.NoError(t, err)
 			assert.NotNil(t, fnType)
 			assert.Equal(t, reflect.Func, fnType.Kind())
@@ -525,7 +525,7 @@ func TestCreateGoBindFuncType(t *testing.T) {
 
 		t.Run("single_error_return", func(t *testing.T) {
 			fn := func() error { return nil }
-			fnType, err := qjs.CreateGoBindFuncType(fn)
+			fnType, err := qngg.CreateGoBindFuncType(fn)
 			assert.NoError(t, err)
 			assert.NotNil(t, fnType)
 			assert.Equal(t, reflect.Func, fnType.Kind())
@@ -534,14 +534,14 @@ func TestCreateGoBindFuncType(t *testing.T) {
 
 	t.Run("invalid_samples", func(t *testing.T) {
 		t.Run("non_function", func(t *testing.T) {
-			_, err := qjs.CreateGoBindFuncType("not a function")
+			_, err := qngg.CreateGoBindFuncType("not a function")
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "expected GO type")
 			assert.Contains(t, err.Error(), "function")
 		})
 
 		t.Run("integer", func(t *testing.T) {
-			_, err := qjs.CreateGoBindFuncType(42)
+			_, err := qngg.CreateGoBindFuncType(42)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "expected GO type")
 			assert.Contains(t, err.Error(), "function")
@@ -550,14 +550,14 @@ func TestCreateGoBindFuncType(t *testing.T) {
 
 	t.Run("unsafe_pointer_return", func(t *testing.T) {
 		fn := func() unsafe.Pointer { return nil }
-		_, err := qjs.CreateGoBindFuncType(fn)
+		_, err := qngg.CreateGoBindFuncType(fn)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "func return")
 	})
 
 	t.Run("unsafe_pointer_param", func(t *testing.T) {
 		fn := func(unsafe.Pointer) {}
-		_, err := qjs.CreateGoBindFuncType(fn)
+		_, err := qngg.CreateGoBindFuncType(fn)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "parameter 0 error")
 		assert.Contains(t, err.Error(), "func param")
@@ -567,62 +567,62 @@ func TestCreateGoBindFuncType(t *testing.T) {
 func TestInvalid32BitValue(t *testing.T) {
 	t.Run("reflect_Int", func(t *testing.T) {
 		// Within bounds - should not error
-		err := qjs.IsValid32BitFloat(0, reflect.Int)
+		err := qngg.IsValid32BitFloat(0, reflect.Int)
 		assert.NoError(t, err)
 
-		err = qjs.IsValid32BitFloat(2147483647, reflect.Int) // math.MaxInt32
+		err = qngg.IsValid32BitFloat(2147483647, reflect.Int) // math.MaxInt32
 		assert.NoError(t, err)
 
-		err = qjs.IsValid32BitFloat(-2147483648, reflect.Int) // math.MinInt32
+		err = qngg.IsValid32BitFloat(-2147483648, reflect.Int) // math.MinInt32
 		assert.NoError(t, err)
 
 		// Overflow - should error
-		err = qjs.IsValid32BitFloat(2147483648, reflect.Int) // math.MaxInt32 + 1
+		err = qngg.IsValid32BitFloat(2147483648, reflect.Int) // math.MaxInt32 + 1
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "overflows")
 
-		err = qjs.IsValid32BitFloat(-2147483649, reflect.Int) // math.MinInt32 - 1
+		err = qngg.IsValid32BitFloat(-2147483649, reflect.Int) // math.MinInt32 - 1
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "overflows")
 	})
 
 	t.Run("reflect_Uint", func(t *testing.T) {
 		// Within bounds - should not error
-		err := qjs.IsValid32BitFloat(0, reflect.Uint)
+		err := qngg.IsValid32BitFloat(0, reflect.Uint)
 		assert.NoError(t, err)
 
-		err = qjs.IsValid32BitFloat(4294967295, reflect.Uint) // math.MaxUint32
+		err = qngg.IsValid32BitFloat(4294967295, reflect.Uint) // math.MaxUint32
 		assert.NoError(t, err)
 
 		// Overflow - should error
-		err = qjs.IsValid32BitFloat(-1, reflect.Uint)
+		err = qngg.IsValid32BitFloat(-1, reflect.Uint)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "overflows")
 
-		err = qjs.IsValid32BitFloat(4294967296, reflect.Uint) // math.MaxUint32 + 1
+		err = qngg.IsValid32BitFloat(4294967296, reflect.Uint) // math.MaxUint32 + 1
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "overflows")
 	})
 
 	t.Run("other_kinds_use_uint_bounds", func(t *testing.T) {
-		err := qjs.IsValid32BitFloat(1000, reflect.String) // any non-Int kind
+		err := qngg.IsValid32BitFloat(1000, reflect.String) // any non-Int kind
 		assert.NoError(t, err)
 
-		err = qjs.IsValid32BitFloat(-1, reflect.String) // should fail with uint bounds
+		err = qngg.IsValid32BitFloat(-1, reflect.String) // should fail with uint bounds
 		assert.Error(t, err)
 	})
 }
 
-func createChannelValue(t *testing.T, ctx *qjs.Context) (
+func createChannelValue(t *testing.T, ctx *qngg.Context) (
 	waitChan chan struct{},
 	goChan chan int,
-	jsChan *qjs.Value,
+	jsChan *qngg.Value,
 ) {
 	waitChan = make(chan struct{}, 1)
 	goChan = make(chan int)
 	chType := reflect.TypeOf(goChan)
 	chValue := reflect.ValueOf(goChan)
-	jsChan = must(qjs.ChannelToJSObjectValue(ctx, chType, chValue))
+	jsChan = must(qngg.ChannelToJSObjectValue(ctx, chType, chValue))
 	assert.True(t, jsChan.IsObject())
 	ctx.Global().SetPropertyStr("goChan", jsChan)
 
@@ -630,7 +630,7 @@ func createChannelValue(t *testing.T, ctx *qjs.Context) (
 }
 
 func TestChannelToJSObjectValue(t *testing.T) {
-	rt := must(qjs.New())
+	rt := must(qngg.New())
 	defer rt.Close()
 	ctx := rt.Context()
 
@@ -638,7 +638,7 @@ func TestChannelToJSObjectValue(t *testing.T) {
 		var nilChan chan int
 		chType := reflect.TypeOf(nilChan)
 		chValue := reflect.ValueOf(nilChan)
-		result, err := qjs.ChannelToJSObjectValue(ctx, chType, chValue)
+		result, err := qngg.ChannelToJSObjectValue(ctx, chType, chValue)
 		require.NoError(t, err)
 		defer result.Free()
 		assert.True(t, result.IsNull())
@@ -648,13 +648,13 @@ func TestChannelToJSObjectValue(t *testing.T) {
 		ch := make(chan string, 5)
 		chRType := reflect.TypeOf(ch)
 		chRValue := reflect.ValueOf(ch)
-		chValue, err := qjs.ChannelToJSObjectValue(ctx, chRType, chRValue)
+		chValue, err := qngg.ChannelToJSObjectValue(ctx, chRType, chRValue)
 		require.NoError(t, err)
 
 		assert.True(t, chValue.IsObject())
 		ctx.Global().SetPropertyStr("ch", chValue)
 
-		result, err := ctx.Eval("test.js", qjs.Code(`
+		result, err := ctx.Eval("test.js", qngg.Code(`
 			([
 				ch.type,
 				ch.elementType,
@@ -681,20 +681,20 @@ func TestChannelToJSObjectValue(t *testing.T) {
 
 func TestGoChannelToJs(t *testing.T) {
 	t.Run("SendErrorNoReceiverReady", func(t *testing.T) {
-		rt := must(qjs.New())
+		rt := must(qngg.New())
 		defer rt.Close()
 		ctx := rt.Context()
 
 		_, _, jsChan := createChannelValue(t, ctx)
 		defer jsChan.Free()
-		_, err := ctx.Eval("test.js", qjs.Code(`
+		_, err := ctx.Eval("test.js", qngg.Code(`
 			setTimeout(() => { goChan.send(1) }, 100);
 		`))
 		assert.Error(t, err)
 	})
 
 	t.Run("SendErrorBufferFull", func(t *testing.T) {
-		rt := must(qjs.New())
+		rt := must(qngg.New())
 		defer rt.Close()
 		ctx := rt.Context()
 		_, goChan, jsChan := createChannelValue(t, ctx)
@@ -705,27 +705,27 @@ func TestGoChannelToJs(t *testing.T) {
 
 		// ensure the goroutine has sent the value
 		time.Sleep(10 * time.Millisecond)
-		_, err := ctx.Eval("test.js", qjs.Code(`
+		_, err := ctx.Eval("test.js", qngg.Code(`
 			setTimeout(() => { goChan.send(1) }, 100);
 		`))
 		assert.Error(t, err)
 	})
 
 	t.Run("SendErrorChannelClosed", func(t *testing.T) {
-		rt := must(qjs.New())
+		rt := must(qngg.New())
 		defer rt.Close()
 		ctx := rt.Context()
 		_, goChan, jsChan := createChannelValue(t, ctx)
 		defer jsChan.Free()
 		close(goChan)
-		_, err := ctx.Eval("test.js", qjs.Code(`
+		_, err := ctx.Eval("test.js", qngg.Code(`
 			setTimeout(() => { goChan.send(1) }, 100);
 		`))
 		assert.Error(t, err)
 	})
 
 	t.Run("SendSuccess", func(t *testing.T) {
-		rt := must(qjs.New())
+		rt := must(qngg.New())
 		defer rt.Close()
 		ctx := rt.Context()
 
@@ -737,20 +737,20 @@ func TestGoChannelToJs(t *testing.T) {
 		}()
 
 		defer jsChan.Free()
-		must(ctx.Eval("test.js", qjs.Code(`
+		must(ctx.Eval("test.js", qngg.Code(`
 			setTimeout(() => { goChan.send(1) }, 100);
 		`)))
 		<-waitChan
 	})
 
 	t.Run("ReceiveErrorNoData", func(t *testing.T) {
-		rt := must(qjs.New())
+		rt := must(qngg.New())
 		defer rt.Close()
 		ctx := rt.Context()
 
 		_, _, jsChan := createChannelValue(t, ctx)
 		defer jsChan.Free()
-		_, err := ctx.Eval("test.js", qjs.Code(`
+		_, err := ctx.Eval("test.js", qngg.Code(`
 			goChan.receive();
 		`))
 		assert.Error(t, err)
@@ -758,7 +758,7 @@ func TestGoChannelToJs(t *testing.T) {
 	})
 
 	t.Run("ReceiveErrorClosedChannel", func(t *testing.T) {
-		rt := must(qjs.New())
+		rt := must(qngg.New())
 		defer rt.Close()
 		ctx := rt.Context()
 
@@ -767,7 +767,7 @@ func TestGoChannelToJs(t *testing.T) {
 
 		close(goChan)
 
-		_, err := ctx.Eval("test.js", qjs.Code(`
+		_, err := ctx.Eval("test.js", qngg.Code(`
 			goChan.receive();
 		`))
 		assert.Error(t, err)
@@ -775,7 +775,7 @@ func TestGoChannelToJs(t *testing.T) {
 	})
 
 	t.Run("ReceiveSuccess", func(t *testing.T) {
-		rt := must(qjs.New())
+		rt := must(qngg.New())
 		defer rt.Close()
 		ctx := rt.Context()
 
@@ -788,7 +788,7 @@ func TestGoChannelToJs(t *testing.T) {
 
 		// ensure the goroutine has sent the value
 		time.Sleep(10 * time.Millisecond)
-		result := must(ctx.Eval("test.js", qjs.Code(`
+		result := must(ctx.Eval("test.js", qngg.Code(`
 			goChan.receive();
 		`)))
 		defer result.Free()
@@ -799,14 +799,14 @@ func TestGoChannelToJs(t *testing.T) {
 	})
 
 	t.Run("ReceiveMultipleValues", func(t *testing.T) {
-		rt := must(qjs.New())
+		rt := must(qngg.New())
 		defer rt.Close()
 		ctx := rt.Context()
 
 		goChan := make(chan int, 3)
 		chType := reflect.TypeOf(goChan)
 		chValue := reflect.ValueOf(goChan)
-		jsChan := must(qjs.ChannelToJSObjectValue(ctx, chType, chValue))
+		jsChan := must(qngg.ChannelToJSObjectValue(ctx, chType, chValue))
 		assert.True(t, jsChan.IsObject())
 		ctx.Global().SetPropertyStr("goChan", jsChan)
 
@@ -815,7 +815,7 @@ func TestGoChannelToJs(t *testing.T) {
 		}
 
 		for i := 1; i <= 3; i++ {
-			result := must(ctx.Eval("test.js", qjs.Code(`
+			result := must(ctx.Eval("test.js", qngg.Code(`
 				goChan.receive();
 			`)))
 			assert.True(t, result.IsNumber())
@@ -825,7 +825,7 @@ func TestGoChannelToJs(t *testing.T) {
 		}
 
 		// Next receive should block (no more data)
-		_, err := ctx.Eval("test.js", qjs.Code(`
+		_, err := ctx.Eval("test.js", qngg.Code(`
 			goChan.receive();
 		`))
 		assert.Error(t, err)
@@ -833,14 +833,14 @@ func TestGoChannelToJs(t *testing.T) {
 	})
 
 	t.Run("ReceiveFromBufferedChannel", func(t *testing.T) {
-		rt := must(qjs.New())
+		rt := must(qngg.New())
 		defer rt.Close()
 		ctx := rt.Context()
 
 		bufferedChan := make(chan int, 3)
 		chType := reflect.TypeOf(bufferedChan)
 		chValue := reflect.ValueOf(bufferedChan)
-		jsChan := must(qjs.ChannelToJSObjectValue(ctx, chType, chValue))
+		jsChan := must(qngg.ChannelToJSObjectValue(ctx, chType, chValue))
 		ctx.Global().SetPropertyStr("bufferedChan", jsChan)
 
 		bufferedChan <- 100
@@ -848,7 +848,7 @@ func TestGoChannelToJs(t *testing.T) {
 		bufferedChan <- 300
 
 		for i, expected := range []int{100, 200, 300} {
-			result := must(ctx.Eval("test.js", qjs.Code(`
+			result := must(ctx.Eval("test.js", qngg.Code(`
 				bufferedChan.receive();
 			`)))
 			assert.True(t, result.IsNumber(), "Result %d should be a number", i)
@@ -858,7 +858,7 @@ func TestGoChannelToJs(t *testing.T) {
 		}
 
 		// Next receive should block since buffer is empty
-		_, err := ctx.Eval("test.js", qjs.Code(`
+		_, err := ctx.Eval("test.js", qngg.Code(`
 			bufferedChan.receive();
 		`))
 		assert.Error(t, err)
@@ -866,14 +866,14 @@ func TestGoChannelToJs(t *testing.T) {
 	})
 
 	t.Run("CloseSuccessBidirectionalChannel", func(t *testing.T) {
-		rt := must(qjs.New())
+		rt := must(qngg.New())
 		defer rt.Close()
 		ctx := rt.Context()
 
 		_, _, jsChan := createChannelValue(t, ctx)
 		defer jsChan.Free()
 
-		result := must(ctx.Eval("test.js", qjs.Code(`
+		result := must(ctx.Eval("test.js", qngg.Code(`
 			goChan.close();
 		`)))
 		defer result.Free()
@@ -882,7 +882,7 @@ func TestGoChannelToJs(t *testing.T) {
 	})
 
 	t.Run("CloseSuccessSendOnlyChannel", func(t *testing.T) {
-		rt := must(qjs.New())
+		rt := must(qngg.New())
 		defer rt.Close()
 		ctx := rt.Context()
 
@@ -891,11 +891,11 @@ func TestGoChannelToJs(t *testing.T) {
 
 		chType := reflect.TypeOf(sendOnlyChan)
 		chValue := reflect.ValueOf(sendOnlyChan)
-		jsChan := must(qjs.ChannelToJSObjectValue(ctx, chType, chValue))
+		jsChan := must(qngg.ChannelToJSObjectValue(ctx, chType, chValue))
 		assert.True(t, jsChan.IsObject())
 		ctx.Global().SetPropertyStr("sendOnlyChan", jsChan)
 
-		result := must(ctx.Eval("test.js", qjs.Code(`
+		result := must(ctx.Eval("test.js", qngg.Code(`
 			sendOnlyChan.close();
 		`)))
 		defer result.Free()
@@ -904,7 +904,7 @@ func TestGoChannelToJs(t *testing.T) {
 	})
 
 	t.Run("CloseErrorReceiveOnlyChannel", func(t *testing.T) {
-		rt := must(qjs.New())
+		rt := must(qngg.New())
 		defer rt.Close()
 		ctx := rt.Context()
 
@@ -913,11 +913,11 @@ func TestGoChannelToJs(t *testing.T) {
 
 		chType := reflect.TypeOf(receiveOnlyChan)
 		chValue := reflect.ValueOf(receiveOnlyChan)
-		jsChan := must(qjs.ChannelToJSObjectValue(ctx, chType, chValue))
+		jsChan := must(qngg.ChannelToJSObjectValue(ctx, chType, chValue))
 		assert.True(t, jsChan.IsObject())
 		ctx.Global().SetPropertyStr("receiveOnlyChan", jsChan)
 
-		_, err := ctx.Eval("test.js", qjs.Code(`
+		_, err := ctx.Eval("test.js", qngg.Code(`
 			receiveOnlyChan.close();
 		`))
 		assert.Error(t, err)
@@ -925,21 +925,21 @@ func TestGoChannelToJs(t *testing.T) {
 	})
 
 	t.Run("CloseChannelTwice", func(t *testing.T) {
-		rt := must(qjs.New())
+		rt := must(qngg.New())
 		defer rt.Close()
 		ctx := rt.Context()
 
 		_, _, jsChan := createChannelValue(t, ctx)
 		defer jsChan.Free()
 
-		result1 := must(ctx.Eval("test.js", qjs.Code(`
+		result1 := must(ctx.Eval("test.js", qngg.Code(`
 			goChan.close();
 		`)))
 		defer result1.Free()
 		assert.True(t, result1.IsUndefined() || result1.IsNull())
 
 		// Second close should fail
-		_, err := ctx.Eval("test.js", qjs.Code(`
+		_, err := ctx.Eval("test.js", qngg.Code(`
 			goChan.close();
 		`))
 		assert.Error(t, err)

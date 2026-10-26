@@ -1,4 +1,4 @@
-module github.com/fastschema/qjs
+module github.com/ironpark/qngg
 
 go 1.27
 

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fastschema/qjs/internal/wasmtime"
+	"github.com/ironpark/qngg/internal/wasmtime"
 )
 
 // Example of limiting a WebAssembly function's runtime using "fuel consumption".

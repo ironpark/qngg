@@ -1,10 +1,11 @@
-package qjs
+package qngg
 
 import (
 	"context"
 	"fmt"
 	"io"
 	"os"
+	"time"
 )
 
 const (
@@ -34,19 +35,24 @@ type Option struct {
 	CWD               string
 	StartFunctionName string
 	Context           context.Context
-	// Enabling this option significantly increases evaluation time
-	// because every operation must check the done context, which introduces additional overhead.
+	// CloseOnContextDone interrupts running JavaScript when Context is done.
+	// Like MaxExecutionTime, it compiles the module with interruption checks,
+	// which makes compute-heavy JavaScript about 30% slower.
 	CloseOnContextDone bool
 	DisableBuildCache  bool
 	CacheDir           string
 	MemoryLimit        int
 	MaxStackSize       int
-	MaxExecutionTime   int
-	GCThreshold        int
-	QuickJSWasmBytes   []byte
-	ProxyFunction      any
-	Stdout             io.Writer
-	Stderr             io.Writer
+	// MaxExecutionTime limits how long a single call into JavaScript (such as
+	// Eval) may run, including Go functions it calls. When exceeded, the call
+	// fails with ErrExecutionTimeout and the runtime must be closed. Zero means
+	// no limit. See CloseOnContextDone for the cost of interruption checks.
+	MaxExecutionTime time.Duration
+	GCThreshold      int
+	QuickJSWasmBytes []byte
+	ProxyFunction    any
+	Stdout           io.Writer
+	Stderr           io.Writer
 }
 
 // EvalOption configures JavaScript evaluation behavior in QuickJS context.
@@ -201,6 +207,11 @@ func (o *EvalOption) Handle() (handle uint64) {
 // Free releases QuickJS value handles to prevent memory leaks.
 // Must be called after Handle() to clean up WASM memory.
 func (o *EvalOption) Free() {
+	// An interrupted runtime cannot run wasm; its memory goes with the store.
+	if o.c.runtime.interruptErr() != nil {
+		return
+	}
+
 	if o.fileValue.Raw() != 0 {
 		o.c.Call("JS_FreeValue", o.c.Raw(), o.fileValue.Raw())
 	}

@@ -1,17 +1,17 @@
-package qjs_test
+package qngg_test
 
 import (
 	"runtime"
 	"testing"
 	"time"
 
-	"github.com/fastschema/qjs"
+	"github.com/ironpark/qngg"
 )
 
 func TestRuntimeCollectedWithoutClose(t *testing.T) {
 	collected := make(chan struct{})
 	func() {
-		rt, err := qjs.New()
+		rt, err := qngg.New()
 		if err != nil {
 			t.Fatal(err)
 		}

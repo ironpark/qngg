@@ -1,6 +1,8 @@
-package qjs
+package qngg
 
-func load(c *Context, file string, flags ...EvalOptionFunc) (*Value, error) {
+func load(c *Context, file string, flags ...EvalOptionFunc) (_ *Value, err error) {
+	defer recoverInterrupt(c.runtime, &err)
+
 	if file == "" {
 		return nil, ErrInvalidFileName
 	}
@@ -18,7 +20,9 @@ func load(c *Context, file string, flags ...EvalOptionFunc) (*Value, error) {
 	return normalizeJsValue(c, result)
 }
 
-func eval(c *Context, file string, flags ...EvalOptionFunc) (*Value, error) {
+func eval(c *Context, file string, flags ...EvalOptionFunc) (_ *Value, err error) {
+	defer recoverInterrupt(c.runtime, &err)
+
 	if file == "" {
 		return nil, ErrInvalidFileName
 	}
@@ -34,6 +38,8 @@ func eval(c *Context, file string, flags ...EvalOptionFunc) (*Value, error) {
 }
 
 func compile(c *Context, file string, flags ...EvalOptionFunc) (_ []byte, err error) {
+	defer recoverInterrupt(c.runtime, &err)
+
 	option := createEvalOption(c, file, flags...)
 
 	evalOptions := option.Handle()

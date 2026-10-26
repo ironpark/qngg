@@ -1,4 +1,4 @@
-package qjs
+package qngg
 
 import (
 	"errors"
@@ -28,6 +28,7 @@ var (
 	ErrNotArrayBuffer          = errors.New("input is not an ArrayBuffer")
 	ErrMissingBufferProperty   = errors.New("invalid TypedArray: missing buffer property")
 	ErrRuntimeClosed           = errors.New("runtime is closed")
+	ErrExecutionTimeout        = errors.New("execution time limit exceeded")
 	ErrNilModule               = errors.New("WASM module is nil")
 	ErrNilHandle               = errors.New("handle is nil")
 	ErrChanClosed              = errors.New("channel is closed")

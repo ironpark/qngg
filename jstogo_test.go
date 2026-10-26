@@ -1,4 +1,4 @@
-package qjs_test
+package qngg_test
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/fastschema/qjs"
+	"github.com/ironpark/qngg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,10 +31,10 @@ func validateCircularReference(t *testing.T, err error) {
 }
 
 func TestJsBigIntToGo(t *testing.T) {
-	rt := must(qjs.New())
+	rt := must(qngg.New())
 	defer rt.Close()
 
-	result := must(rt.Eval("test.js", qjs.Code(`({ bigInt: BigInt(1234567890), notBigInt: "not a big int" })`)))
+	result := must(rt.Eval("test.js", qngg.Code(`({ bigInt: BigInt(1234567890), notBigInt: "not a big int" })`)))
 	defer result.Free()
 
 	jsBigInt := result.GetPropertyStr("bigInt")
@@ -43,27 +43,27 @@ func TestJsBigIntToGo(t *testing.T) {
 	t.Run("not_a_bigInt", func(t *testing.T) {
 		notBigInt := result.GetPropertyStr("notBigInt")
 		defer notBigInt.Free()
-		val, err := qjs.JsBigIntToGo[int64](notBigInt)
+		val, err := qngg.JsBigIntToGo[int64](notBigInt)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "cannot convert JS BigInt")
 		assert.Equal(t, int64(0), val)
 	})
 
 	t.Run("convert_to_big_int_pointer", func(t *testing.T) {
-		val := must(qjs.JsBigIntToGo[*big.Int](jsBigInt))
+		val := must(qngg.JsBigIntToGo[*big.Int](jsBigInt))
 		assert.IsType(t, (*big.Int)(nil), val)
 		assert.Equal(t, big.NewInt(int64(1234567890)), val)
 	})
 
 	t.Run("convert_to_big_int_value", func(t *testing.T) {
-		val := must(qjs.JsBigIntToGo[big.Int](jsBigInt))
+		val := must(qngg.JsBigIntToGo[big.Int](jsBigInt))
 		assert.IsType(t, big.Int{}, val)
 		expected := *big.NewInt(int64(1234567890))
 		assert.Equal(t, expected, val)
 	})
 
 	t.Run("unsupported_type", func(t *testing.T) {
-		val, err := qjs.JsBigIntToGo[int64](jsBigInt)
+		val, err := qngg.JsBigIntToGo[int64](jsBigInt)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "expected GO type *big.Int/big.Int")
 		assert.Equal(t, int64(0), val)
@@ -71,10 +71,10 @@ func TestJsBigIntToGo(t *testing.T) {
 }
 
 func TestJsNumberToGo(t *testing.T) {
-	rt := must(qjs.New())
+	rt := must(qngg.New())
 	defer rt.Close()
 
-	result := must(rt.Eval("test.js", qjs.Code(`({
+	result := must(rt.Eval("test.js", qngg.Code(`({
 			normalNumber: 42,
 			bigIntValue: BigInt(9007199254740991),
 			nan: NaN,
@@ -109,7 +109,7 @@ func TestJsNumberToGo(t *testing.T) {
 			t.Run(test.property, func(t *testing.T) {
 				val := result.GetPropertyStr(test.property)
 				defer val.Free()
-				_, err := qjs.JsNumberToGo[float64](val)
+				_, err := qngg.JsNumberToGo[float64](val)
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), test.expectedError)
 			})
@@ -120,73 +120,73 @@ func TestJsNumberToGo(t *testing.T) {
 		overflowTestCases := []struct {
 			name        string
 			property    string
-			testValue   func(*qjs.Value)
-			testPointer func(*qjs.Value)
+			testValue   func(*qngg.Value)
+			testPointer func(*qngg.Value)
 			errorMsg    string
 		}{
 			{
 				name:     "int8",
 				property: "overflowInt8",
-				testValue: func(val *qjs.Value) {
-					assert.Contains(t, extractErr(qjs.JsNumberToGo[int8](val)).Error(), "overflows int8")
+				testValue: func(val *qngg.Value) {
+					assert.Contains(t, extractErr(qngg.JsNumberToGo[int8](val)).Error(), "overflows int8")
 				},
-				testPointer: func(val *qjs.Value) {
-					assert.Contains(t, extractErr(qjs.JsNumberToGo[*int8](val)).Error(), "overflows int8")
+				testPointer: func(val *qngg.Value) {
+					assert.Contains(t, extractErr(qngg.JsNumberToGo[*int8](val)).Error(), "overflows int8")
 				},
 				errorMsg: "overflows int8",
 			},
 			{
 				name:     "uint8",
 				property: "overflowUint8",
-				testValue: func(val *qjs.Value) {
-					assert.Contains(t, extractErr(qjs.JsNumberToGo[uint8](val)).Error(), "overflows uint8")
+				testValue: func(val *qngg.Value) {
+					assert.Contains(t, extractErr(qngg.JsNumberToGo[uint8](val)).Error(), "overflows uint8")
 				},
-				testPointer: func(val *qjs.Value) {
-					assert.Contains(t, extractErr(qjs.JsNumberToGo[*uint8](val)).Error(), "overflows uint8")
+				testPointer: func(val *qngg.Value) {
+					assert.Contains(t, extractErr(qngg.JsNumberToGo[*uint8](val)).Error(), "overflows uint8")
 				},
 				errorMsg: "overflows uint8",
 			},
 			{
 				name:     "int16",
 				property: "overflowInt16",
-				testValue: func(val *qjs.Value) {
-					assert.Contains(t, extractErr(qjs.JsNumberToGo[int16](val)).Error(), "overflows int16")
+				testValue: func(val *qngg.Value) {
+					assert.Contains(t, extractErr(qngg.JsNumberToGo[int16](val)).Error(), "overflows int16")
 				},
-				testPointer: func(val *qjs.Value) {
-					assert.Contains(t, extractErr(qjs.JsNumberToGo[*int16](val)).Error(), "overflows int16")
+				testPointer: func(val *qngg.Value) {
+					assert.Contains(t, extractErr(qngg.JsNumberToGo[*int16](val)).Error(), "overflows int16")
 				},
 				errorMsg: "overflows int16",
 			},
 			{
 				name:     "uint16",
 				property: "overflowUint16",
-				testValue: func(val *qjs.Value) {
-					assert.Contains(t, extractErr(qjs.JsNumberToGo[uint16](val)).Error(), "overflows uint16")
+				testValue: func(val *qngg.Value) {
+					assert.Contains(t, extractErr(qngg.JsNumberToGo[uint16](val)).Error(), "overflows uint16")
 				},
-				testPointer: func(val *qjs.Value) {
-					assert.Contains(t, extractErr(qjs.JsNumberToGo[*uint16](val)).Error(), "overflows uint16")
+				testPointer: func(val *qngg.Value) {
+					assert.Contains(t, extractErr(qngg.JsNumberToGo[*uint16](val)).Error(), "overflows uint16")
 				},
 				errorMsg: "overflows uint16",
 			},
 			{
 				name:     "int32",
 				property: "overflowInt32",
-				testValue: func(val *qjs.Value) {
-					assert.Contains(t, extractErr(qjs.JsNumberToGo[int32](val)).Error(), "overflows int32")
+				testValue: func(val *qngg.Value) {
+					assert.Contains(t, extractErr(qngg.JsNumberToGo[int32](val)).Error(), "overflows int32")
 				},
-				testPointer: func(val *qjs.Value) {
-					assert.Contains(t, extractErr(qjs.JsNumberToGo[*int32](val)).Error(), "overflows int32")
+				testPointer: func(val *qngg.Value) {
+					assert.Contains(t, extractErr(qngg.JsNumberToGo[*int32](val)).Error(), "overflows int32")
 				},
 				errorMsg: "overflows int32",
 			},
 			{
 				name:     "uint32",
 				property: "overflowUint32",
-				testValue: func(val *qjs.Value) {
-					assert.Contains(t, extractErr(qjs.JsNumberToGo[uint32](val)).Error(), "overflows uint32")
+				testValue: func(val *qngg.Value) {
+					assert.Contains(t, extractErr(qngg.JsNumberToGo[uint32](val)).Error(), "overflows uint32")
 				},
-				testPointer: func(val *qjs.Value) {
-					assert.Contains(t, extractErr(qjs.JsNumberToGo[*uint32](val)).Error(), "overflows uint32")
+				testPointer: func(val *qngg.Value) {
+					assert.Contains(t, extractErr(qngg.JsNumberToGo[*uint32](val)).Error(), "overflows uint32")
 				},
 				errorMsg: "overflows uint32",
 			},
@@ -227,46 +227,46 @@ func TestJsNumberToGo(t *testing.T) {
 		}
 
 		numTests := []numTest{
-			{"int8", int8(42), must(qjs.JsNumberToGo[int8](normalNum)), 0},
-			{"int8_pointer", int8(42), *must(qjs.JsNumberToGo[*int8](normalNum)), 0},
-			{"uint8", uint8(42), must(qjs.JsNumberToGo[uint8](normalNum)), 0},
-			{"*uint8", uint8(42), *must(qjs.JsNumberToGo[*uint8](normalNum)), 0},
-			{"int16", int16(42), must(qjs.JsNumberToGo[int16](normalNum)), 0},
-			{"*int16", int16(42), *must(qjs.JsNumberToGo[*int16](normalNum)), 0},
-			{"uint16", uint16(42), must(qjs.JsNumberToGo[uint16](normalNum)), 0},
-			{"*uint16", uint16(42), *must(qjs.JsNumberToGo[*uint16](normalNum)), 0},
-			{"int32", int32(42), must(qjs.JsNumberToGo[int32](normalNum)), 0},
-			{"*int32", int32(42), *must(qjs.JsNumberToGo[*int32](normalNum)), 0},
-			{"uint32", uint32(42), must(qjs.JsNumberToGo[uint32](normalNum)), 0},
-			{"*uint32", uint32(42), *must(qjs.JsNumberToGo[*uint32](normalNum)), 0},
-			{"int", int(42), must(qjs.JsNumberToGo[int](normalNum)), 0},
-			{"*int", int(42), *must(qjs.JsNumberToGo[*int](normalNum)), 0},
-			{"uint", uint(42), must(qjs.JsNumberToGo[uint](normalNum)), 0},
-			{"*uint", uint(42), *must(qjs.JsNumberToGo[*uint](normalNum)), 0},
-			{"int64", int64(42), must(qjs.JsNumberToGo[int64](normalNum)), 0},
-			{"*int64", int64(42), *must(qjs.JsNumberToGo[*int64](normalNum)), 0},
-			{"uint64", uint64(42), must(qjs.JsNumberToGo[uint64](normalNum)), 0},
-			{"*uint64", uint64(42), *must(qjs.JsNumberToGo[*uint64](normalNum)), 0},
-			{"uintptr", uintptr(42), must(qjs.JsNumberToGo[uintptr](normalNum)), 0},
-			{"*uintptr", uintptr(42), *must(qjs.JsNumberToGo[*uintptr](normalNum)), 0},
+			{"int8", int8(42), must(qngg.JsNumberToGo[int8](normalNum)), 0},
+			{"int8_pointer", int8(42), *must(qngg.JsNumberToGo[*int8](normalNum)), 0},
+			{"uint8", uint8(42), must(qngg.JsNumberToGo[uint8](normalNum)), 0},
+			{"*uint8", uint8(42), *must(qngg.JsNumberToGo[*uint8](normalNum)), 0},
+			{"int16", int16(42), must(qngg.JsNumberToGo[int16](normalNum)), 0},
+			{"*int16", int16(42), *must(qngg.JsNumberToGo[*int16](normalNum)), 0},
+			{"uint16", uint16(42), must(qngg.JsNumberToGo[uint16](normalNum)), 0},
+			{"*uint16", uint16(42), *must(qngg.JsNumberToGo[*uint16](normalNum)), 0},
+			{"int32", int32(42), must(qngg.JsNumberToGo[int32](normalNum)), 0},
+			{"*int32", int32(42), *must(qngg.JsNumberToGo[*int32](normalNum)), 0},
+			{"uint32", uint32(42), must(qngg.JsNumberToGo[uint32](normalNum)), 0},
+			{"*uint32", uint32(42), *must(qngg.JsNumberToGo[*uint32](normalNum)), 0},
+			{"int", int(42), must(qngg.JsNumberToGo[int](normalNum)), 0},
+			{"*int", int(42), *must(qngg.JsNumberToGo[*int](normalNum)), 0},
+			{"uint", uint(42), must(qngg.JsNumberToGo[uint](normalNum)), 0},
+			{"*uint", uint(42), *must(qngg.JsNumberToGo[*uint](normalNum)), 0},
+			{"int64", int64(42), must(qngg.JsNumberToGo[int64](normalNum)), 0},
+			{"*int64", int64(42), *must(qngg.JsNumberToGo[*int64](normalNum)), 0},
+			{"uint64", uint64(42), must(qngg.JsNumberToGo[uint64](normalNum)), 0},
+			{"*uint64", uint64(42), *must(qngg.JsNumberToGo[*uint64](normalNum)), 0},
+			{"uintptr", uintptr(42), must(qngg.JsNumberToGo[uintptr](normalNum)), 0},
+			{"*uintptr", uintptr(42), *must(qngg.JsNumberToGo[*uintptr](normalNum)), 0},
 
-			{"intAsFloat32", float32(42), must(qjs.JsNumberToGo[float32](normalNum)), 0},
-			{"*intAsFloat32", float32(42), *must(qjs.JsNumberToGo[*float32](normalNum)), 0},
-			{"intAsFloat64", float64(42), must(qjs.JsNumberToGo[float64](normalNum)), 0},
-			{"*intAsFloat64", float64(42), *must(qjs.JsNumberToGo[*float64](normalNum)), 0},
+			{"intAsFloat32", float32(42), must(qngg.JsNumberToGo[float32](normalNum)), 0},
+			{"*intAsFloat32", float32(42), *must(qngg.JsNumberToGo[*float32](normalNum)), 0},
+			{"intAsFloat64", float64(42), must(qngg.JsNumberToGo[float64](normalNum)), 0},
+			{"*intAsFloat64", float64(42), *must(qngg.JsNumberToGo[*float64](normalNum)), 0},
 
-			{"bigInt", 0, big.NewInt(9007199254740991).Cmp(must(qjs.JsNumberToGo[*big.Int](bigIntVal))), 0},
+			{"bigInt", 0, big.NewInt(9007199254740991).Cmp(must(qngg.JsNumberToGo[*big.Int](bigIntVal))), 0},
 
-			{"float32", float32(3.14159), must(qjs.JsNumberToGo[float32](floatVal)), 0.00001},
-			{"*float32", float32(3.14159), *must(qjs.JsNumberToGo[*float32](floatVal)), 0.00001},
-			{"float64", 3.14159, must(qjs.JsNumberToGo[float64](floatVal)), 0.00001},
-			{"*float64", 3.14159, *must(qjs.JsNumberToGo[*float64](floatVal)), 0.00001},
+			{"float32", float32(3.14159), must(qngg.JsNumberToGo[float32](floatVal)), 0.00001},
+			{"*float32", float32(3.14159), *must(qngg.JsNumberToGo[*float32](floatVal)), 0.00001},
+			{"float64", 3.14159, must(qngg.JsNumberToGo[float64](floatVal)), 0.00001},
+			{"*float64", 3.14159, *must(qngg.JsNumberToGo[*float64](floatVal)), 0.00001},
 
-			{"complex64", complex64(complex(float32(42), 0)), must(qjs.JsNumberToGo[complex64](normalNum)), 0},
-			{"*complex64", complex64(complex(float32(42), 0)), *must(qjs.JsNumberToGo[*complex64](normalNum)), 0},
-			{"complex128", complex(float64(42), 0), must(qjs.JsNumberToGo[complex128](normalNum)), 0},
-			{"*complex128", complex(float64(42), 0), *must(qjs.JsNumberToGo[*complex128](normalNum)), 0},
-			{"CustomNumber", CustomNumber(42), must(qjs.JsNumberToGo[CustomNumber](normalNum)), 0},
+			{"complex64", complex64(complex(float32(42), 0)), must(qngg.JsNumberToGo[complex64](normalNum)), 0},
+			{"*complex64", complex64(complex(float32(42), 0)), *must(qngg.JsNumberToGo[*complex64](normalNum)), 0},
+			{"complex128", complex(float64(42), 0), must(qngg.JsNumberToGo[complex128](normalNum)), 0},
+			{"*complex128", complex(float64(42), 0), *must(qngg.JsNumberToGo[*complex128](normalNum)), 0},
+			{"CustomNumber", CustomNumber(42), must(qngg.JsNumberToGo[CustomNumber](normalNum)), 0},
 		}
 
 		for _, test := range numTests {
@@ -345,13 +345,13 @@ func TestJsTimeToGo(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(qjs.New())
+			rt := must(qngg.New())
 			defer rt.Close()
 
-			jsDate := must(rt.Eval("test.js", qjs.Code(test.jsCode)))
+			jsDate := must(rt.Eval("test.js", qngg.Code(test.jsCode)))
 			defer jsDate.Free()
 
-			goTime, err := qjs.JsTimeToGo(jsDate)
+			goTime, err := qngg.JsTimeToGo(jsDate)
 			if test.expectErr != nil {
 				test.expectErr(t, err)
 				return
@@ -405,13 +405,13 @@ func TestJsArrayBufferToGo(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(qjs.New())
+			rt := must(qngg.New())
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", qjs.Code(test.jsCode)))
+			jsValue := must(rt.Eval("test.js", qngg.Code(test.jsCode)))
 			defer jsValue.Free()
 
-			result, err := qjs.JsArrayBufferToGo(jsValue)
+			result, err := qngg.JsArrayBufferToGo(jsValue)
 			if test.expectErr {
 				assert.Error(t, err)
 			} else {
@@ -527,13 +527,13 @@ func TestIsTypedArray(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(qjs.New())
+			rt := must(qngg.New())
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", qjs.Code(test.jsCode)))
+			jsValue := must(rt.Eval("test.js", qngg.Code(test.jsCode)))
 			defer jsValue.Free()
 
-			result := qjs.IsTypedArray(jsValue)
+			result := qngg.IsTypedArray(jsValue)
 			assert.Equal(t, test.expected, result, "IsTypedArray result should match expected value")
 		})
 	}
@@ -614,13 +614,13 @@ func TestJsTypedArrayToGo(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(qjs.New())
+			rt := must(qngg.New())
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", qjs.Code(test.jsCode)))
+			jsValue := must(rt.Eval("test.js", qngg.Code(test.jsCode)))
 			defer jsValue.Free()
 
-			result, err := qjs.JsTypedArrayToGo(jsValue)
+			result, err := qngg.JsTypedArrayToGo(jsValue)
 			if test.expectErr {
 				assert.Error(t, err)
 				if test.errMsg != "" {
@@ -804,7 +804,7 @@ func TestJsArrayToGo(t *testing.T) {
 			jsCode:    `[{"wrongKey": "wrong value"}]`,
 			sample:    struct{ RequiredValue int }{},
 			expectErr: true,
-			errMsg:    "cannot unmarshal JSON array into Go",
+			errMsg:    "unmarshal JSON array into Go", // json/v2 randomizes "cannot" and "unable to"
 		},
 		{
 			name:      "custom_unmarshaler_error",
@@ -824,13 +824,13 @@ func TestJsArrayToGo(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(qjs.New())
+			rt := must(qngg.New())
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", qjs.Code(test.jsCode)))
+			jsValue := must(rt.Eval("test.js", qngg.Code(test.jsCode)))
 			defer jsValue.Free()
 
-			result, err := qjs.JsArrayToGo(jsValue, test.sample)
+			result, err := qngg.JsArrayToGo(jsValue, test.sample)
 			if test.expectErr {
 				assert.Error(t, err)
 				if test.errMsg != "" {
@@ -989,13 +989,13 @@ func TestJsSetToGo(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(qjs.New())
+			rt := must(qngg.New())
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", qjs.Code(test.jsCode)))
+			jsValue := must(rt.Eval("test.js", qngg.Code(test.jsCode)))
 			defer jsValue.Free()
 
-			result, err := qjs.JsSetToGo(jsValue, test.sample)
+			result, err := qngg.JsSetToGo(jsValue, test.sample)
 
 			if test.expect != nil {
 				test.expect(t, result, err)
@@ -1137,7 +1137,7 @@ func TestJsObjectOrMapToGoMap(t *testing.T) {
 			jsCode:    `({"valid": 1, "invalid": {"nested": "object"}, "alsoInvalid": [1,2,3]})`,
 			sample:    map[string]int{},
 			expectErr: true,
-			errMsg:    "cannot unmarshal JSON object into Go int",
+			errMsg:    "unmarshal JSON object into Go int", // json/v2 randomizes "cannot" and "unable to"
 		},
 		{
 			name:      "circular_reference",
@@ -1191,13 +1191,13 @@ func TestJsObjectOrMapToGoMap(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(qjs.New())
+			rt := must(qngg.New())
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", qjs.Code(test.jsCode)))
+			jsValue := must(rt.Eval("test.js", qngg.Code(test.jsCode)))
 			defer jsValue.Free()
 
-			result, err := qjs.JsObjectOrMapToGoMap(jsValue, test.sample)
+			result, err := qngg.JsObjectOrMapToGoMap(jsValue, test.sample)
 			if test.expect != nil {
 				test.expect(t, result, err)
 				return
@@ -1432,7 +1432,7 @@ func TestJsObjectOrMapToGoStruct(t *testing.T) {
 			jsCode:    `({"Complex": {"real": 1, "imag": 2}})`,
 			sample:    struct{ Complex int }{},
 			expectErr: true,
-			errMsg:    "cannot unmarshal JSON object into Go int",
+			errMsg:    "unmarshal JSON object into Go int", // json/v2 randomizes "cannot" and "unable to"
 		},
 		{
 			name:   "field_tags_with_options",
@@ -1566,13 +1566,13 @@ func TestJsObjectOrMapToGoStruct(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(qjs.New())
+			rt := must(qngg.New())
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", qjs.Code(test.jsCode)))
+			jsValue := must(rt.Eval("test.js", qngg.Code(test.jsCode)))
 			defer jsValue.Free()
 
-			result, err := qjs.JsObjectOrMapToGoStruct(jsValue, test.sample)
+			result, err := qngg.JsObjectOrMapToGoStruct(jsValue, test.sample)
 			if test.expect != nil {
 				test.expect(t, result, err)
 				return
@@ -1592,12 +1592,12 @@ func TestJsObjectOrMapToGoStruct(t *testing.T) {
 		})
 	}
 
-	rt := must(qjs.New())
+	rt := must(qngg.New())
 	defer rt.Close()
 
 	t.Run("circular_reference_stringify_error", func(t *testing.T) {
 		// Create a JavaScript object with a circular reference that will cause JSONStringify to fail
-		result := must(rt.Eval("test.js", qjs.Code(`
+		result := must(rt.Eval("test.js", qngg.Code(`
 		(() => {
 			let obj = {
 				name: "test",
@@ -1615,7 +1615,7 @@ func TestJsObjectOrMapToGoStruct(t *testing.T) {
 		}
 
 		var testStruct TestStruct
-		_, err := qjs.JsObjectOrMapToGoStruct(result, testStruct)
+		_, err := qngg.JsObjectOrMapToGoStruct(result, testStruct)
 
 		// Verify we get the JSONStringify error from the selected branch
 		t.Logf("JsObjectOrMapToGoStruct result error: %v", err)
@@ -1626,7 +1626,7 @@ func TestJsObjectOrMapToGoStruct(t *testing.T) {
 
 	t.Run("test_unmarshaler_both_pointer_and_value", func(t *testing.T) {
 		// Test both pointer and non-pointer unmarshaler fields work correctly
-		result := must(rt.Eval("test.js", qjs.Code(`
+		result := must(rt.Eval("test.js", qngg.Code(`
 		({
 			name: "test",
 			pointerField: "pointer value",
@@ -1642,7 +1642,7 @@ func TestJsObjectOrMapToGoStruct(t *testing.T) {
 		}
 
 		var testStruct TestStruct
-		result2, err := qjs.JsObjectOrMapToGoStruct(result, testStruct)
+		result2, err := qngg.JsObjectOrMapToGoStruct(result, testStruct)
 		require.NoError(t, err)
 
 		// Verify both fields were properly unmarshaled
@@ -1690,13 +1690,13 @@ func TestJsObjectOrMapToGo(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(qjs.New())
+			rt := must(qngg.New())
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", qjs.Code(test.jsCode)))
+			jsValue := must(rt.Eval("test.js", qngg.Code(test.jsCode)))
 			defer jsValue.Free()
 
-			result, err := qjs.JsObjectToGo(jsValue, test.sample)
+			result, err := qngg.JsObjectToGo(jsValue, test.sample)
 			if test.expectErr {
 				assert.Error(t, err)
 				if test.errMsg != "" {
@@ -1710,9 +1710,9 @@ func TestJsObjectOrMapToGo(t *testing.T) {
 	}
 
 	t.Run("js_object_array_to_go", func(t *testing.T) {
-		rt := must(qjs.New())
+		rt := must(qngg.New())
 		defer rt.Close()
-		jsArray := must(rt.Eval("test.js", qjs.Code(`[
+		jsArray := must(rt.Eval("test.js", qngg.Code(`[
 		{name: "Alice", age: 30},
 		{name: "Bob", age: 25}
 	]`)))
@@ -1724,7 +1724,7 @@ func TestJsObjectOrMapToGo(t *testing.T) {
 		}
 
 		var target []Person
-		result, err := qjs.JsObjectToGo(jsArray, target)
+		result, err := qngg.JsObjectToGo(jsArray, target)
 		assert.NoError(t, err)
 
 		expected := []Person{
@@ -1735,24 +1735,24 @@ func TestJsObjectOrMapToGo(t *testing.T) {
 	})
 
 	t.Run("js_object_to_go_fallback", func(t *testing.T) {
-		rt := must(qjs.New())
+		rt := must(qngg.New())
 		defer rt.Close()
 
 		// successfully convert a JS object to a Go slice of int
-		jsValue := must(rt.Eval("test.js", qjs.Code(`(new Date)`)))
+		jsValue := must(rt.Eval("test.js", qngg.Code(`(new Date)`)))
 		defer jsValue.Free()
-		result, err := qjs.JsObjectToGo[string](jsValue)
+		result, err := qngg.JsObjectToGo[string](jsValue)
 		require.NoError(t, err)
 		assert.NotNil(t, result)
 
 		// fail to convert a JS object to a Go value due to json stringify error
-		jsValue = must(rt.Eval("test.js", qjs.Code(`(() => {
+		jsValue = must(rt.Eval("test.js", qngg.Code(`(() => {
 			let obj = { name: "test" };
 			obj.circular = obj; // Create circular reference
 			return obj;
 		})()`)))
 		defer jsValue.Free()
-		_, err = qjs.JsObjectToGo[int](jsValue)
+		_, err = qngg.JsObjectToGo[int](jsValue)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to stringify JS value")
 	})
@@ -2023,13 +2023,13 @@ func TestJsFuncToGo(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(qjs.New())
+			rt := must(qngg.New())
 			defer rt.Close()
 
-			jsValue := must(rt.Eval("test.js", qjs.Code(test.jsCode)))
+			jsValue := must(rt.Eval("test.js", qngg.Code(test.jsCode)))
 			defer jsValue.Free()
 
-			goFunc, err := qjs.JsFuncToGo(jsValue, test.sample)
+			goFunc, err := qngg.JsFuncToGo(jsValue, test.sample)
 			if test.expectErr {
 				assert.Error(t, err)
 				if test.errMsg != "" {
@@ -2109,10 +2109,10 @@ func TestJsFuncToGo(t *testing.T) {
 	}
 
 	t.Run("validate_go_function_signature", func(t *testing.T) {
-		rt := must(qjs.New())
+		rt := must(qngg.New())
 		defer rt.Close()
 
-		jsFuncValue := must(rt.Eval("test.js", qjs.Code(`
+		jsFuncValue := must(rt.Eval("test.js", qngg.Code(`
 			function testFunc(a, b, c) {
 				return a + b + c;
 			}
@@ -2121,7 +2121,7 @@ func TestJsFuncToGo(t *testing.T) {
 		defer jsFuncValue.Free()
 
 		t.Run("Non_variadic_function_argument_error", func(t *testing.T) {
-			jsFuncValue := must(rt.Eval("test.js", qjs.Code(`
+			jsFuncValue := must(rt.Eval("test.js", qngg.Code(`
 				function nonVariadicFunc(a, b, c) {
 					return a + b + c;
 				}
@@ -2130,7 +2130,7 @@ func TestJsFuncToGo(t *testing.T) {
 			defer jsFuncValue.Free()
 
 			var goFunc func(int, int, any) (any, error)
-			goFunc = must(qjs.JsFuncToGo(jsFuncValue, goFunc))
+			goFunc = must(qngg.JsFuncToGo(jsFuncValue, goFunc))
 
 			unsafePtr := unsafe.Pointer(&[]byte{1, 2, 3}[0])
 			result, err := goFunc(1, 2, unsafePtr)
@@ -2141,7 +2141,7 @@ func TestJsFuncToGo(t *testing.T) {
 
 		t.Run("Variadic_function_fixed_argument_error", func(t *testing.T) {
 			// Create a variadic JS function
-			jsFuncValue := must(rt.Eval("test.js", qjs.Code(`
+			jsFuncValue := must(rt.Eval("test.js", qngg.Code(`
 				function variadicFunc(required1, required2, ...rest) {
 					return required1 + required2 + rest.length;
 				}
@@ -2150,7 +2150,7 @@ func TestJsFuncToGo(t *testing.T) {
 			defer jsFuncValue.Free()
 
 			var goFunc func(int, any, ...any) (any, error)
-			goFunc = must(qjs.JsFuncToGo(jsFuncValue, goFunc))
+			goFunc = must(qngg.JsFuncToGo(jsFuncValue, goFunc))
 
 			unsafePtr := unsafe.Pointer(&[]byte{1, 2, 3}[0])
 			result, err := goFunc(1, unsafePtr, "extra1", "extra2")
@@ -2160,7 +2160,7 @@ func TestJsFuncToGo(t *testing.T) {
 		})
 
 		t.Run("Variadic_function_variadic_argument_error", func(t *testing.T) {
-			jsFuncValue := must(rt.Eval("test.js", qjs.Code(`
+			jsFuncValue := must(rt.Eval("test.js", qngg.Code(`
 				function variadicFunc(required, ...rest) {
 					return required + rest.length;
 				}
@@ -2169,7 +2169,7 @@ func TestJsFuncToGo(t *testing.T) {
 			defer jsFuncValue.Free()
 
 			var goFunc func(int, ...any) (any, error)
-			goFunc = must(qjs.JsFuncToGo(jsFuncValue, goFunc))
+			goFunc = must(qngg.JsFuncToGo(jsFuncValue, goFunc))
 
 			unsafePtr := unsafe.Pointer(&[]byte{1, 2, 3}[0])
 			result, err := goFunc(1, "valid", unsafePtr, "another")
@@ -2180,27 +2180,27 @@ func TestJsFuncToGo(t *testing.T) {
 
 		t.Run("Valid_function_arguments", func(t *testing.T) {
 			// Non-variadic function
-			jsFuncNV := must(rt.Eval("test.js", qjs.Code(`(a, b, c) => a + b + c`)))
+			jsFuncNV := must(rt.Eval("test.js", qngg.Code(`(a, b, c) => a + b + c`)))
 			defer jsFuncNV.Free()
 
 			var goFuncNV func(int, int, int) (any, error)
-			goFuncNV = must(qjs.JsFuncToGo(jsFuncNV, goFuncNV))
+			goFuncNV = must(qngg.JsFuncToGo(jsFuncNV, goFuncNV))
 			result := must(goFuncNV(1, 2, 3))
 			assert.Equal(t, int64(6), result)
 
 			// Variadic function
-			jsFuncV := must(rt.Eval("test.js", qjs.Code(`(a, ...rest) => a + rest.length`)))
+			jsFuncV := must(rt.Eval("test.js", qngg.Code(`(a, ...rest) => a + rest.length`)))
 			defer jsFuncV.Free()
 
 			var goFuncV func(int, ...any) (any, error)
-			goFuncV = must(qjs.JsFuncToGo(jsFuncV, goFuncV))
+			goFuncV = must(qngg.JsFuncToGo(jsFuncV, goFuncV))
 
 			result = must(goFuncV(10, "a", "b", "c"))
 			assert.Equal(t, int64(13), result)
 		})
 
 		t.Run("Invalid_function_return_type", func(t *testing.T) {
-			jsFuncValue := must(rt.Eval("test.js", qjs.Code(`
+			jsFuncValue := must(rt.Eval("test.js", qngg.Code(`
 				function invalidReturnFunc() {
 					return { name: "test" }; // Should return a string
 				}
@@ -2209,7 +2209,7 @@ func TestJsFuncToGo(t *testing.T) {
 			defer jsFuncValue.Free()
 
 			var goFunc func() (string, error)
-			goFunc = must(qjs.JsFuncToGo(jsFuncValue, goFunc))
+			goFunc = must(qngg.JsFuncToGo(jsFuncValue, goFunc))
 
 			result, err := goFunc()
 			assert.Error(t, err)
@@ -2218,7 +2218,7 @@ func TestJsFuncToGo(t *testing.T) {
 		})
 
 		t.Run("Function_returns_error_with_symbol", func(t *testing.T) {
-			jsFuncValue := must(rt.Eval("test.js", qjs.Code(`
+			jsFuncValue := must(rt.Eval("test.js", qngg.Code(`
 				function symbolReturnFunc() {
 					return Symbol("test"); // Symbol cannot be converted by jsValueToGo
 				}
@@ -2227,7 +2227,7 @@ func TestJsFuncToGo(t *testing.T) {
 			defer jsFuncValue.Free()
 
 			var goFunc func() (string, error)
-			goFunc = must(qjs.JsFuncToGo(jsFuncValue, goFunc))
+			goFunc = must(qngg.JsFuncToGo(jsFuncValue, goFunc))
 
 			result, err := goFunc()
 			assert.Error(t, err)
@@ -2242,33 +2242,33 @@ func TestJsFuncToGo(t *testing.T) {
 	// to verify the go function passthrough works correctly
 	// without any modification by js engine
 	t.Run("Passthrough_of_go_func", func(t *testing.T) {
-		rt := must(qjs.New())
+		rt := must(qngg.New())
 		defer rt.Close()
 
 		type TestArg struct {
 			TestFunc func(int) (int, error) `json:"testFunc"`
 		}
 
-		goArg := must(qjs.ToJsValue(rt.Context(), TestArg{
+		goArg := must(qngg.ToJsValue(rt.Context(), TestArg{
 			TestFunc: func(x int) (int, error) {
 				return x * x, nil
 			},
 		}))
 		rt.Context().Global().SetPropertyStr("goArg", goArg)
-		goReceiver := rt.Context().Function(func(ctx *qjs.This) (*qjs.Value, error) {
+		goReceiver := rt.Context().Function(func(ctx *qngg.This) (*qngg.Value, error) {
 			jsArg := ctx.Args()[0]
 			// expect wrong type
-			_, err := qjs.ToGoValue(jsArg, "")
+			_, err := qngg.ToGoValue(jsArg, "")
 			assert.Error(t, err, "string is not a valid type, expected TestArg")
 
-			goArg := must(qjs.ToGoValue(jsArg, TestArg{}))
+			goArg := must(qngg.ToGoValue(jsArg, TestArg{}))
 			result := must(goArg.TestFunc(5))
 			assert.Equal(t, 25, result)
 			return nil, nil
 		})
 		rt.Context().Global().SetPropertyStr("goReceiver", goReceiver)
 		jsCode := `(function() { goReceiver(goArg); })();`
-		result := must(rt.Eval("test.js", qjs.Code(jsCode)))
+		result := must(rt.Eval("test.js", qngg.Code(jsCode)))
 		defer result.Free()
 	})
 }
@@ -2284,25 +2284,25 @@ func TestJsValueToGo(t *testing.T) {
 		expectEval   func(*testing.T, any, error)
 		customAssert func(*testing.T, any, error)
 	}{
-		// Direct qjs.Value
+		// Direct qngg.Value
 		{
-			name:   "*qjs.Value",
+			name:   "*qngg.Value",
 			jsCode: `42`,
-			sample: &qjs.Value{},
+			sample: &qngg.Value{},
 			customAssert: func(t *testing.T, result any, err error) {
 				require.NoError(t, err)
-				assert.IsType(t, &qjs.Value{}, result)
-				assert.Equal(t, int64(42), result.(*qjs.Value).Int64())
+				assert.IsType(t, &qngg.Value{}, result)
+				assert.Equal(t, int64(42), result.(*qngg.Value).Int64())
 			},
 		},
 		{
-			name:   "qjs.Value",
+			name:   "qngg.Value",
 			jsCode: `42`,
-			sample: qjs.Value{},
+			sample: qngg.Value{},
 			customAssert: func(t *testing.T, result any, err error) {
 				require.NoError(t, err)
-				assert.IsType(t, qjs.Value{}, result)
-				value := result.(qjs.Value)
+				assert.IsType(t, qngg.Value{}, result)
+				value := result.(qngg.Value)
 				assert.Equal(t, int64(42), (&value).Int64())
 			},
 		},
@@ -2530,10 +2530,10 @@ func TestJsValueToGo(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(qjs.New())
+			rt := must(qngg.New())
 			defer rt.Close()
 
-			jsValue, err := rt.Eval("test.js", qjs.Code(test.jsCode))
+			jsValue, err := rt.Eval("test.js", qngg.Code(test.jsCode))
 			defer jsValue.Free()
 
 			if test.expectEval != nil {
@@ -2543,9 +2543,9 @@ func TestJsValueToGo(t *testing.T) {
 
 			var result any
 			if test.sample != nil {
-				result, err = qjs.ToGoValue(jsValue, test.sample)
+				result, err = qngg.ToGoValue(jsValue, test.sample)
 			} else {
-				result, err = qjs.ToGoValue[any](jsValue)
+				result, err = qngg.ToGoValue[any](jsValue)
 			}
 
 			if test.customAssert != nil {
@@ -2567,32 +2567,32 @@ func TestJsValueToGo(t *testing.T) {
 }
 
 func TestCircularReferenceDetection(t *testing.T) {
-	rt := must(qjs.New())
+	rt := must(qngg.New())
 	defer rt.Close()
 
 	circularReferenceTests := []struct {
 		name     string
-		testFunc func(*qjs.Value) error
+		testFunc func(*qngg.Value) error
 		desc     string
 	}{
 		{
 			name: "circular_reference_in_struct_conversion",
-			testFunc: func(result *qjs.Value) error {
+			testFunc: func(result *qngg.Value) error {
 				type TestStruct struct {
 					Name string         `json:"name"`
 					Self map[string]any `json:"self"`
 				}
 				var testStruct TestStruct
-				_, err := qjs.JsObjectOrMapToGoStruct(result, testStruct)
+				_, err := qngg.JsObjectOrMapToGoStruct(result, testStruct)
 				return err
 			},
 			desc: "Tests struct conversion circular reference detection",
 		},
 		{
 			name: "circular_reference_in_map_conversion",
-			testFunc: func(result *qjs.Value) error {
+			testFunc: func(result *qngg.Value) error {
 				var testMap map[string]any
-				_, err := qjs.JsObjectOrMapToGoMap(result, testMap)
+				_, err := qngg.JsObjectOrMapToGoMap(result, testMap)
 				return err
 			},
 			desc: "Tests map conversion circular reference detection",
@@ -2601,7 +2601,7 @@ func TestCircularReferenceDetection(t *testing.T) {
 
 	for _, tc := range circularReferenceTests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := must(rt.Eval("test.js", qjs.Code(`
+			result := must(rt.Eval("test.js", qngg.Code(`
 				var obj = { name: "test" };
 				obj.self = obj; // circular reference
 				obj;
@@ -2615,24 +2615,24 @@ func TestCircularReferenceDetection(t *testing.T) {
 }
 
 func TestStringToBoolConversion(t *testing.T) {
-	rt := must(qjs.New())
+	rt := must(qngg.New())
 	defer rt.Close()
 
 	var boolVal bool
 
-	result := must(rt.Eval("test.js", qjs.Code(`"non-empty"`)))
+	result := must(rt.Eval("test.js", qngg.Code(`"non-empty"`)))
 	defer result.Free()
-	converted := must(qjs.ToGoValue(result, boolVal))
+	converted := must(qngg.ToGoValue(result, boolVal))
 	assert.True(t, converted)
 
-	emptyResult := must(rt.Eval("test.js", qjs.Code(`""`)))
+	emptyResult := must(rt.Eval("test.js", qngg.Code(`""`)))
 	defer emptyResult.Free()
-	converted2 := must(qjs.ToGoValue(emptyResult, boolVal))
+	converted2 := must(qngg.ToGoValue(emptyResult, boolVal))
 	assert.False(t, converted2)
 }
 
 func TestErrorValueHandling(t *testing.T) {
-	rt := must(qjs.New())
+	rt := must(qngg.New())
 	defer rt.Close()
 
 	obj := rt.Context().NewObject()
@@ -2642,35 +2642,35 @@ func TestErrorValueHandling(t *testing.T) {
 	defer errorValue.Free()
 
 	assert.True(t, errorValue.IsError())
-	converted := must(qjs.ToGoValue[error](errorValue))
+	converted := must(qngg.ToGoValue[error](errorValue))
 	assert.Error(t, converted)
 	assert.Contains(t, converted.Error(), "not a constructor")
 }
 
 func TestStringToNumericConversion(t *testing.T) {
-	rt := must(qjs.New())
+	rt := must(qngg.New())
 	defer rt.Close()
 
 	t.Run("string_to_pointer_numeric_types", func(t *testing.T) {
-		result := must(rt.Eval("test.js", qjs.Code(`"42"`)))
+		result := must(rt.Eval("test.js", qngg.Code(`"42"`)))
 		defer result.Free()
 		var ptrInt *int
-		converted := must(qjs.ToGoValue(result, ptrInt))
+		converted := must(qngg.ToGoValue(result, ptrInt))
 		assert.Equal(t, 42, *converted)
 
-		floatResult := must(rt.Eval("test.js", qjs.Code(`"3.14"`)))
+		floatResult := must(rt.Eval("test.js", qngg.Code(`"3.14"`)))
 		defer floatResult.Free()
 		var ptrFloat *float64
-		converted2 := must(qjs.ToGoValue(floatResult, ptrFloat))
+		converted2 := must(qngg.ToGoValue(floatResult, ptrFloat))
 		assert.Equal(t, 3.14, *converted2)
 	})
 
 	t.Run("empty_string_to_numeric_conversion", func(t *testing.T) {
-		result := must(rt.Eval("test.js", qjs.Code(`""`)))
+		result := must(rt.Eval("test.js", qngg.Code(`""`)))
 		defer result.Free()
 
 		var intVal int
-		_, err := qjs.ToGoValue(result, intVal)
+		_, err := qngg.ToGoValue(result, intVal)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "empty string cannot be converted to number")
 	})
@@ -2713,10 +2713,10 @@ func TestStringToNumericConversion(t *testing.T) {
 
 		for _, tc := range testCases {
 			t.Run(fmt.Sprintf("convert_%s_to_%T", tc.jsValue, tc.targetType), func(t *testing.T) {
-				result := must(rt.Eval("test.js", qjs.Code(tc.jsValue)))
+				result := must(rt.Eval("test.js", qngg.Code(tc.jsValue)))
 				defer result.Free()
 
-				converted, err := qjs.ToGoValue(result, tc.targetType)
+				converted, err := qngg.ToGoValue(result, tc.targetType)
 				require.NoError(t, err)
 				assert.Equal(t, tc.expected, converted)
 			})

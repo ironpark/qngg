@@ -90,7 +90,6 @@ JSContext *New_QJSContext(JSRuntime *rt);
 QJSRuntime *New_QJS(
     size_t memory_limit,
     size_t max_stack_size,
-    size_t max_execution_time,
     size_t gc_threshold);
 void QJS_UpdateStackTop(QJSRuntime *qjs);
 JSModuleDef *QJS_ModuleLoader(JSContext *ctx, const char *module_name, void *opaque,

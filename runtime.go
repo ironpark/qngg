@@ -1,4 +1,4 @@
-package qjs
+package qngg
 
 import (
 	_ "embed"
@@ -8,7 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/fastschema/qjs/internal/wasmtime"
+	"github.com/ironpark/qngg/internal/wasmtime"
 )
 
 //go:embed qjs.wasm
@@ -34,6 +34,7 @@ type Runtime struct {
 	free      *wasmFunc
 	mem       *Mem
 	stopWatch func() bool
+	limit     *execLimit
 	// argument buffers for invoke, one per level of nested wasm calls
 	callBufs  [][]wasmtime.ValRaw
 	callDepth int
@@ -67,7 +68,7 @@ func New(options ...Option) (runtime *Runtime, err error) {
 
 	proxy, ok := option.ProxyFunction.(JsFunctionProxy)
 	if !ok {
-		return nil, fmt.Errorf("invalid proxy function type %T, expected qjs.JsFunctionProxy", option.ProxyFunction)
+		return nil, fmt.Errorf("invalid proxy function type %T, expected qngg.JsFunctionProxy", option.ProxyFunction)
 	}
 
 	qjsBytes, hash := wasmBytes, embeddedHash()
@@ -76,7 +77,7 @@ func New(options ...Option) (runtime *Runtime, err error) {
 	}
 
 	engine, module, err := getCompiledModule(
-		option.CloseOnContextDone,
+		option.CloseOnContextDone || option.MaxExecutionTime > 0,
 		option.DisableBuildCache,
 		option.CacheDir,
 		qjsBytes,
@@ -141,9 +142,14 @@ func (r *Runtime) Close() {
 		return
 	}
 
-	// Free QJS runtime handle
+	// Free QJS runtime handle. An interrupted runtime cannot run wasm anymore
+	// and its QuickJS state may be inconsistent; releasing the store below
+	// frees its memory as a whole.
 	if r.handle != nil {
-		r.FreeQJSRuntime()
+		if r.interruptErr() == nil {
+			r.FreeQJSRuntime()
+		}
+
 		r.handle = nil
 	}
 
@@ -251,7 +257,6 @@ func (r *Runtime) initializeRuntime() {
 		"New_QJS",
 		uint64(r.option.MemoryLimit),
 		uint64(r.option.MaxStackSize),
-		uint64(r.option.MaxExecutionTime),
 		uint64(r.option.GCThreshold),
 	)
 
@@ -292,8 +297,13 @@ func (r *Runtime) export(name string) *wasmFunc {
 // uint64 holding the little-endian bits of the wasm value. It returns the
 // first result encoded the same way.
 func (r *Runtime) invoke(f *wasmFunc, args ...uint64) (uint64, error) {
-	if err := r.context.Err(); err != nil {
-		return 0, fmt.Errorf("context done: %w", err)
+	if err := r.interruptErr(); err != nil {
+		return 0, err
+	}
+
+	if r.limit != nil && r.callDepth == 0 {
+		r.limit.start()
+		defer r.limit.stop()
 	}
 
 	// Calls nest when JavaScript calls back into Go, so each nesting level
@@ -318,6 +328,10 @@ func (r *Runtime) invoke(f *wasmFunc, args ...uint64) (uint64, error) {
 	defer func() { r.callDepth-- }()
 
 	if err := f.fn.CallUnchecked(r.store, vals); err != nil {
+		if r.limit != nil && r.limit.timedOut {
+			return 0, ErrExecutionTimeout
+		}
+
 		return 0, fmt.Errorf("wasm call failed: %w", err)
 	}
 
@@ -331,6 +345,38 @@ func (r *Runtime) invoke(f *wasmFunc, args ...uint64) (uint64, error) {
 	}
 
 	return result, nil
+}
+
+// interruptErr reports why the runtime can no longer run wasm: its context
+// is done or a call exceeded MaxExecutionTime. It returns nil otherwise.
+func (r *Runtime) interruptErr() error {
+	if r.limit != nil && r.limit.timedOut {
+		return ErrExecutionTimeout
+	}
+
+	if err := r.context.Err(); err != nil {
+		return fmt.Errorf("context done: %w", err)
+	}
+
+	return nil
+}
+
+// recoverInterrupt turns the panic of a wasm call that failed because the
+// runtime was interrupted into an error. Other panics propagate. It must be
+// deferred directly.
+func recoverInterrupt(r *Runtime, err *error) {
+	rec := recover()
+	if rec == nil {
+		return
+	}
+
+	if ierr := r.interruptErr(); ierr != nil {
+		*err = ierr
+
+		return
+	}
+
+	panic(rec)
 }
 
 func (r *Runtime) call(name string, args ...uint64) uint64 {

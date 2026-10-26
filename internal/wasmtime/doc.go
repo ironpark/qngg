@@ -13,7 +13,7 @@ The Wasmtime C API shared library is loaded by the first call to LoadError,
 which must precede any other use of the package. By default the library for
 the target platform is embedded in the binary (see the embedded package) and
 extracted on first use into the user cache directory.
-Set the QJS_WASMTIME_LIB environment variable to load a library from a
+Set the QNGG_WASMTIME_LIB environment variable to load a library from a
 different path instead, and build with the `wasmtime_noembed` tag to leave the
 embedded copy out of the binary. The library version must match
 embedded.Version.

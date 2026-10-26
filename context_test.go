@@ -1,4 +1,4 @@
-package qjs_test
+package qngg_test
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fastschema/qjs"
+	"github.com/ironpark/qngg"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -43,15 +43,15 @@ func TestContextValueCreation(t *testing.T) {
 			fmt.Printf("context check: is nil=%t, value=%v\n", ctx == nil, ctx)
 			return num * 2
 		}
-		jsFuncWithContext := must(qjs.ToJsValue(ctx, goFuncWithContext))
+		jsFuncWithContext := must(qngg.ToJsValue(ctx, goFuncWithContext))
 		ctx.Global().SetPropertyStr("funcWithContext", jsFuncWithContext)
 
-		ctx.SetFunc("$context", func(this *qjs.This) (*qjs.Value, error) {
+		ctx.SetFunc("$context", func(this *qngg.This) (*qngg.Value, error) {
 			val := ctx.NewProxyValue(context.Background())
 			return val, nil
 		})
 
-		result, err := ctx.Eval("test.js", qjs.Code(`
+		result, err := ctx.Eval("test.js", qngg.Code(`
 			funcWithContext($context(), 10);
 		`))
 		assert.NoError(t, err)
@@ -62,90 +62,90 @@ func TestContextValueCreation(t *testing.T) {
 	t.Run("primitive_values", func(t *testing.T) {
 		testCases := []struct {
 			name     string
-			creator  func() *qjs.Value
-			verifier func(*testing.T, *qjs.Value)
+			creator  func() *qngg.Value
+			verifier func(*testing.T, *qngg.Value)
 		}{
 			{
 				name:    "uninitialized",
-				creator: func() *qjs.Value { return ctx.NewUninitialized() },
-				verifier: func(t *testing.T, val *qjs.Value) {
+				creator: func() *qngg.Value { return ctx.NewUninitialized() },
+				verifier: func(t *testing.T, val *qngg.Value) {
 					assert.True(t, val.IsUninitialized())
 				},
 			},
 			{
 				name:    "null",
-				creator: func() *qjs.Value { return ctx.NewNull() },
-				verifier: func(t *testing.T, val *qjs.Value) {
+				creator: func() *qngg.Value { return ctx.NewNull() },
+				verifier: func(t *testing.T, val *qngg.Value) {
 					assert.True(t, val.IsNull())
 				},
 			},
 			{
 				name:    "undefined",
-				creator: func() *qjs.Value { return ctx.NewUndefined() },
-				verifier: func(t *testing.T, val *qjs.Value) {
+				creator: func() *qngg.Value { return ctx.NewUndefined() },
+				verifier: func(t *testing.T, val *qngg.Value) {
 					assert.True(t, val.IsUndefined())
 				},
 			},
 			{
 				name:    "boolean_true",
-				creator: func() *qjs.Value { return ctx.NewBool(true) },
-				verifier: func(t *testing.T, val *qjs.Value) {
+				creator: func() *qngg.Value { return ctx.NewBool(true) },
+				verifier: func(t *testing.T, val *qngg.Value) {
 					assert.True(t, val.Bool())
 				},
 			},
 			{
 				name:    "boolean_false",
-				creator: func() *qjs.Value { return ctx.NewBool(false) },
-				verifier: func(t *testing.T, val *qjs.Value) {
+				creator: func() *qngg.Value { return ctx.NewBool(false) },
+				verifier: func(t *testing.T, val *qngg.Value) {
 					assert.False(t, val.Bool())
 				},
 			},
 			{
 				name:    "string",
-				creator: func() *qjs.Value { return ctx.NewString("Hello, World!") },
-				verifier: func(t *testing.T, val *qjs.Value) {
+				creator: func() *qngg.Value { return ctx.NewString("Hello, World!") },
+				verifier: func(t *testing.T, val *qngg.Value) {
 					assert.Equal(t, "Hello, World!", val.String())
 				},
 			},
 			{
 				name:    "int32",
-				creator: func() *qjs.Value { return ctx.NewInt32(42) },
-				verifier: func(t *testing.T, val *qjs.Value) {
+				creator: func() *qngg.Value { return ctx.NewInt32(42) },
+				verifier: func(t *testing.T, val *qngg.Value) {
 					assert.Equal(t, int32(42), val.Int32())
 				},
 			},
 			{
 				name:    "int64",
-				creator: func() *qjs.Value { return ctx.NewInt64(9876543210) },
-				verifier: func(t *testing.T, val *qjs.Value) {
+				creator: func() *qngg.Value { return ctx.NewInt64(9876543210) },
+				verifier: func(t *testing.T, val *qngg.Value) {
 					assert.Equal(t, int64(9876543210), val.Int64())
 				},
 			},
 			{
 				name:    "uint32",
-				creator: func() *qjs.Value { return ctx.NewUint32(42) },
-				verifier: func(t *testing.T, val *qjs.Value) {
+				creator: func() *qngg.Value { return ctx.NewUint32(42) },
+				verifier: func(t *testing.T, val *qngg.Value) {
 					assert.Equal(t, uint32(42), val.Uint32())
 				},
 			},
 			{
 				name:    "float64",
-				creator: func() *qjs.Value { return ctx.NewFloat64(3.14159) },
-				verifier: func(t *testing.T, val *qjs.Value) {
+				creator: func() *qngg.Value { return ctx.NewFloat64(3.14159) },
+				verifier: func(t *testing.T, val *qngg.Value) {
 					assert.InEpsilon(t, 3.14159, val.Float64(), 0.00001)
 				},
 			},
 			{
 				name:    "bigint64",
-				creator: func() *qjs.Value { return ctx.NewBigInt64(9876543210) },
-				verifier: func(t *testing.T, val *qjs.Value) {
+				creator: func() *qngg.Value { return ctx.NewBigInt64(9876543210) },
+				verifier: func(t *testing.T, val *qngg.Value) {
 					assert.True(t, val.IsBigInt())
 				},
 			},
 			{
 				name:    "biguint64",
-				creator: func() *qjs.Value { return ctx.NewBigUint64(9876543210) },
-				verifier: func(t *testing.T, val *qjs.Value) {
+				creator: func() *qngg.Value { return ctx.NewBigUint64(9876543210) },
+				verifier: func(t *testing.T, val *qngg.Value) {
 					assert.True(t, val.IsBigInt())
 				},
 			},
@@ -215,47 +215,47 @@ func TestContextErrorHandling(t *testing.T) {
 	t.Run("exception_throwing", func(t *testing.T) {
 		testCases := []struct {
 			name           string
-			throwFunc      func() *qjs.Value
+			throwFunc      func() *qngg.Value
 			expectedErrMsg string
 		}{
 			{
 				name: "throw_error",
-				throwFunc: func() *qjs.Value {
+				throwFunc: func() *qngg.Value {
 					return ctx.ThrowError(errors.New("custom error"))
 				},
 				expectedErrMsg: "custom error",
 			},
 			{
 				name: "throw_syntax_error",
-				throwFunc: func() *qjs.Value {
+				throwFunc: func() *qngg.Value {
 					return ctx.ThrowSyntaxError("syntax %s", "error")
 				},
 				expectedErrMsg: "syntax error",
 			},
 			{
 				name: "throw_type_error",
-				throwFunc: func() *qjs.Value {
+				throwFunc: func() *qngg.Value {
 					return ctx.ThrowTypeError("type %s", "error")
 				},
 				expectedErrMsg: "type error",
 			},
 			{
 				name: "throw_reference_error",
-				throwFunc: func() *qjs.Value {
+				throwFunc: func() *qngg.Value {
 					return ctx.ThrowReferenceError("reference %s", "error")
 				},
 				expectedErrMsg: "reference error",
 			},
 			{
 				name: "throw_range_error",
-				throwFunc: func() *qjs.Value {
+				throwFunc: func() *qngg.Value {
 					return ctx.ThrowRangeError("range %s", "error")
 				},
 				expectedErrMsg: "range error",
 			},
 			{
 				name: "throw_internal_error",
-				throwFunc: func() *qjs.Value {
+				throwFunc: func() *qngg.Value {
 					return ctx.ThrowInternalError("internal %s", "error")
 				},
 				expectedErrMsg: "internal error",
@@ -285,38 +285,38 @@ func TestContextScriptExecution(t *testing.T) {
 	_, ctx := setupRuntime(t)
 
 	t.Run("eval_basic", func(t *testing.T) {
-		result := must(ctx.Eval("test_eval.js", qjs.Code(`1 + 2`)))
+		result := must(ctx.Eval("test_eval.js", qngg.Code(`1 + 2`)))
 		defer result.Free()
 		assert.Equal(t, int32(3), result.Int32())
 	})
 
 	t.Run("eval_with_module_type", func(t *testing.T) {
 		result := must(ctx.Eval("test_module.js",
-			qjs.Code(`export default 42;`),
-			qjs.TypeModule()))
+			qngg.Code(`export default 42;`),
+			qngg.TypeModule()))
 		defer result.Free()
 		assert.Equal(t, int32(42), result.Int32())
 	})
 
 	t.Run("compile_and_execute", func(t *testing.T) {
-		bytecode := must(ctx.Compile("test_compile.js", qjs.Code(`2 * 3`)))
+		bytecode := must(ctx.Compile("test_compile.js", qngg.Code(`2 * 3`)))
 		assert.NotEmpty(t, bytecode)
 
-		result := must(ctx.Eval("test_bytecode.js", qjs.Bytecode(bytecode)))
+		result := must(ctx.Eval("test_bytecode.js", qngg.Bytecode(bytecode)))
 		defer result.Free()
 		assert.Equal(t, int32(6), result.Int32())
 	})
 
 	t.Run("load_and_import", func(t *testing.T) {
 		moduleCode := `export const value = 42;`
-		loaded := must(ctx.Load("test_load.js", qjs.Code(moduleCode)))
+		loaded := must(ctx.Load("test_load.js", qngg.Code(moduleCode)))
 		defer loaded.Free()
 
 		result := must(ctx.Eval("test_import.js",
-			qjs.Code(`
+			qngg.Code(`
 			import { value } from 'test_load.js';
 			export default value`),
-			qjs.TypeModule()))
+			qngg.TypeModule()))
 		defer result.Free()
 		assert.Equal(t, int32(42), result.Int32())
 	})
@@ -336,12 +336,12 @@ func TestContextFunctionBinding(t *testing.T) {
 // Helper structure for function test cases
 type functionTestCase struct {
 	name              string
-	fn                qjs.Function
-	asyncFn           qjs.AsyncFunction
+	fn                qngg.Function
+	asyncFn           qngg.AsyncFunction
 	code              string
 	expectErrorString string
 	expectError       func(*testing.T, error)
-	expectValue       func(*testing.T, *qjs.Value)
+	expectValue       func(*testing.T, *qngg.Value)
 }
 
 // Synchronous Functions Tests
@@ -349,7 +349,7 @@ func testSynchronousFunctions(t *testing.T) {
 	t.Run("basic_function_registration", func(t *testing.T) {
 		_, ctx := setupRuntime(t)
 
-		ctx.SetFunc("testFunc", func(this *qjs.This) (*qjs.Value, error) {
+		ctx.SetFunc("testFunc", func(this *qngg.This) (*qngg.Value, error) {
 			args := this.Args()
 			if len(args) > 0 {
 				return this.Context().NewString("Hello " + args[0].String()), nil
@@ -357,11 +357,11 @@ func testSynchronousFunctions(t *testing.T) {
 			return this.Context().NewString("Hello World"), nil
 		})
 
-		result := must(ctx.Eval("test.js", qjs.Code(`testFunc("John")`)))
+		result := must(ctx.Eval("test.js", qngg.Code(`testFunc("John")`)))
 		defer result.Free()
 		assert.Equal(t, "Hello John", result.String())
 
-		result2 := must(ctx.Eval("test2.js", qjs.Code("testFunc()")))
+		result2 := must(ctx.Eval("test2.js", qngg.Code("testFunc()")))
 		defer result2.Free()
 		assert.Equal(t, "Hello World", result2.String())
 	})
@@ -387,13 +387,13 @@ func testAsynchronousFunctions(t *testing.T) {
 	t.Run("basic_async_function", func(t *testing.T) {
 		_, ctx := setupRuntime(t)
 
-		ctx.SetAsyncFunc("asyncTestFunc", func(this *qjs.This) {
+		ctx.SetAsyncFunc("asyncTestFunc", func(this *qngg.This) {
 			this.Promise().Resolve(this.Context().NewString("async result"))
 		})
 
 		result := must(ctx.Eval(
 			"test_async.js",
-			qjs.Code(`async function run() { return await asyncTestFunc(); }; run()`),
+			qngg.Code(`async function run() { return await asyncTestFunc(); }; run()`),
 		))
 		defer result.Free()
 		assert.Equal(t, "async result", result.String())
@@ -446,14 +446,14 @@ func createErrorHandlingTests() []functionTestCase {
 		{
 			name:              "return_error",
 			expectErrorString: "error string",
-			fn: func(this *qjs.This) (*qjs.Value, error) {
+			fn: func(this *qngg.This) (*qngg.Value, error) {
 				return this.NewUndefined(), errors.New("error string")
 			},
 		},
 		{
 			name:              "throw_string",
 			expectErrorString: "throw string",
-			fn: func(this *qjs.This) (*qjs.Value, error) {
+			fn: func(this *qngg.This) (*qngg.Value, error) {
 				this.Context().Throw(this.Context().NewString("throw string"))
 				return this.NewUndefined(), nil
 			},
@@ -461,7 +461,7 @@ func createErrorHandlingTests() []functionTestCase {
 		{
 			name:              "throw_bool",
 			expectErrorString: "true",
-			fn: func(this *qjs.This) (*qjs.Value, error) {
+			fn: func(this *qngg.This) (*qngg.Value, error) {
 				this.Context().Throw(this.Context().NewBool(true))
 				return this.NewUndefined(), nil
 			},
@@ -469,7 +469,7 @@ func createErrorHandlingTests() []functionTestCase {
 		{
 			name:              "throw_custom_error",
 			expectErrorString: "custom error",
-			fn: func(this *qjs.This) (*qjs.Value, error) {
+			fn: func(this *qngg.This) (*qngg.Value, error) {
 				return this.Context().ThrowError(errors.New("custom error")), nil
 			},
 		},
@@ -480,37 +480,37 @@ func createReturnValueTests() []functionTestCase {
 	return []functionTestCase{
 		{
 			name: "return_string",
-			fn: func(this *qjs.This) (*qjs.Value, error) {
+			fn: func(this *qngg.This) (*qngg.Value, error) {
 				return this.Context().NewString("Hello world"), nil
 			},
-			expectValue: func(t *testing.T, val *qjs.Value) {
+			expectValue: func(t *testing.T, val *qngg.Value) {
 				assert.Equal(t, "Hello world", val.String())
 			},
 		},
 		{
 			name: "return_number",
-			fn: func(this *qjs.This) (*qjs.Value, error) {
+			fn: func(this *qngg.This) (*qngg.Value, error) {
 				return this.Context().NewInt32(12345), nil
 			},
-			expectValue: func(t *testing.T, val *qjs.Value) {
+			expectValue: func(t *testing.T, val *qngg.Value) {
 				assert.Equal(t, int32(12345), val.Int32())
 			},
 		},
 		{
 			name: "return_bool",
-			fn: func(this *qjs.This) (*qjs.Value, error) {
+			fn: func(this *qngg.This) (*qngg.Value, error) {
 				return this.Context().NewBool(true), nil
 			},
-			expectValue: func(t *testing.T, val *qjs.Value) {
+			expectValue: func(t *testing.T, val *qngg.Value) {
 				assert.True(t, val.Bool())
 			},
 		},
 		{
 			name: "return_undefined",
-			fn: func(this *qjs.This) (*qjs.Value, error) {
+			fn: func(this *qngg.This) (*qngg.Value, error) {
 				return this.NewUndefined(), nil
 			},
-			expectValue: func(t *testing.T, val *qjs.Value) {
+			expectValue: func(t *testing.T, val *qngg.Value) {
 				assert.True(t, val.IsUndefined())
 			},
 		},
@@ -522,38 +522,38 @@ func createArgumentHandlingTests() []functionTestCase {
 		{
 			name: "string_argument",
 			code: `goFunc('World')`,
-			fn: func(this *qjs.This) (*qjs.Value, error) {
+			fn: func(this *qngg.This) (*qngg.Value, error) {
 				return this.Context().NewString(
 					"Hello " + this.Args()[0].String(),
 				), nil
 			},
-			expectValue: func(t *testing.T, val *qjs.Value) {
+			expectValue: func(t *testing.T, val *qngg.Value) {
 				assert.Equal(t, "Hello World", val.String())
 			},
 		},
 		{
 			name: "numeric_arguments",
 			code: `goFunc(10, 20)`,
-			fn: func(this *qjs.This) (*qjs.Value, error) {
+			fn: func(this *qngg.This) (*qngg.Value, error) {
 				return this.Context().NewInt32(
 					this.Args()[0].Int32() + this.Args()[1].Int32(),
 				), nil
 			},
-			expectValue: func(t *testing.T, val *qjs.Value) {
+			expectValue: func(t *testing.T, val *qngg.Value) {
 				assert.Equal(t, int32(30), val.Int32())
 			},
 		},
 		{
 			name: "object_argument",
 			code: `goFunc({"name": "John Doe", "age": 30})`,
-			fn: func(this *qjs.This) (*qjs.Value, error) {
+			fn: func(this *qngg.This) (*qngg.Value, error) {
 				obj := this.Args()[0].Object()
 				defer obj.Free()
 				return this.Context().NewString(
 					"Hello " + obj.GetPropertyStr("name").String(),
 				), nil
 			},
-			expectValue: func(t *testing.T, val *qjs.Value) {
+			expectValue: func(t *testing.T, val *qngg.Value) {
 				assert.Equal(t, "Hello John Doe", val.String())
 			},
 		},
@@ -565,21 +565,21 @@ func createAsyncErrorHandlingTests() []functionTestCase {
 		{
 			name:              "reject_string",
 			expectErrorString: "throw string",
-			asyncFn: func(this *qjs.This) {
+			asyncFn: func(this *qngg.This) {
 				this.Promise().Reject(this.Context().NewString("throw string"))
 			},
 		},
 		{
 			name:              "reject_number",
 			expectErrorString: "12345",
-			asyncFn: func(this *qjs.This) {
+			asyncFn: func(this *qngg.This) {
 				this.Promise().Reject(this.Context().NewInt32(12345))
 			},
 		},
 		{
 			name:              "throw_in_async",
 			expectErrorString: "syntax error",
-			asyncFn: func(this *qjs.This) {
+			asyncFn: func(this *qngg.This) {
 				this.Context().ThrowSyntaxError("syntax error")
 			},
 		},
@@ -590,19 +590,19 @@ func createAsyncReturnValueTests() []functionTestCase {
 	return []functionTestCase{
 		{
 			name: "resolve_string",
-			asyncFn: func(this *qjs.This) {
+			asyncFn: func(this *qngg.This) {
 				this.Promise().Resolve(this.Context().NewString("Hello world"))
 			},
-			expectValue: func(t *testing.T, val *qjs.Value) {
+			expectValue: func(t *testing.T, val *qngg.Value) {
 				assert.Equal(t, "Hello world", val.String())
 			},
 		},
 		{
 			name: "resolve_number",
-			asyncFn: func(this *qjs.This) {
+			asyncFn: func(this *qngg.This) {
 				this.Promise().Resolve(this.Context().NewInt32(12345))
 			},
-			expectValue: func(t *testing.T, val *qjs.Value) {
+			expectValue: func(t *testing.T, val *qngg.Value) {
 				assert.Equal(t, int32(12345), val.Int32())
 			},
 		},
@@ -614,24 +614,24 @@ func createAsyncArgumentHandlingTests() []functionTestCase {
 		{
 			name: "async_string_argument",
 			code: `await goAsyncFunc('World')`,
-			asyncFn: func(this *qjs.This) {
+			asyncFn: func(this *qngg.This) {
 				this.Promise().Resolve(this.Context().NewString(
 					"Hello " + this.Args()[0].String(),
 				))
 			},
-			expectValue: func(t *testing.T, val *qjs.Value) {
+			expectValue: func(t *testing.T, val *qngg.Value) {
 				assert.Equal(t, "Hello World", val.String())
 			},
 		},
 		{
 			name: "async_numeric_arguments",
 			code: `await goAsyncFunc(10, 20)`,
-			asyncFn: func(this *qjs.This) {
+			asyncFn: func(this *qngg.This) {
 				this.Promise().Resolve(this.Context().NewInt32(
 					this.Args()[0].Int32() + this.Args()[1].Int32(),
 				))
 			},
-			expectValue: func(t *testing.T, val *qjs.Value) {
+			expectValue: func(t *testing.T, val *qngg.Value) {
 				assert.Equal(t, int32(30), val.Int32())
 			},
 		},
@@ -642,7 +642,7 @@ func createAsyncArgumentHandlingTests() []functionTestCase {
 func runFunctionTests(t *testing.T, tests []functionTestCase, isAsync bool) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rt := must(qjs.New())
+			rt := must(qngg.New())
 			defer rt.Close()
 
 			code := test.code
@@ -662,16 +662,16 @@ func runFunctionTests(t *testing.T, tests []functionTestCase, isAsync bool) {
 				rt.Context().SetFunc(funcName, test.fn)
 			}
 
-			var val *qjs.Value
+			var val *qngg.Value
 			var err error
 			if isAsync {
 				val, err = rt.Eval(
 					test.name+".js",
-					qjs.Code(code),
-					qjs.FlagAsync(),
+					qngg.Code(code),
+					qngg.FlagAsync(),
 				)
 			} else {
-				val, err = rt.Eval(test.name+".js", qjs.Code(code))
+				val, err = rt.Eval(test.name+".js", qngg.Code(code))
 			}
 			defer val.Free()
 

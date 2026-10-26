@@ -1,4 +1,4 @@
-package qjs_test
+package qngg_test
 
 import (
 	"errors"
@@ -10,7 +10,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/fastschema/qjs"
+	"github.com/ironpark/qngg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -163,16 +163,16 @@ func createNestedStructure(depth int) any {
 	return root
 }
 
-func testValueConversion(t *testing.T, ctx *qjs.Context, input any, validator func(*qjs.Value)) {
-	result, err := qjs.ToJsValue(ctx, input)
+func testValueConversion(t *testing.T, ctx *qngg.Context, input any, validator func(*qngg.Value)) {
+	result, err := qngg.ToJsValue(ctx, input)
 	require.NoError(t, err, "ToJSValue should not return error for input %T: %v", input, input)
 	require.NotNil(t, result, "ToJSValue should not return nil for input %T: %v", input, input)
 	defer result.Free()
 	validator(result)
 }
 
-func testErrorCase(t *testing.T, ctx *qjs.Context, input any, expectedErrorSubstring string) {
-	result, err := qjs.ToJsValue(ctx, input)
+func testErrorCase(t *testing.T, ctx *qngg.Context, input any, expectedErrorSubstring string) {
+	result, err := qngg.ToJsValue(ctx, input)
 	if result != nil {
 		result.Free()
 	}
@@ -182,15 +182,15 @@ func testErrorCase(t *testing.T, ctx *qjs.Context, input any, expectedErrorSubst
 	}
 }
 
-func testNumberValue(t *testing.T, ctx *qjs.Context, input any, expected int64) {
-	testValueConversion(t, ctx, input, func(result *qjs.Value) {
+func testNumberValue(t *testing.T, ctx *qngg.Context, input any, expected int64) {
+	testValueConversion(t, ctx, input, func(result *qngg.Value) {
 		assert.True(t, result.IsNumber(), "Expected number for input %T: %v", input, input)
 		assert.Equal(t, expected, result.Int64(), "Number value mismatch for input %T: %v", input, input)
 	})
 }
 
-func testFloatValue(t *testing.T, ctx *qjs.Context, input any, expected float64, tolerance float64) {
-	testValueConversion(t, ctx, input, func(result *qjs.Value) {
+func testFloatValue(t *testing.T, ctx *qngg.Context, input any, expected float64, tolerance float64) {
+	testValueConversion(t, ctx, input, func(result *qngg.Value) {
 		assert.True(t, result.IsNumber(), "Expected number for input %T: %v", input, input)
 		actual := result.Float64()
 		if math.IsNaN(expected) {
@@ -204,7 +204,7 @@ func testFloatValue(t *testing.T, ctx *qjs.Context, input any, expected float64,
 }
 
 func TestJSValueConversion(t *testing.T) {
-	runtime := must(qjs.New())
+	runtime := must(qngg.New())
 	defer runtime.Close()
 	ctx := runtime.Context()
 
@@ -245,7 +245,7 @@ func TestJSValueConversion(t *testing.T) {
 			}
 
 			t.Run("ByteRuneComplexTypes", func(t *testing.T) {
-				jsValue, err := qjs.ToJsValue(runtime.Context(), []byte("hello world"))
+				jsValue, err := qngg.ToJsValue(runtime.Context(), []byte("hello world"))
 				require.NoError(t, err)
 				defer jsValue.Free()
 
@@ -257,7 +257,7 @@ func TestJSValueConversion(t *testing.T) {
 			t.Run("Int32", func(t *testing.T) {
 				testValues := []int32{0, 1, -1, 42, -42, math.MaxInt32, math.MinInt32}
 				for _, v := range testValues {
-					testValueConversion(t, ctx, v, func(result *qjs.Value) {
+					testValueConversion(t, ctx, v, func(result *qngg.Value) {
 						assert.True(t, result.IsNumber())
 						assert.Equal(t, v, result.Int32())
 					})
@@ -265,7 +265,7 @@ func TestJSValueConversion(t *testing.T) {
 			})
 
 			t.Run("Uintptr", func(t *testing.T) {
-				val := qjs.GoNumberToJs[uintptr](ctx, 42)
+				val := qngg.GoNumberToJs[uintptr](ctx, 42)
 				assert.True(t, val.IsNumber(), "Uintptr should be converted to number")
 				retrieved := val.Int64()
 				assert.Equal(t, int64(42), retrieved, "Uintptr value should match")
@@ -275,7 +275,7 @@ func TestJSValueConversion(t *testing.T) {
 			t.Run("Int64LargeValues", func(t *testing.T) {
 				largeValues := []int64{math.MaxInt64, math.MinInt64}
 				for _, v := range largeValues {
-					testValueConversion(t, ctx, v, func(result *qjs.Value) {
+					testValueConversion(t, ctx, v, func(result *qngg.Value) {
 						assert.True(t, result.IsNumber())
 						retrieved := result.Int64()
 						assert.NotEqual(t, 0, retrieved, "Large int64 should not become 0")
@@ -284,7 +284,7 @@ func TestJSValueConversion(t *testing.T) {
 			})
 
 			t.Run("MaxUint64", func(t *testing.T) {
-				val := qjs.GoNumberToJs[uint64](ctx, math.MaxUint64)
+				val := qngg.GoNumberToJs[uint64](ctx, math.MaxUint64)
 				assert.True(t, val.IsBigInt())
 				retrieved := val.BigInt().Uint64()
 				var expected uint64 = math.MaxUint64
@@ -326,7 +326,7 @@ func TestJSValueConversion(t *testing.T) {
 			t.Run("Uint32", func(t *testing.T) {
 				testValues := []uint32{0, 1, 42, math.MaxUint32}
 				for _, v := range testValues {
-					testValueConversion(t, ctx, v, func(result *qjs.Value) {
+					testValueConversion(t, ctx, v, func(result *qngg.Value) {
 						assert.True(t, result.IsNumber())
 						assert.Equal(t, v, result.Uint32())
 					})
@@ -346,7 +346,7 @@ func TestJSValueConversion(t *testing.T) {
 				t.Run("LargeValues", func(t *testing.T) {
 					largeValues := []uint64{uint64(math.MaxInt64) + 1, math.MaxUint64}
 					for _, v := range largeValues {
-						testValueConversion(t, ctx, v, func(result *qjs.Value) {
+						testValueConversion(t, ctx, v, func(result *qngg.Value) {
 							assert.True(t, result.IsNumber())
 							retrieved := result.Float64()
 							assert.NotEqual(t, 0.0, retrieved, "Large uint64 should not become 0")
@@ -412,7 +412,7 @@ func TestJSValueConversion(t *testing.T) {
 
 			for _, test := range complexTests {
 				t.Run(test.name, func(t *testing.T) {
-					testValueConversion(t, ctx, test.input, func(result *qjs.Value) {
+					testValueConversion(t, ctx, test.input, func(result *qngg.Value) {
 						assert.True(t, result.IsObject(), "Complex number should be object")
 						obj := result.Object()
 						defer obj.Free()
@@ -438,26 +438,26 @@ func TestJSValueConversion(t *testing.T) {
 			epoch := time.Unix(0, 0)
 
 			t.Run("TimeByValue", func(t *testing.T) {
-				testValueConversion(t, ctx, now, func(result *qjs.Value) {
+				testValueConversion(t, ctx, now, func(result *qngg.Value) {
 					assert.True(t, result.IsDate(), "Time should convert to Date")
 				})
 			})
 
 			t.Run("TimeByPointer", func(t *testing.T) {
-				testValueConversion(t, ctx, &now, func(result *qjs.Value) {
+				testValueConversion(t, ctx, &now, func(result *qngg.Value) {
 					assert.True(t, result.IsDate(), "Time pointer should convert to Date")
 				})
 			})
 
 			t.Run("NilTimePointer", func(t *testing.T) {
 				var nilTime *time.Time
-				testValueConversion(t, ctx, nilTime, func(result *qjs.Value) {
+				testValueConversion(t, ctx, nilTime, func(result *qngg.Value) {
 					assert.True(t, result.IsNull(), "nil time pointer should be null")
 				})
 			})
 
 			t.Run("EpochTime", func(t *testing.T) {
-				testValueConversion(t, ctx, epoch, func(result *qjs.Value) {
+				testValueConversion(t, ctx, epoch, func(result *qngg.Value) {
 					assert.True(t, result.IsDate(), "Epoch time should convert to Date")
 				})
 			})
@@ -465,14 +465,14 @@ func TestJSValueConversion(t *testing.T) {
 
 		t.Run("NilBytes", func(t *testing.T) {
 			var nilBytes []byte
-			testValueConversion(t, ctx, nilBytes, func(result *qjs.Value) {
+			testValueConversion(t, ctx, nilBytes, func(result *qngg.Value) {
 				assert.True(t, result.IsNull(), "nil byte slice should be null")
 			})
 		})
 
 		t.Run("Channel", func(t *testing.T) {
 			ch := make(chan string, 5)
-			testValueConversion(t, ctx, ch, func(result *qjs.Value) {
+			testValueConversion(t, ctx, ch, func(result *qngg.Value) {
 				assert.True(t, result.IsObject(), "Channel should be object")
 			})
 		})
@@ -482,7 +482,7 @@ func TestJSValueConversion(t *testing.T) {
 		t.Run("SliceTypes", func(t *testing.T) {
 			t.Run("IntSlice", func(t *testing.T) {
 				slice := []int{1, 2, 3, 4, 5}
-				testValueConversion(t, ctx, slice, func(result *qjs.Value) {
+				testValueConversion(t, ctx, slice, func(result *qngg.Value) {
 					assert.True(t, result.IsArray(), "Int slice should be array")
 					arr := result.Object()
 					defer arr.Free()
@@ -498,7 +498,7 @@ func TestJSValueConversion(t *testing.T) {
 
 			t.Run("StringSlice", func(t *testing.T) {
 				slice := []string{"hello", "world", "test"}
-				testValueConversion(t, ctx, slice, func(result *qjs.Value) {
+				testValueConversion(t, ctx, slice, func(result *qngg.Value) {
 					assert.True(t, result.IsArray(), "String slice should be array")
 					arr := result.Object()
 					defer arr.Free()
@@ -514,14 +514,14 @@ func TestJSValueConversion(t *testing.T) {
 
 			t.Run("EmptySlice", func(t *testing.T) {
 				var emptySlice []int
-				testValueConversion(t, ctx, emptySlice, func(result *qjs.Value) {
+				testValueConversion(t, ctx, emptySlice, func(result *qngg.Value) {
 					assert.True(t, result.IsNull(), "Empty slice should be null")
 				})
 			})
 
 			t.Run("NilSlice", func(t *testing.T) {
 				var nilSlice []string
-				testValueConversion(t, ctx, nilSlice, func(result *qjs.Value) {
+				testValueConversion(t, ctx, nilSlice, func(result *qngg.Value) {
 					assert.True(t, result.IsNull(), "nil slice should be null")
 				})
 			})
@@ -530,7 +530,7 @@ func TestJSValueConversion(t *testing.T) {
 		t.Run("ArrayTypes", func(t *testing.T) {
 			t.Run("IntArray", func(t *testing.T) {
 				arr := [3]int{1, 2, 3}
-				testValueConversion(t, ctx, arr, func(result *qjs.Value) {
+				testValueConversion(t, ctx, arr, func(result *qngg.Value) {
 					assert.True(t, result.IsArray(), "Int array should be array")
 					jsArr := result.Object()
 					defer jsArr.Free()
@@ -546,7 +546,7 @@ func TestJSValueConversion(t *testing.T) {
 
 			t.Run("StringArray", func(t *testing.T) {
 				arr := [2]string{"hello", "world"}
-				testValueConversion(t, ctx, arr, func(result *qjs.Value) {
+				testValueConversion(t, ctx, arr, func(result *qngg.Value) {
 					assert.True(t, result.IsArray(), "String array should be array")
 					jsArr := result.Object()
 					defer jsArr.Free()
@@ -562,7 +562,7 @@ func TestJSValueConversion(t *testing.T) {
 
 			t.Run("EmptyArray", func(t *testing.T) {
 				arr := [0]int{}
-				testValueConversion(t, ctx, arr, func(result *qjs.Value) {
+				testValueConversion(t, ctx, arr, func(result *qngg.Value) {
 					assert.True(t, result.IsArray(), "Empty array should still be array")
 				})
 			})
@@ -575,7 +575,7 @@ func TestJSValueConversion(t *testing.T) {
 					"two":   2,
 					"three": 3,
 				}
-				testValueConversion(t, ctx, m, func(result *qjs.Value) {
+				testValueConversion(t, ctx, m, func(result *qngg.Value) {
 					assert.True(t, result.IsObject(), "Map should be object")
 					obj := result.Object()
 					defer obj.Free()
@@ -595,7 +595,7 @@ func TestJSValueConversion(t *testing.T) {
 					2: "two",
 					3: "three",
 				}
-				testValueConversion(t, ctx, m, func(result *qjs.Value) {
+				testValueConversion(t, ctx, m, func(result *qngg.Value) {
 					assert.True(t, result.IsObject(), "Map should be object")
 					obj := result.Object()
 					defer obj.Free()
@@ -612,14 +612,14 @@ func TestJSValueConversion(t *testing.T) {
 
 			t.Run("EmptyMap", func(t *testing.T) {
 				m := make(map[string]int)
-				testValueConversion(t, ctx, m, func(result *qjs.Value) {
+				testValueConversion(t, ctx, m, func(result *qngg.Value) {
 					assert.True(t, result.IsObject(), "Empty map should be object")
 				})
 			})
 
 			t.Run("NilMap", func(t *testing.T) {
 				var nilMap map[string]int
-				testValueConversion(t, ctx, nilMap, func(result *qjs.Value) {
+				testValueConversion(t, ctx, nilMap, func(result *qngg.Value) {
 					assert.True(t, result.IsNull(), "nil map should be null")
 				})
 			})
@@ -629,7 +629,7 @@ func TestJSValueConversion(t *testing.T) {
 	t.Run("StructTypes", func(t *testing.T) {
 		t.Run("SimpleStruct", func(t *testing.T) {
 			s := SimpleStruct{Name: "John", Age: 30}
-			testValueConversion(t, ctx, s, func(result *qjs.Value) {
+			testValueConversion(t, ctx, s, func(result *qngg.Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
 				obj := result.Object()
 				defer obj.Free()
@@ -648,7 +648,7 @@ func TestJSValueConversion(t *testing.T) {
 
 		t.Run("StructWithMethods", func(t *testing.T) {
 			s := StructWithMethods{Value: 10}
-			testValueConversion(t, ctx, s, func(result *qjs.Value) {
+			testValueConversion(t, ctx, s, func(result *qngg.Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
 				obj := result.Object()
 				defer obj.Free()
@@ -674,7 +674,7 @@ func TestJSValueConversion(t *testing.T) {
 			// Adding another level of indirection to ensure pointer resolution works correctly
 			s1 := &StructWithPointerMethods{Value: 20}
 			s2 := &s1
-			testValueConversion(t, ctx, s2, func(result *qjs.Value) {
+			testValueConversion(t, ctx, s2, func(result *qngg.Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
 				obj := result.Object()
 				defer obj.Free()
@@ -710,7 +710,7 @@ func TestJSValueConversion(t *testing.T) {
 				EmptyTagField:  "empty_tag",
 				CommaOnlyField: "comma_only",
 			}
-			testValueConversion(t, ctx, s, func(result *qjs.Value) {
+			testValueConversion(t, ctx, s, func(result *qngg.Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
 				obj := result.Object()
 				defer obj.Free()
@@ -745,7 +745,7 @@ func TestJSValueConversion(t *testing.T) {
 				Name: "embedded", Age: 25,
 				NewField: "new",
 			}
-			testValueConversion(t, ctx, s, func(result *qjs.Value) {
+			testValueConversion(t, ctx, s, func(result *qngg.Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
 				obj := result.Object()
 				defer obj.Free()
@@ -774,7 +774,7 @@ func TestJSValueConversion(t *testing.T) {
 				EmbeddedStruct: nil,
 				ExtraField:     "extra",
 			}
-			testValueConversion(t, ctx, s, func(result *qjs.Value) {
+			testValueConversion(t, ctx, s, func(result *qngg.Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
 				obj := result.Object()
 				defer obj.Free()
@@ -797,7 +797,7 @@ func TestJSValueConversion(t *testing.T) {
 				EmbeddedStruct: &EmbeddedStruct{Name: "pointer_embedded", Age: 30},
 				ExtraField:     "extra",
 			}
-			testValueConversion(t, ctx, s, func(result *qjs.Value) {
+			testValueConversion(t, ctx, s, func(result *qngg.Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
 				obj := result.Object()
 				defer obj.Free()
@@ -832,7 +832,7 @@ func TestJSValueConversion(t *testing.T) {
 				CustomIntPtr:  new(CustomIntPtr),
 				ExtraField:    "extra",
 			}
-			testValueConversion(t, ctx, s, func(result *qjs.Value) {
+			testValueConversion(t, ctx, s, func(result *qngg.Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
 				obj := result.Object()
 				defer obj.Free()
@@ -893,7 +893,7 @@ func TestJSValueConversion(t *testing.T) {
 				AliasString: "alias_test",
 				ExtraField:  "extra",
 			}
-			testValueConversion(t, ctx, s, func(result *qjs.Value) {
+			testValueConversion(t, ctx, s, func(result *qngg.Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
 				obj := result.Object()
 				defer obj.Free()
@@ -921,7 +921,7 @@ func TestJSValueConversion(t *testing.T) {
 				DefString:  "def_test",
 				ExtraField: "extra",
 			}
-			testValueConversion(t, ctx, s, func(result *qjs.Value) {
+			testValueConversion(t, ctx, s, func(result *qngg.Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
 				obj := result.Object()
 				defer obj.Free()
@@ -958,7 +958,7 @@ func TestJSValueConversion(t *testing.T) {
 		rtype := reflect.TypeOf(s)
 		rval := reflect.ValueOf(s)
 
-		result, err := qjs.GoStructToJs(ctx, rtype, rval)
+		result, err := qngg.GoStructToJs(ctx, rtype, rval)
 		require.NoError(t, err)
 		defer result.Free()
 
@@ -969,7 +969,7 @@ func TestJSValueConversion(t *testing.T) {
 		slice := []int{1, 2, 3}
 		rval := reflect.ValueOf(slice)
 
-		result, err := qjs.GoSliceToJs(ctx, rval)
+		result, err := qngg.GoSliceToJs(ctx, rval)
 		require.NoError(t, err)
 		defer result.Free()
 
@@ -980,7 +980,7 @@ func TestJSValueConversion(t *testing.T) {
 		m := map[string]int{"key": 42}
 		rval := reflect.ValueOf(m)
 
-		result, err := qjs.GoMapToJs(ctx, rval)
+		result, err := qngg.GoMapToJs(ctx, rval)
 		require.NoError(t, err)
 		defer result.Free()
 
@@ -1000,7 +1000,7 @@ func TestJSValueConversion(t *testing.T) {
 				privateField: "private",
 			}
 
-			testValueConversion(t, ctx, s, func(result *qjs.Value) {
+			testValueConversion(t, ctx, s, func(result *qngg.Value) {
 				assert.True(t, result.IsObject(), "Struct should be object")
 				obj := result.Object()
 				defer obj.Free()
@@ -1039,21 +1039,21 @@ func TestJSValueConversion(t *testing.T) {
 
 // Additional specific error path tests
 func TestToJSValue_ErrorHandling(t *testing.T) {
-	runtime := must(qjs.New())
+	runtime := must(qngg.New())
 	defer runtime.Close()
 	ctx := runtime.Context()
 
 	t.Run("ErrorValues", func(t *testing.T) {
 		t.Run("StandardError", func(t *testing.T) {
 			err := errors.New("test error")
-			testValueConversion(t, ctx, err, func(result *qjs.Value) {
+			testValueConversion(t, ctx, err, func(result *qngg.Value) {
 				assert.True(t, result.IsError(), "Expected error object")
 			})
 		})
 
 		t.Run("NilError", func(t *testing.T) {
 			var nilErr error
-			testValueConversion(t, ctx, nilErr, func(result *qjs.Value) {
+			testValueConversion(t, ctx, nilErr, func(result *qngg.Value) {
 				assert.True(t, result.IsNull(), "nil error should be null")
 			})
 		})
@@ -1123,7 +1123,7 @@ func TestToJSValue_ErrorHandling(t *testing.T) {
 		const maxDepth = 10
 		root := createNestedStructure(maxDepth)
 
-		jsValue, err := qjs.ToJsValue(runtime.Context(), root)
+		jsValue, err := qngg.ToJsValue(runtime.Context(), root)
 		require.NoError(t, err)
 		defer jsValue.Free()
 		assert.True(t, jsValue.IsObject())

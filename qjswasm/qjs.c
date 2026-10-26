@@ -15,7 +15,6 @@ JSContext *New_QJSContext(JSRuntime *rt)
 QJSRuntime *New_QJS(
     size_t memory_limit,
     size_t max_stack_size,
-    size_t max_execution_time,
     size_t gc_threshold)
 {
   JSRuntime *runtime;
@@ -118,5 +117,5 @@ void initialize()
   size_t memory_limit = 0;
   size_t gc_threshold = 0;
   size_t max_stack_size = 0;
-  qjs = New_QJS(memory_limit, max_stack_size, 0, gc_threshold);
+  qjs = New_QJS(memory_limit, max_stack_size, gc_threshold);
 }

@@ -1,4 +1,4 @@
-package qjs
+package qngg
 
 import "fmt"
 

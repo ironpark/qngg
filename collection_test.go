@@ -1,24 +1,24 @@
-package qjs_test
+package qngg_test
 
 import (
 	"fmt"
 	"testing"
 
-	"github.com/fastschema/qjs"
+	"github.com/ironpark/qngg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // setupRuntime creates a new runtime and context for testing
-func setupRuntime(t *testing.T) (*qjs.Runtime, *qjs.Context) {
+func setupRuntime(t *testing.T) (*qngg.Runtime, *qngg.Context) {
 	t.Helper()
-	rt := must(qjs.New())
+	rt := must(qngg.New())
 	t.Cleanup(func() { rt.Close() })
 	return rt, rt.Context()
 }
 
 // createTestValues creates common test values for collection testing
-func createTestValues(ctx *qjs.Context) (string1, string2, string3, int1, bool1 *qjs.Value) {
+func createTestValues(ctx *qngg.Context) (string1, string2, string3, int1, bool1 *qngg.Value) {
 	return ctx.NewString("hello"),
 		ctx.NewString("world"),
 		ctx.NewString("test"),
@@ -27,34 +27,34 @@ func createTestValues(ctx *qjs.Context) (string1, string2, string3, int1, bool1 
 }
 
 // createThrowingFunction creates a function that throws an error when called
-func createThrowingFunction(ctx *qjs.Context, errorMsg string) *qjs.Value {
-	return ctx.Function(func(t *qjs.This) (*qjs.Value, error) {
+func createThrowingFunction(ctx *qngg.Context, errorMsg string) *qngg.Value {
+	return ctx.Function(func(t *qngg.This) (*qngg.Value, error) {
 		return nil, fmt.Errorf("%s", errorMsg)
 	})
 }
 
 // setupMapWithFailingMethod creates a map with a method that throws an error
-func setupMapWithFailingMethod(ctx *qjs.Context, methodName, errorMsg string) *qjs.Map {
+func setupMapWithFailingMethod(ctx *qngg.Context, methodName, errorMsg string) *qngg.Map {
 	result := ctx.NewMap()
 	throwingFn := createThrowingFunction(ctx, errorMsg)
 	result.SetPropertyStr(methodName, throwingFn)
-	return qjs.NewMap(result.Value)
+	return qngg.NewMap(result.Value)
 }
 
 // setupArrayWithFailingMethod creates an array with a method that throws an error
-func setupArrayWithFailingMethod(ctx *qjs.Context, methodName, errorMsg string) *qjs.Array {
+func setupArrayWithFailingMethod(ctx *qngg.Context, methodName, errorMsg string) *qngg.Array {
 	result := ctx.NewArray()
 	throwingFn := createThrowingFunction(ctx, errorMsg)
 	result.SetPropertyStr(methodName, throwingFn)
-	return qjs.NewArray(result.Value)
+	return qngg.NewArray(result.Value)
 }
 
 // setupSetWithFailingMethod creates a set with a method that throws an error
-func setupSetWithFailingMethod(ctx *qjs.Context, methodName, errorMsg string) *qjs.Set {
+func setupSetWithFailingMethod(ctx *qngg.Context, methodName, errorMsg string) *qngg.Set {
 	result := ctx.NewSet()
 	throwingFn := createThrowingFunction(ctx, errorMsg)
 	result.SetPropertyStr(methodName, throwingFn)
-	return qjs.NewSet(result.Value)
+	return qngg.NewSet(result.Value)
 }
 
 // Array Tests
@@ -62,7 +62,7 @@ func TestArray(t *testing.T) {
 	_, ctx := setupRuntime(t)
 
 	t.Run("Nil_Array", func(t *testing.T) {
-		var nilArray *qjs.Array
+		var nilArray *qngg.Array
 		assert.Nil(t, nilArray)
 		nilArray.ForEach(nil)
 		nilArray.Get(0)
@@ -71,19 +71,19 @@ func TestArray(t *testing.T) {
 	})
 
 	t.Run("create_from_nil_value", func(t *testing.T) {
-		assert.Nil(t, qjs.NewArray(nil))
+		assert.Nil(t, qngg.NewArray(nil))
 	})
 
 	t.Run("create_from_non_array_value", func(t *testing.T) {
 		nonArray := ctx.NewString("not an array")
 		defer nonArray.Free()
-		assert.Nil(t, qjs.NewArray(nonArray))
+		assert.Nil(t, qngg.NewArray(nonArray))
 	})
 
 	t.Run("create_from_valid_array", func(t *testing.T) {
 		arr := ctx.NewArray()
 		defer arr.Free()
-		wrappedArr := qjs.NewArray(arr.Value)
+		wrappedArr := qngg.NewArray(arr.Value)
 		assert.NotNil(t, wrappedArr)
 		assert.Equal(t, int64(0), wrappedArr.Len())
 	})
@@ -151,7 +151,7 @@ func TestArray(t *testing.T) {
 			array.Push(str1, str2, str3)
 
 			values := make([]string, 0)
-			array.ForEach(func(_, value *qjs.Value) {
+			array.ForEach(func(_, value *qngg.Value) {
 				fmt.Printf("Foreach value: %s\n", value.String())
 				values = append(values, value.String())
 			})
@@ -202,7 +202,7 @@ func TestArray(t *testing.T) {
 
 			// Setup array with failing splice
 			result.SetPropertyStr("splice", createThrowingFunction(ctx, "splice failed"))
-			array := qjs.NewArray(result.Value)
+			array := qngg.NewArray(result.Value)
 
 			func() {
 				defer func() {
@@ -222,7 +222,7 @@ func TestMap(t *testing.T) {
 	_, ctx := setupRuntime(t)
 
 	t.Run("Nil_Map", func(t *testing.T) {
-		var nilMap *qjs.Map
+		var nilMap *qngg.Map
 		assert.Nil(t, nilMap)
 		assert.Nil(t, nilMap.CreateObject())
 		assert.Nil(t, nilMap.Get(nil))
@@ -233,19 +233,19 @@ func TestMap(t *testing.T) {
 	})
 
 	t.Run("create_from_nil_value", func(t *testing.T) {
-		assert.Nil(t, qjs.NewMap(nil))
+		assert.Nil(t, qngg.NewMap(nil))
 	})
 
 	t.Run("create_from_non_map_value", func(t *testing.T) {
 		nonMap := ctx.NewString("not a map")
 		defer nonMap.Free()
-		assert.Nil(t, qjs.NewMap(nonMap))
+		assert.Nil(t, qngg.NewMap(nonMap))
 	})
 
 	t.Run("create_from_valid_map", func(t *testing.T) {
 		m := ctx.NewMap()
 		defer m.Free()
-		wrappedMap := qjs.NewMap(m.Value)
+		wrappedMap := qngg.NewMap(m.Value)
 		assert.NotNil(t, wrappedMap)
 		assert.True(t, wrappedMap.IsMap())
 		assert.True(t, wrappedMap.IsObject())
@@ -302,7 +302,7 @@ func TestMap(t *testing.T) {
 		m.Set(ctx.NewString("age"), ctx.NewInt32(30))
 
 		entries := make(map[string]string)
-		m.ForEach(func(key, value *qjs.Value) {
+		m.ForEach(func(key, value *qngg.Value) {
 			entries[key.String()] = value.String()
 		})
 
@@ -356,7 +356,7 @@ func TestMap(t *testing.T) {
 
 			// Setup map with failing forEach
 			result.SetPropertyStr("forEach", createThrowingFunction(ctx, "forEach failed"))
-			m := qjs.NewMap(result.Value)
+			m := qngg.NewMap(result.Value)
 
 			func() {
 				defer func() {
@@ -444,7 +444,7 @@ func TestMap(t *testing.T) {
 						assert.Contains(t, r.(error).Error(), "failed to invoke forEach on Map")
 					}
 				}()
-				m.ForEach(func(key, value *qjs.Value) {})
+				m.ForEach(func(key, value *qngg.Value) {})
 			}()
 		})
 
@@ -461,7 +461,7 @@ func TestMap(t *testing.T) {
 
 			// Setup map with failing forEach
 			result.SetPropertyStr("forEach", createThrowingFunction(ctx, "forEach failed"))
-			m := qjs.NewMap(result.Value)
+			m := qngg.NewMap(result.Value)
 
 			func() {
 				defer func() {
@@ -482,7 +482,7 @@ func TestSet(t *testing.T) {
 	_, ctx := setupRuntime(t)
 
 	t.Run("Nil_Set", func(t *testing.T) {
-		var nilSet *qjs.Set
+		var nilSet *qngg.Set
 		nilSet.ForEach(nil)
 		assert.Nil(t, nilSet)
 		assert.Nil(t, nilSet.ToArray())
@@ -492,19 +492,19 @@ func TestSet(t *testing.T) {
 	})
 
 	t.Run("create_from_nil_value", func(t *testing.T) {
-		assert.Nil(t, qjs.NewSet(nil))
+		assert.Nil(t, qngg.NewSet(nil))
 	})
 
 	t.Run("create_from_non_set_value", func(t *testing.T) {
 		nonSet := ctx.NewString("not a set")
 		defer nonSet.Free()
-		assert.Nil(t, qjs.NewSet(nonSet))
+		assert.Nil(t, qngg.NewSet(nonSet))
 	})
 
 	t.Run("create_from_valid_set", func(t *testing.T) {
 		s := ctx.NewSet()
 		defer s.Free()
-		wrappedSet := qjs.NewSet(s.Value)
+		wrappedSet := qngg.NewSet(s.Value)
 		assert.NotNil(t, wrappedSet)
 	})
 
@@ -541,7 +541,7 @@ func TestSet(t *testing.T) {
 		set.Add(str3)
 
 		values := make([]string, 0)
-		set.ForEach(func(value *qjs.Value) {
+		set.ForEach(func(value *qngg.Value) {
 			values = append(values, value.String())
 		})
 
@@ -644,7 +644,7 @@ func TestSet(t *testing.T) {
 						assert.Contains(t, r.(error).Error(), "failed to invoke forEach on Set")
 					}
 				}()
-				s.ForEach(func(value *qjs.Value) {})
+				s.ForEach(func(value *qngg.Value) {})
 			}()
 		})
 
@@ -660,7 +660,7 @@ func TestSet(t *testing.T) {
 
 			// Setup set with failing forEach
 			result.SetPropertyStr("forEach", createThrowingFunction(ctx, "forEach failed"))
-			s := qjs.NewSet(result.Value)
+			s := qngg.NewSet(result.Value)
 
 			func() {
 				defer func() {
@@ -725,7 +725,7 @@ func TestSet(t *testing.T) {
 
 			// Setup set with failing forEach
 			result.SetPropertyStr("forEach", createThrowingFunction(ctx, "forEach failed"))
-			s := qjs.NewSet(result.Value)
+			s := qngg.NewSet(result.Value)
 
 			func() {
 				defer func() {

@@ -1,17 +1,17 @@
-package qjs_test
+package qngg_test
 
 import (
 	"fmt"
 	"math"
 	"testing"
 
-	"github.com/fastschema/qjs"
+	"github.com/ironpark/qngg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // allocateMemoryPtr allocates memory and returns a uint32 pointer
-func allocateMemoryPtr(t *testing.T, runtime *qjs.Runtime, size uint64) uint32 {
+func allocateMemoryPtr(t *testing.T, runtime *qngg.Runtime, size uint64) uint32 {
 	ptr := runtime.Malloc(size)
 	t.Cleanup(func() { runtime.FreeHandle(ptr) })
 	return uint32(ptr)
@@ -27,7 +27,7 @@ func generateTestPattern(size int) []byte {
 }
 
 // createPackedPtr creates a packed pointer with given address and size
-func createPackedPtr(t *testing.T, runtime *qjs.Runtime, addr, size uint32) uint64 {
+func createPackedPtr(t *testing.T, runtime *qngg.Runtime, addr, size uint32) uint64 {
 	packedValue := uint64(addr)<<32 | uint64(size)
 	packedPtr := allocateMemoryPtr(t, runtime, 8)
 	err := runtime.Mem().WriteUint64(packedPtr, packedValue)
@@ -38,10 +38,10 @@ func createPackedPtr(t *testing.T, runtime *qjs.Runtime, addr, size uint32) uint
 // memTestUtil provides common memory testing utilities
 type memTestUtil struct {
 	t       *testing.T
-	runtime *qjs.Runtime
+	runtime *qngg.Runtime
 }
 
-func newMemTestUtil(t *testing.T, runtime *qjs.Runtime) *memTestUtil {
+func newMemTestUtil(t *testing.T, runtime *qngg.Runtime) *memTestUtil {
 	return &memTestUtil{t: t, runtime: runtime}
 }
 
@@ -84,9 +84,9 @@ type primitiveTypeTest struct {
 	name         string
 	size         uint64
 	values       []any
-	writeFunc    func(*qjs.Runtime, uint32, any) error
-	readFunc     func(*qjs.Runtime, uint32) (any, error)
-	specialTests func(*testing.T, *qjs.Runtime)
+	writeFunc    func(*qngg.Runtime, uint32, any) error
+	readFunc     func(*qngg.Runtime, uint32) (any, error)
+	specialTests func(*testing.T, *qngg.Runtime)
 }
 
 type stringTest struct {
@@ -96,12 +96,12 @@ type stringTest struct {
 	expectTruncated string
 	shouldError     bool
 	errorType       error
-	setupFunc       func(*testing.T, *qjs.Runtime) uint32
+	setupFunc       func(*testing.T, *qngg.Runtime) uint32
 }
 
 type pointerTest struct {
 	name        string
-	setupFunc   func(*testing.T, *qjs.Runtime) uint64
+	setupFunc   func(*testing.T, *qngg.Runtime) uint64
 	expectAddr  uint32
 	expectSize  uint32
 	shouldPanic bool
@@ -135,7 +135,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			dataSize:    0,
 			testData:    []byte{1, 2, 3},
 			shouldError: true,
-			errorType:   qjs.ErrInvalidPointer,
+			errorType:   qngg.ErrInvalidPointer,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
 				_, err := util.runtime.Mem().Read(0, uint64(len(tc.testData)))
 				assert.ErrorIs(t, err, tc.errorType)
@@ -146,7 +146,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			dataSize:    0,
 			testData:    []byte{1, 2, 3},
 			shouldError: true,
-			errorType:   qjs.ErrInvalidPointer,
+			errorType:   qngg.ErrInvalidPointer,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
 				err := util.runtime.Mem().Write(0, tc.testData)
 				assert.ErrorIs(t, err, tc.errorType)
@@ -157,7 +157,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			dataSize:    0,
 			testData:    []byte{},
 			shouldError: true,
-			errorType:   qjs.ErrIndexOutOfRange,
+			errorType:   qngg.ErrIndexOutOfRange,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
 				mem := util.runtime.Mem()
 				memSize := mem.Size()
@@ -170,7 +170,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			dataSize:    0,
 			testData:    []byte{},
 			shouldError: true,
-			errorType:   qjs.ErrIndexOutOfRange,
+			errorType:   qngg.ErrIndexOutOfRange,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
 				mem := util.runtime.Mem()
 				memSize := mem.Size()
@@ -185,7 +185,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			dataSize:    0,
 			testData:    []byte{},
 			shouldError: true,
-			errorType:   qjs.ErrIndexOutOfRange,
+			errorType:   qngg.ErrIndexOutOfRange,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
 				mem := util.runtime.Mem()
 				memSize := mem.Size()
@@ -200,7 +200,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			dataSize:    0,
 			testData:    []byte{},
 			shouldError: true,
-			errorType:   qjs.ErrIndexOutOfRange,
+			errorType:   qngg.ErrIndexOutOfRange,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
 				mem := util.runtime.Mem()
 				memSize := mem.Size()
@@ -215,7 +215,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			dataSize:    0,
 			testData:    []byte{},
 			shouldError: true,
-			errorType:   qjs.ErrIndexOutOfRange,
+			errorType:   qngg.ErrIndexOutOfRange,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
 				mem := util.runtime.Mem()
 				memSize := mem.Size()
@@ -230,7 +230,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			dataSize:    100,
 			testData:    []byte{},
 			shouldError: true,
-			errorType:   qjs.ErrIndexOutOfRange,
+			errorType:   qngg.ErrIndexOutOfRange,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
 				ptr := util.allocatePtr(tc.dataSize)
 				oversizedRead := uint64(math.MaxUint32) + 1
@@ -243,7 +243,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			dataSize:    0,
 			testData:    []byte{},
 			shouldError: true,
-			errorType:   qjs.ErrIndexOutOfRange,
+			errorType:   qngg.ErrIndexOutOfRange,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
 				mem := util.runtime.Mem()
 				memSize := mem.Size()
@@ -268,7 +268,7 @@ func TestMem_ReadWrite(t *testing.T) {
 			dataSize:    0,
 			testData:    []byte{},
 			shouldError: true,
-			errorType:   qjs.ErrIndexOutOfRange,
+			errorType:   qngg.ErrIndexOutOfRange,
 			testFunc: func(util *memTestUtil, tc memoryOperationTest) {
 				mem := util.runtime.Mem()
 				memSize := mem.Size()
@@ -333,10 +333,10 @@ func TestMem_Primitives(t *testing.T) {
 			values: []any{
 				uint8(0), uint8(127), uint8(255),
 			},
-			writeFunc: func(r *qjs.Runtime, ptr uint32, v any) error {
+			writeFunc: func(r *qngg.Runtime, ptr uint32, v any) error {
 				return r.Mem().WriteUint8(ptr, v.(uint8))
 			},
-			readFunc: func(r *qjs.Runtime, ptr uint32) (any, error) {
+			readFunc: func(r *qngg.Runtime, ptr uint32) (any, error) {
 				return r.Mem().ReadUint8(ptr)
 			},
 		},
@@ -346,10 +346,10 @@ func TestMem_Primitives(t *testing.T) {
 			values: []any{
 				uint32(0), uint32(0x12345678), uint32(math.MaxUint32),
 			},
-			writeFunc: func(r *qjs.Runtime, ptr uint32, v any) error {
+			writeFunc: func(r *qngg.Runtime, ptr uint32, v any) error {
 				return r.Mem().WriteUint32(ptr, v.(uint32))
 			},
-			readFunc: func(r *qjs.Runtime, ptr uint32) (any, error) {
+			readFunc: func(r *qngg.Runtime, ptr uint32) (any, error) {
 				return r.Mem().ReadUint32(ptr)
 			},
 		},
@@ -359,10 +359,10 @@ func TestMem_Primitives(t *testing.T) {
 			values: []any{
 				uint64(0), uint64(0x1234567890ABCDEF), uint64(math.MaxUint64),
 			},
-			writeFunc: func(r *qjs.Runtime, ptr uint32, v any) error {
+			writeFunc: func(r *qngg.Runtime, ptr uint32, v any) error {
 				return r.Mem().WriteUint64(ptr, v.(uint64))
 			},
-			readFunc: func(r *qjs.Runtime, ptr uint32) (any, error) {
+			readFunc: func(r *qngg.Runtime, ptr uint32) (any, error) {
 				return r.Mem().ReadUint64(ptr)
 			},
 		},
@@ -374,13 +374,13 @@ func TestMem_Primitives(t *testing.T) {
 				math.SmallestNonzeroFloat64, -math.MaxFloat64,
 				math.Inf(1), math.Inf(-1),
 			},
-			writeFunc: func(r *qjs.Runtime, ptr uint32, v any) error {
+			writeFunc: func(r *qngg.Runtime, ptr uint32, v any) error {
 				return r.Mem().WriteFloat64(ptr, v.(float64))
 			},
-			readFunc: func(r *qjs.Runtime, ptr uint32) (any, error) {
+			readFunc: func(r *qngg.Runtime, ptr uint32) (any, error) {
 				return r.Mem().ReadFloat64(ptr)
 			},
-			specialTests: func(t *testing.T, runtime *qjs.Runtime) {
+			specialTests: func(t *testing.T, runtime *qngg.Runtime) {
 				// NaN requires special handling since NaN != NaN
 				ptr := allocateMemoryPtr(t, runtime, 8)
 				err := runtime.Mem().WriteFloat64(ptr, math.NaN())
@@ -415,7 +415,7 @@ func TestMem_Primitives(t *testing.T) {
 					_, err := tc.readFunc(runtime, 0)
 					return err
 				},
-				qjs.ErrInvalidPointer,
+				qngg.ErrInvalidPointer,
 			)
 
 			util.testErrorCondition(
@@ -423,7 +423,7 @@ func TestMem_Primitives(t *testing.T) {
 				func() error {
 					return tc.writeFunc(runtime, 0, tc.values[0])
 				},
-				qjs.ErrInvalidPointer,
+				qngg.ErrInvalidPointer,
 			)
 
 			// Test boundary conditions using utility
@@ -471,8 +471,8 @@ func TestMem_Strings(t *testing.T) {
 			name:        "null_pointer_read_error",
 			testString:  "test",
 			shouldError: true,
-			errorType:   qjs.ErrInvalidPointer,
-			setupFunc: func(t *testing.T, runtime *qjs.Runtime) uint32 {
+			errorType:   qngg.ErrInvalidPointer,
+			setupFunc: func(t *testing.T, runtime *qngg.Runtime) uint32 {
 				return 0
 			},
 		},
@@ -480,14 +480,14 @@ func TestMem_Strings(t *testing.T) {
 			name:        "null_pointer_write_error",
 			testString:  "test",
 			shouldError: true,
-			errorType:   qjs.ErrInvalidPointer,
+			errorType:   qngg.ErrInvalidPointer,
 		},
 		{
 			name:        "insufficient_space_error",
 			testString:  "test",
 			shouldError: true,
-			errorType:   qjs.ErrIndexOutOfRange,
-			setupFunc: func(t *testing.T, runtime *qjs.Runtime) uint32 {
+			errorType:   qngg.ErrIndexOutOfRange,
+			setupFunc: func(t *testing.T, runtime *qngg.Runtime) uint32 {
 				return runtime.Mem().Size()
 			},
 		},
@@ -576,7 +576,7 @@ func TestMem_Strings(t *testing.T) {
 		ptr := util.allocatePtr(6)
 		runtime.Mem().MustWrite(ptr, []byte{65, 66, 67, 68, 69, 70})
 		_, err := runtime.Mem().ReadString(ptr, 5)
-		assert.ErrorIs(t, err, qjs.ErrNoNullTerminator)
+		assert.ErrorIs(t, err, qngg.ErrNoNullTerminator)
 	})
 }
 
@@ -586,7 +586,7 @@ func TestMem_Pointers(t *testing.T) {
 	tests := []pointerTest{
 		{
 			name: "valid_packed_data",
-			setupFunc: func(t *testing.T, runtime *qjs.Runtime) uint64 {
+			setupFunc: func(t *testing.T, runtime *qngg.Runtime) uint64 {
 				return createPackedPtr(t, runtime, 0x12345678, 0x87654321)
 			},
 			expectAddr: 0x12345678,
@@ -594,7 +594,7 @@ func TestMem_Pointers(t *testing.T) {
 		},
 		{
 			name: "zero_packed_ptr",
-			setupFunc: func(t *testing.T, runtime *qjs.Runtime) uint64 {
+			setupFunc: func(t *testing.T, runtime *qngg.Runtime) uint64 {
 				return 0
 			},
 			expectAddr: 0,
@@ -602,7 +602,7 @@ func TestMem_Pointers(t *testing.T) {
 		},
 		{
 			name: "little_endian_handling",
-			setupFunc: func(t *testing.T, runtime *qjs.Runtime) uint64 {
+			setupFunc: func(t *testing.T, runtime *qngg.Runtime) uint64 {
 				ptr := allocateMemoryPtr(t, runtime, 8)
 				err := runtime.Mem().Write(ptr, []byte{1, 2, 3, 4, 5, 6, 7, 8})
 				require.NoError(t, err)
@@ -613,14 +613,14 @@ func TestMem_Pointers(t *testing.T) {
 		},
 		{
 			name: "out_of_bounds_panic",
-			setupFunc: func(t *testing.T, runtime *qjs.Runtime) uint64 {
+			setupFunc: func(t *testing.T, runtime *qngg.Runtime) uint64 {
 				return uint64(math.MaxUint32 - 3)
 			},
 			shouldPanic: true,
 		},
 		{
 			name: "valid_string_from_packed_ptr",
-			setupFunc: func(t *testing.T, runtime *qjs.Runtime) uint64 {
+			setupFunc: func(t *testing.T, runtime *qngg.Runtime) uint64 {
 				testStr := "Test string for packed ptr"
 				strPtr := allocateMemoryPtr(t, runtime, uint64(len(testStr)+1))
 				err := runtime.Mem().WriteString(strPtr, testStr)
@@ -631,7 +631,7 @@ func TestMem_Pointers(t *testing.T) {
 		},
 		{
 			name: "string_from_packed_ptr_zero_panic",
-			setupFunc: func(t *testing.T, runtime *qjs.Runtime) uint64 {
+			setupFunc: func(t *testing.T, runtime *qngg.Runtime) uint64 {
 				return 0
 			},
 			shouldPanic: true,

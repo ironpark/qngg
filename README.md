@@ -1,34 +1,47 @@
-# QJS - JavaScript in Go with QuickJS and Wasmtime
+# QNGG - JavaScript in Go with QuickJS-NG and Wasmtime
 
 <p align="center">
-  <a href="https://pkg.go.dev/github.com/fastschema/qjs#section-readme" target="_blank" rel="noopener">
+  <a href="https://pkg.go.dev/github.com/ironpark/qngg#section-readme" target="_blank" rel="noopener">
     <img src="https://img.shields.io/badge/go.dev-reference-blue?logo=go&logoColor=white" alt="Go.Dev reference" />
   </a>
-  <a href="https://goreportcard.com/report/github.com/fastschema/qjs" target="_blank" rel="noopener">
-    <img src="https://goreportcard.com/badge/github.com/fastschema/qjs" alt="go report card" />
+  <a href="https://goreportcard.com/report/github.com/ironpark/qngg" target="_blank" rel="noopener">
+    <img src="https://goreportcard.com/badge/github.com/ironpark/qngg" alt="go report card" />
   </a>
-  <a href="https://codecov.io/gh/fastschema/qjs/branch/master" >
-    <img src="https://codecov.io/gh/fastschema/qjs/branch/master/graph/badge.svg?token=yluqOtL5z0"/>
-  </a>
-  <a href="https://github.com/fastschema/qjs/actions" target="_blank" rel="noopener">
-    <img src="https://github.com/fastschema/qjs/actions/workflows/ci.yml/badge.svg" alt="test status" />
+  <a href="https://github.com/ironpark/qngg/actions" target="_blank" rel="noopener">
+    <img src="https://github.com/ironpark/qngg/actions/workflows/ci.yml/badge.svg" alt="test status" />
   </a>
   <a href="https://opensource.org/licenses/MIT" target="_blank" rel="noopener">
     <img src="https://img.shields.io/badge/license-MIT-brightgreen.svg" alt="MIT license" />
   </a>
 </p>
-<p align="center">
-	<a href="https://app.fossa.com/projects/git%2Bgithub.com%2Ffastschema%2Fqjs?ref=badge_shield&issueType=license" alt="FOSSA Status">
-		<img src="https://app.fossa.com/api/projects/git%2Bgithub.com%2Ffastschema%2Fqjs.svg?type=shield&issueType=license"/>
-	</a>
-	<a href="https://app.fossa.com/projects/git%2Bgithub.com%2Ffastschema%2Fqjs?ref=badge_shield&issueType=security" alt="FOSSA Status">
-		<img src="https://app.fossa.com/api/projects/git%2Bgithub.com%2Ffastschema%2Fqjs.svg?type=shield&issueType=security"/>
-	</a>
-</p>
 
-QJS is a CGO-Free, modern, secure JavaScript runtime for Go applications, built on the powerful QuickJS engine and the Wasmtime WebAssembly runtime.
+QNGG is a CGO-Free, modern, secure JavaScript runtime for Go applications, built on the [QuickJS-NG](https://github.com/quickjs-ng/quickjs) engine and the [Wasmtime](https://wasmtime.dev/) WebAssembly runtime.
 
-QJS allows you to run JavaScript code safely and efficiently, with full support for ES2023 features, async/await, and Go-JS interoperability.
+QNGG allows you to run JavaScript code safely and efficiently, with full support for ES2023 features, async/await, and Go-JS interoperability.
+
+## About this fork
+
+QNGG is a maintained fork of [fastschema/qjs](https://github.com/fastschema/qjs), which is no longer maintained. Compared to upstream it:
+
+- Runs QuickJS on **Wasmtime** instead of Wazero. Wasmtime's C API is called through [purego](https://github.com/ebitengine/purego) (a vendored port of [wasmtime-go](https://github.com/bytecodealliance/wasmtime-go)), so builds still need no cgo.
+- Tracks the latest **QuickJS-NG** release (currently v0.17.0), built with wasi-sdk 34.
+- Requires **Go 1.27** and decodes JSON with `encoding/json/v2`.
+- Fixes memory bugs inherited from upstream: string conversions leaked their C buffers, `JSONStringify` returned freed memory and `ToByteArray` freed memory owned by the ArrayBuffer.
+
+Migrating from `github.com/fastschema/qjs`:
+
+- Import `github.com/ironpark/qngg`; the package is named `qngg`.
+- `JsFunctionProxy` receives a `*qngg.Mem` instead of Wazero's `api.Module`.
+- `SetProperty`, `SetPropertyStr` and `SetPropertyIndex` take ownership of the value; do not `Free` it afterwards.
+- `Min` was removed; use the built-in `min`.
+- `Option.MaxExecutionTime` is now a `time.Duration` and is enforced (it was an ignored `int`).
+
+| `go test -bench .` (Apple M1 Ultra) | QJS on Wazero | QNGG |
+| --- | --- | --- |
+| RuntimeNew | 17 ms | 0.34 ms |
+| EvalFactorial | 97 ms | 39 ms |
+| GoFunctionCall | 168 ms | 25 ms |
+| ValueProperties | 503 µs | 153 µs |
 
 ## Features
 
@@ -41,48 +54,12 @@ QJS allows you to run JavaScript code safely and efficiently, with full support 
 - **Memory Safety**: Memory-safe execution environment with configurable limits.
 - **No CGO Dependencies**: Wasmtime is loaded at runtime through [purego](https://github.com/ebitengine/purego), so builds work with `CGO_ENABLED=0` and cross-compile without a C toolchain.
 
-## Benchmarks
-
-### Factorial Calculation
-
-Computing factorial(10) 1,000,000 times
-
-| Iteration | GOJA | ModerncQuickJS | QJS |
-| --- | --- | --- | --- |
-| 1 | 1.128s | 1.897s | 737.635ms |
-| 2 | 1.134s | 1.936s | 742.670ms |
-| 3 | 1.123s | 1.898s | 738.737ms |
-| 4 | 1.120s | 1.900s | 754.692ms |
-| 5 | 1.132s | 1.918s | 756.924ms |
-| Average | 1.127s | 1.910s | **746.132ms** |
-| Total | 5.637s | 9.549s | **3.731s** |
-| Speed | 1.51x | 2.56x | 1.00x |
-
-*Benchmarks run on AMD Ryzen 7 7840HS, 32GB RAM, Linux, with the previous Wazero backend*
-
-### AreWeFastYet V8-V7
-
-| Metric | GOJA | ModerncQuickJS | QJS |
-| --- | --- | --- | --- |
-| Richards | 345 | 189 | **434** |
-| DeltaBlue | 411 | 205 | **451** |
-| Crypto | 203 | 305 | **393** |
-| RayTrace | 404 | 347 | **488** |
-| EarleyBoyer | 779 | 531 | **852** |
-| RegExp | **381** | 145 | 142 |
-| Splay | 1289 | 856 | **1408** |
-| NavierStokes | 324 | 436 | **588** |
-| Score (version 7) | 442 | 323 | **498** |
-| Duration (seconds) | 78.349s | 97.240s | **72.004s** |
-
-*Benchmarks run on AMD Ryzen 7 7840HS, 32GB RAM, Linux, with the previous Wazero backend*
-
 ## Example Usage
 
 ### Basic Execution
 
 ```go
-rt, err := qjs.New()
+rt, err := qngg.New()
 if err != nil {
 	log.Fatal(err)
 }
@@ -90,7 +67,7 @@ if err != nil {
 defer rt.Close()
 ctx := rt.Context()
 
-result, err := ctx.Eval("test.js", qjs.Code(`
+result, err := ctx.Eval("test.js", qngg.Code(`
 	const person = {
 		name: "Alice",
 		age: 30,
@@ -119,11 +96,11 @@ log.Println(result.GetPropertyStr("person").GetPropertyStr("age").Int32())
 ### Go function binding
 
 ```go
-ctx.SetFunc("goFunction", func(this *qjs.This) (*qjs.Value, error) {
+ctx.SetFunc("goFunction", func(this *qngg.This) (*qngg.Value, error) {
     return this.Context().NewString("Hello from Go!"), nil
 })
 
-result, err := ctx.Eval("test.js", qjs.Code(`
+result, err := ctx.Eval("test.js", qngg.Code(`
 	const message = goFunction();
 	message;
 `))
@@ -145,7 +122,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/fastschema/qjs"
+	"github.com/ironpark/qngg"
 )
 
 func must[T any](val T, err error) T {
@@ -169,22 +146,22 @@ export default { about, contact };
 `
 
 func main() {
-	rt := must(qjs.New())
+	rt := must(qngg.New())
 	defer rt.Close()
 	ctx := rt.Context()
 
 	// Precompile the script to bytecode
-	byteCode := must(ctx.Compile("script.js", qjs.Code(script), qjs.TypeModule()))
+	byteCode := must(ctx.Compile("script.js", qngg.Code(script), qngg.TypeModule()))
 	// Use a pool of runtimes for concurrent requests
-	pool := qjs.NewPool(3, &qjs.Option{}, func(r *qjs.Runtime) error {
-		results := must(r.Context().Eval("script.js", qjs.Bytecode(byteCode), qjs.TypeModule()))
+	pool := qngg.NewPool(3, qngg.Option{}, func(r *qngg.Runtime) error {
+		results := must(r.Context().Eval("script.js", qngg.Bytecode(byteCode), qngg.TypeModule()))
 		// Store the exported functions in the global object for easy access
 		r.Context().Global().SetPropertyStr("handlers", results)
 		return nil
 	})
 
 	// Register HTTP handlers based on JS functions
-	val := must(ctx.Eval("script.js", qjs.Bytecode(byteCode), qjs.TypeModule()))
+	val := must(ctx.Eval("script.js", qngg.Bytecode(byteCode), qngg.TypeModule()))
 	methodNames := must(val.GetOwnPropertyNames())
 	val.Free()
 	for _, methodName := range methodNames {
@@ -194,6 +171,7 @@ func main() {
 
 			// Call the corresponding JS function
 			handlers := runtime.Context().Global().GetPropertyStr("handlers")
+			defer handlers.Free()
 			result := must(handlers.InvokeJS(methodName))
 			fmt.Fprint(w, result.String())
 			result.Free()
@@ -216,7 +194,7 @@ func main() {
 **Awaiting a promise**
 
 ```go
-ctx.SetAsyncFunc("asyncFunction", func(this *qjs.This) {
+ctx.SetAsyncFunc("asyncFunction", func(this *qngg.This) {
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 		result := this.Context().NewString("Async result from Go!")
@@ -224,7 +202,7 @@ ctx.SetAsyncFunc("asyncFunction", func(this *qjs.This) {
 	}()
 })
 
-result, err := ctx.Eval("test.js", qjs.Code(`
+result, err := ctx.Eval("test.js", qngg.Code(`
 async function main() {
 	const result = await asyncFunction();
 	return result;
@@ -253,13 +231,13 @@ log.Println("Awaited value:", val.String())
 
 ```go
 // asyncFunction is already defined above
-result, err := ctx.Eval("test.js", qjs.Code(`
+result, err := ctx.Eval("test.js", qngg.Code(`
 	async function main() {
 		const result = await asyncFunction();
 		return result;
 	}
 	await main()
-`), qjs.FlagAsync())
+`), qngg.FlagAsync())
 
 if err != nil {
 	log.Fatal("Eval error:", err)
@@ -273,7 +251,7 @@ log.Println(result.String())
 
 ```go
 // Call JS function from Go
-result, err := ctx.Eval("test.js", qjs.Code(`
+result, err := ctx.Eval("test.js", qngg.Code(`
 	function add(a, b) {
 		return a + b;
 	}
@@ -296,7 +274,7 @@ defer result.Free()
 jsAddFunc := result.GetPropertyStr("addFunc")
 defer jsAddFunc.Free()
 
-goAddFunc, err := qjs.JsFuncToGo[func(int, int) (int, error)](jsAddFunc)
+goAddFunc, err := qngg.JsFuncToGo[func(int, int) (int, error)](jsAddFunc)
 if err != nil {
 	log.Fatal("Func conversion error:", err)
 }
@@ -312,7 +290,7 @@ log.Println("Addition result:", total)
 jsErrorFunc := result.GetPropertyStr("errorFunc")
 defer jsErrorFunc.Free()
 
-goErrorFunc, err := qjs.JsFuncToGo[func() (any, error)](jsErrorFunc)
+goErrorFunc, err := qngg.JsFuncToGo[func() (any, error)](jsErrorFunc)
 if err != nil {
 	log.Fatal("Func conversion error:", err)
 }
@@ -330,7 +308,7 @@ if err != nil {
 
 ```go
 // Load a utility module
-if _, err = ctx.Load("math-utils.js", qjs.Code(`
+if _, err = ctx.Load("math-utils.js", qngg.Code(`
 	export function add(a, b) {
 		return a + b;
 	}
@@ -357,7 +335,7 @@ if _, err = ctx.Load("math-utils.js", qjs.Code(`
 }
 
 // Use the module
-result, err := ctx.Eval("use-math.js", qjs.Code(`
+result, err := ctx.Eval("use-math.js", qngg.Code(`
 	import mathUtils, { add, multiply, power, PI } from 'math-utils.js';
 
 	const calculations = {
@@ -369,7 +347,7 @@ result, err := ctx.Eval("use-math.js", qjs.Code(`
 	};
 
 	export default calculations;
-`), qjs.TypeModule())
+`), qngg.TypeModule())
 
 if err != nil {
 	log.Fatal("Module eval error:", err)
@@ -412,7 +390,7 @@ script := `
 `
 
 // Compile the script to bytecode
-bytecode, err := ctx.Compile("math-functions.js", qjs.Code(script))
+bytecode, err := ctx.Compile("math-functions.js", qngg.Code(script))
 if err != nil {
 	log.Fatal("Compilation error:", err)
 }
@@ -420,7 +398,7 @@ if err != nil {
 fmt.Printf("Bytecode size: %d bytes\n", len(bytecode))
 
 // Execute the compiled bytecode
-result, err := ctx.Eval("compiled-math.js", qjs.Bytecode(bytecode))
+result, err := ctx.Eval("compiled-math.js", qngg.Bytecode(bytecode))
 if err != nil {
 	log.Fatal("Bytecode execution error:", err)
 }
@@ -453,15 +431,15 @@ goFuncWithContext := func(c context.Context, num int) int {
 }
 
 // Convert Go function to JavaScript function
-jsFuncWithContext, err := qjs.ToJsValue(ctx, goFuncWithContext)
+jsFuncWithContext, err := qngg.ToJsValue(ctx, goFuncWithContext)
 if err != nil {
 	log.Fatal("Func conversion error:", err)
 }
-defer jsFuncWithContext.Free()
+// The global object takes ownership of jsFuncWithContext.
 ctx.Global().SetPropertyStr("funcWithContext", jsFuncWithContext)
 
 // Create a helper function that returns a ProxyValue
-ctx.SetFunc("$context", func(this *qjs.This) (*qjs.Value, error) {
+ctx.SetFunc("$context", func(this *qngg.This) (*qngg.Value, error) {
 	// Create context as ProxyValue - JavaScript will never access its contents
 	passContext := context.WithValue(context.Background(), "key", "value123")
 	val := ctx.NewProxyValue(passContext)
@@ -469,7 +447,7 @@ ctx.SetFunc("$context", func(this *qjs.This) (*qjs.Value, error) {
 })
 
 // JavaScript gets context as ProxyValue and passes it to Go function
-result, err := ctx.Eval("test.js", qjs.Code(`
+result, err := ctx.Eval("test.js", qngg.Code(`
 	funcWithContext($context(), 10);
 `))
 if err != nil {
@@ -490,7 +468,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/fastschema/qjs"
+	"github.com/ironpark/qngg"
 )
 
 type Post struct {
@@ -515,7 +493,7 @@ func (u User) IsAdult() bool {
 }
 
 func main() {
-	rt, err := qjs.New()
+	rt, err := qngg.New()
 	if err != nil {
 		log.Fatalf("Failed to create QuickJS runtime: %v", err)
 	}
@@ -524,13 +502,13 @@ func main() {
 
 	ctx.Global().SetPropertyStr("goInt", ctx.NewInt32(55))
 	ctx.Global().SetPropertyStr("goString", ctx.NewString("Hello, World!"))
-	jsUser, err := qjs.ToJsValue(ctx, User{ID: 1, Name: "Alice", Age: 25})
+	jsUser, err := qngg.ToJsValue(ctx, User{ID: 1, Name: "Alice", Age: 25})
 	if err != nil {
 		log.Fatalf("Failed to convert User to JS value: %v", err)
 	}
 	ctx.Global().SetPropertyStr("goUser", jsUser)
 
-	result, err := ctx.Eval("test.js", qjs.Code(`
+	result, err := ctx.Eval("test.js", qngg.Code(`
 		const post = {
 			id: goInt,
 			name: goString,
@@ -545,7 +523,7 @@ func main() {
 	}
 	defer result.Free()
 
-	goPost, err := qjs.ToGoValue[Post](result)
+	goPost, err := qngg.ToGoValue[Post](result)
 	if err != nil {
 		log.Fatalf("Failed to convert JS value to Post: %v", err)
 	}
@@ -577,13 +555,13 @@ import (
 	"log"
 	"sync"
 
-	"github.com/fastschema/qjs"
+	"github.com/ironpark/qngg"
 )
 
 func main() {
-	setupFunc := func(rt *qjs.Runtime) error {
+	setupFunc := func(rt *qngg.Runtime) error {
 		ctx := rt.Context()
-		ctx.Eval("setup.js", qjs.Code(`
+		ctx.Eval("setup.js", qngg.Code(`
 			function getMessage(workerId, taskId) {
 				return "Hello from pooled runtime: " + workerId + "-" + taskId;
 			}
@@ -591,29 +569,25 @@ func main() {
 		return nil
 	}
 	// Create a pool with 3 runtimes
-	pool := qjs.NewPool(3, &qjs.Option{}, setupFunc)
+	pool := qngg.NewPool(3, qngg.Option{}, setupFunc)
 	numWorkers := 5
 	numTasks := 3
 	var wg sync.WaitGroup
 
-	for i := range numWorkers {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
-			for j := 0; j < numTasks; j++ {
+	for workerID := range numWorkers {
+		wg.Go(func() {
+			for taskID := range numTasks {
 				rt, err := pool.Get()
 				if err != nil {
 					log.Fatalf("Failed to get runtime from pool: %v", err)
 				}
-				defer pool.Put(rt)
+
 				ctx := rt.Context()
-				workerIdValue := ctx.NewInt32(int32(workerID))
-				taskIdValue := ctx.NewInt32(int32(j))
-				ctx.Global().SetPropertyStr("workerID", workerIdValue)
-				ctx.Global().SetPropertyStr("taskID", taskIdValue)
+				ctx.Global().SetPropertyStr("workerID", ctx.NewInt32(int32(workerID)))
+				ctx.Global().SetPropertyStr("taskID", ctx.NewInt32(int32(taskID)))
 
 				// Use the runtime
-				result, err := ctx.Eval("pool-test.js", qjs.Code(`
+				result, err := ctx.Eval("pool-test.js", qngg.Code(`
 					({
 						message: getMessage(workerID, taskID),
 						timestamp: Date.now(),
@@ -622,10 +596,16 @@ func main() {
 				if err != nil {
 					log.Fatalf("JS execution error: %v", err)
 				}
-				defer result.Free()
-				log.Println(result.GetPropertyStr("message").String())
+				message := result.GetPropertyStr("message")
+				log.Println(message.String())
+
+				// Release values before returning the runtime to the pool,
+				// where another goroutine may pick it up.
+				message.Free()
+				result.Free()
+				pool.Put(rt)
 			}
-		}(i)
+		})
 	}
 	wg.Wait()
 }
@@ -634,12 +614,12 @@ func main() {
 ## Installation
 
 ```bash
-go get github.com/fastschema/qjs
+go get github.com/ironpark/qngg
 ```
 
 
 ```go
-import "github.com/fastschema/qjs"
+import "github.com/ironpark/qngg"
 ```
 
 **Compatible with Go 1.27+**
@@ -658,7 +638,7 @@ import "github.com/fastschema/qjs"
       Data              Execution            JavaScript
        │                    │                     │
        └────────────────────┴─────────────────────┘
-                           QJS
+                           QNGG
 ```
 
 ## API Reference
@@ -676,71 +656,76 @@ import "github.com/fastschema/qjs"
 ### Key Methods
 
 ```go
-// Runtime Management
-rt, err := qjs.New(options...)           // Create runtime
-rt.Close()                               // Cleanup runtime
-ctx.Eval(filename, code, flags...)        // Execute JavaScript
-rt.Load(filename, code)                  // Load module
-rt.Compile(filename, code)               // Compile to bytecode
-...
+// Runtime
+rt, err := qngg.New(options...)          // Create a runtime
+rt.Close()                               // Free the runtime
+ctx := rt.Context()                      // Main execution context
 
-// Context Operations  
-ctx := ctx                      // Get context
-ctx.Global()                             // Access global object
-ctx.SetFunc(name, fn)                    // Bind Go function
-ctx.SetAsyncFunc(name, fn)               // Bind async function
-ctx.NewString(s)                         // Create JS string
-ctx.NewObject()                          // Create JS object
-ctx.NewProxyValue(v)                     // Create ProxyValue from Go value
-...
+// Context
+ctx.Eval(filename, qngg.Code(src))       // Run a script, returns the last value
+ctx.Load(filename, qngg.Code(src))       // Load an ES module for later imports
+ctx.Compile(filename, qngg.Code(src))    // Compile to bytecode
+ctx.Global()                             // Global object
+ctx.SetFunc(name, fn)                    // Bind a Go function
+ctx.SetAsyncFunc(name, fn)               // Bind a Go function returning a promise
+ctx.NewString(s), ctx.NewObject(), ...   // Create JS values
+ctx.NewProxyValue(v)                     // Wrap a Go value as a ProxyValue
 
-// Value Operations
-value.String()                           // Convert to Go string
-value.Int32()                            // Convert to Go int32
-value.Bool()                             // Convert to Go bool
-value.GetPropertyStr(name)               // Get object property
-value.SetPropertyStr(name, val)          // Set object property
+// Value
+value.String(), value.Int32(), value.Bool(), ...
+value.GetPropertyStr(name)               // Get a property (free the result)
+value.SetPropertyStr(name, val)          // Set a property (takes ownership of val)
+value.InvokeJS(name, args...)            // Call a method
+value.Await()                            // Wait for a promise
 value.IsQJSProxyValue()                  // Check if value is a ProxyValue
-value.Free()                             // Release memory
-...
+value.Free()                             // Release the value
 
-// ProxyValue Operations
-qjs.ToGoValue[T](value)                 // Extract Go value from ProxyValue
-qjs.ToJsValue(ctx, goValue)             // Convert Go value to JS (auto-detects ProxyValue need)
-...
+// Conversion
+qngg.ToGoValue[T](value)                 // JS (or ProxyValue) to Go
+qngg.ToJsValue(ctx, goValue)             // Go to JS
+qngg.JsFuncToGo[F](value)                // JS function to a typed Go function
 ```
 
 ### Configuration Options
 
 ```go
 type Option struct {
-    CWD                string  // Working directory, mounted as "/" for JavaScript
-    MaxStackSize       int     // Stack size limit
-    MemoryLimit        int     // Memory usage limit
-    MaxExecutionTime   int     // Execution timeout
-    GCThreshold        int     // GC trigger threshold
-    CacheDir           string  // Directory for compiled module cache files
-    Context            context.Context
-    CloseOnContextDone bool    // Interrupt running JavaScript when Context is done
-    Stdout, Stderr     io.Writer
+    CWD                string          // Host directory mounted as "/" (default: process working directory)
+    Context            context.Context // Context passed to Go functions called from JS
+    CloseOnContextDone bool            // Interrupt running JavaScript when Context is done
+    MemoryLimit        int             // QuickJS heap limit in bytes
+    MaxStackSize       int             // QuickJS stack limit in bytes
+    GCThreshold        int             // GC trigger threshold in bytes
+    CacheDir           string          // Directory for compiled module cache files
+    DisableBuildCache  bool            // Do not reuse in-memory compiled modules
+    Stdout, Stderr     io.Writer       // Output of console.log and friends
+    QuickJSWasmBytes   []byte          // Custom QuickJS wasm build
+    ProxyFunction      any             // Custom JsFunctionProxy
+    StartFunctionName  string          // Wasm start function to call on creation
+    MaxExecutionTime   time.Duration   // Time limit for each call into JavaScript, such as Eval
 }
 ```
 
+`MaxExecutionTime` and `CloseOnContextDone` stop running JavaScript, including
+infinite loops. Calls then fail with `ErrExecutionTimeout` or the context's
+error, and the runtime must be closed. Both compile QuickJS with interruption
+checks, which makes compute-heavy JavaScript about 30% slower.
+
 ### Wasmtime native library
 
-QJS runs QuickJS on [Wasmtime](https://wasmtime.dev/). The Wasmtime C API shared
+QNGG runs QuickJS-NG on [Wasmtime](https://wasmtime.dev/). The Wasmtime C API shared
 library for the target platform (macOS, Linux and Windows on amd64/arm64) is
 embedded in the binary, zstd-compressed, and extracted on first use into the
-user cache directory (`os.UserCacheDir()/qjs/wasmtime`, falling back to the
+user cache directory (`os.UserCacheDir()/qngg/wasmtime`, falling back to the
 system temp directory).
 
-- Set `QJS_WASMTIME_LIB` to the path of a Wasmtime C API shared library to load
+- Set `QNGG_WASMTIME_LIB` to the path of a Wasmtime C API shared library to load
   it instead of the embedded one. Its version must match the bindings (currently
   Wasmtime v50.0.0).
 - Build with `-tags wasmtime_noembed` to leave the embedded library out of the
-  binary (about 6-7 MB per platform) and rely on `QJS_WASMTIME_LIB`.
+  binary (about 6-7 MB per platform) and rely on `QNGG_WASMTIME_LIB`.
 - Linux builds require glibc; musl-based systems such as Alpine need a musl
-  build of Wasmtime provided through `QJS_WASMTIME_LIB`.
+  build of Wasmtime provided through `QNGG_WASMTIME_LIB`.
 
 ## Performance & Security
 
@@ -748,42 +733,39 @@ system temp directory).
 1. Use runtime pools for concurrent applications.
 2. Compile frequently-used scripts to bytecode.
 3. Use ProxyValue for large objects or shared state to avoid serialization overhead.
-4. Minimize small object conversions between Go and JS - prefer ProxyValue for complex types.
+4. Set `CacheDir` so compiled modules are reused across processes.
 5. Set appropriate memory limits.
 
 **Security**
 
-- **Complete filesystem isolation** (unless explicitly configured).
-- **No network access** from JavaScript (unless explicitly allowed).
-- **Memory safe** - no buffer overflows.
+- **Sandboxed execution**: QuickJS runs inside WebAssembly linear memory, so JavaScript cannot touch Go memory.
+- **Filesystem**: only `CWD` is visible, mounted read-write as `/`. Scripts can read and write files there through `qjs:std`, so point `CWD` at a dedicated directory when running untrusted code.
+- **No network access**: no sockets are exposed to JavaScript.
+- **Interruptible**: `MaxExecutionTime` and `CloseOnContextDone` stop runaway scripts.
 - **No CGO**: the Wasmtime native library is loaded at runtime through purego.
-- **Deterministic resource cleanup**.
 
 ### Memory Management
 
-**Critical Rules:**
-- Always call `result.Free()` on JavaScript values.
-- Always call `rt.Close()` when done with runtime.
-- Don't free functions registered to global object.
-- Don't free object properties directly – free the entire object.
+**Rules:**
+- Call `Free()` on values you get back (`Eval`, `GetPropertyStr`, `InvokeJS`, ...).
+- Do not `Free()` a value after passing it to `SetProperty`, `SetPropertyStr` or `SetPropertyIndex`; the object owns it.
+- Do not free functions registered on the global object.
+- Free values before returning a runtime to a `Pool`.
+- Call `rt.Close()` when done with a runtime.
 
 ```go
-// Correct pattern
-result, err := ctx.Eval("script.js", code)
+result, err := ctx.Eval("script.js", qngg.Code(src))
 if err != nil {
-  return err
+	return err
 }
-
-// Always free values
 defer result.Free()
 ```
 
-**Choose QJS when you need:**
-- Secure modern JavaScript features.
+**Choose QNGG when you need:**
+- Modern JavaScript (ES2023) in Go.
 - No CGO, cross-compiles with a plain Go toolchain.
-- Supports plugin systems and user-generated code.
-- Compliant with strict security requirements.
-- High performance with low memory footprint.
+- Plugin systems and user-generated code.
+- Fast startup: a new runtime takes well under a millisecond.
 
 ## Building from Source
 
@@ -800,8 +782,8 @@ defer result.Free()
 
 ```bash
 # Clone with submodules
-git clone --recursive https://github.com/fastschema/qjs.git
-cd qjs
+git clone --recursive https://github.com/ironpark/qngg.git
+cd qngg
 
 # Install WASI SDK 34 and binaryen (pick the archives for your platform)
 curl -L https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz | tar xz
@@ -823,54 +805,25 @@ go test ./...
 
 ## Contributing
 
-We'd love your help making QJS better! Here's how:
-
-1. **Found a bug?** [Open an issue](https://github.com/fastschema/qjs/issues).
-2. **Want a feature?** Start a discussion.
-3. **Ready to code?** Fork, branch, test, and submit a PR.
-4. **Review PRs** - help review and test contributions.
-5. **Star the repo** - it helps us grow!
-
-## Support & Community
-
-- **Documentation**: [GoDoc](https://godoc.org/github.com/fastschema/qjs)
-- **Issues**: [GitHub Issues](https://github.com/fastschema/qjs/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/fastschema/qjs/discussions)
-
-**Getting Help:**
-1. Check existing issues and documentation.
-2. Create a minimal reproduction case.
-3. Include Go version, OS, and QJS version.
-4. Be specific about expected vs actual behavior.
-
-## Roadmap
-Planned features and improvements:
-- Enhanced ProxyValue capabilities.
-- Improved GO-JS type conversions.
-- More examples and documentation.
-- Performance optimizations.
-- Node.js-like standard library.
+Bug reports and pull requests are welcome on [GitHub](https://github.com/ironpark/qngg/issues). When reporting a bug, include the Go version, OS and a minimal reproduction.
 
 ## License
 
 MIT License - see [LICENSE](LICENSE) file.
 
+QNGG includes third-party code under its own licenses:
+
+- [QuickJS-NG](https://github.com/quickjs-ng/quickjs), compiled into `qjs.wasm` - MIT ([LICENSE](https://github.com/quickjs-ng/quickjs/blob/master/LICENSE)).
+- [wasmtime-go](https://github.com/bytecodealliance/wasmtime-go), vendored in `internal/wasmtime` - Apache-2.0 ([LICENSE-wasmtime-go](internal/wasmtime/LICENSE-wasmtime-go)).
+- [Wasmtime](https://github.com/bytecodealliance/wasmtime) shared libraries, embedded in `internal/wasmtime/embedded` - Apache-2.0 WITH LLVM-exception ([LICENSE-wasmtime](internal/wasmtime/embedded/LICENSE-wasmtime)).
+
 ## Acknowledgments
 
 Built on the shoulders of giants:
 
+- **[fastschema/qjs](https://github.com/fastschema/qjs)** - The project QNGG is forked from.
 - **[QuickJS](https://bellard.org/quickjs/)** by Fabrice Bellard - The elegant JavaScript engine.
 - **[Wasmtime](https://wasmtime.dev/)** - Fast and secure WebAssembly runtime.
 - **[wasmtime-go](https://github.com/bytecodealliance/wasmtime-go)** - Go bindings for Wasmtime, vendored and ported to purego.
 - **[purego](https://github.com/ebitengine/purego)** - Calling C from Go without cgo.
 - **[QuickJS-NG](https://github.com/quickjs-ng/quickjs)** - Maintained QuickJS fork.
-
----
-
-**Ready to run JavaScript safely in your Go apps?**
-
-```bash
-go get github.com/fastschema/qjs
-```
-
-**Questions? Ideas? Contributions?** We're here to help → [Start a discussion](https://github.com/fastschema/qjs/discussions)

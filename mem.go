@@ -1,4 +1,4 @@
-package qjs
+package qngg
 
 import (
 	"bytes"
@@ -6,7 +6,7 @@ import (
 	"math"
 	"sync"
 
-	"github.com/fastschema/qjs/internal/wasmtime"
+	"github.com/ironpark/qngg/internal/wasmtime"
 )
 
 // Mem provides a safe interface for WebAssembly memory operations.

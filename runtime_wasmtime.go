@@ -1,4 +1,4 @@
-package qjs
+package qngg
 
 import (
 	"bytes"
@@ -8,10 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
+	"time"
 	"weak"
 
-	"github.com/fastschema/qjs/internal/atomicfile"
-	"github.com/fastschema/qjs/internal/wasmtime"
+	"github.com/ironpark/qngg/internal/atomicfile"
+	"github.com/ironpark/qngg/internal/wasmtime"
 )
 
 // Wasmtime integration: engines, compiled module caching and instantiation.
@@ -78,7 +80,7 @@ func getCompiledModule(
 		}
 
 		cacheFile = filepath.Join(cacheDir, fmt.Sprintf(
-			"qjs-wasmtime-%s-%016x-%t.cwasm", wasmtime.Version, hash, interruptible,
+			"qngg-wasmtime-%s-%016x-%t.cwasm", wasmtime.Version, hash, interruptible,
 		))
 	}
 
@@ -139,20 +141,28 @@ func writeModuleCache(module *wasmtime.Module, cacheFile string) error {
 func (r *Runtime) instantiate(engine *wasmtime.Engine, module *wasmtime.Module, proxy JsFunctionProxy) error {
 	r.store = wasmtime.NewStore(engine)
 
-	if r.option.CloseOnContextDone {
-		ctx := r.option.Context
+	if r.option.CloseOnContextDone || r.option.MaxExecutionTime > 0 {
 		// Wasm is interrupted at its next epoch check after the deadline. Any
-		// cancellation bumps the shared engine epoch; stores whose context is
-		// still alive just push their deadline forward and keep running.
-		r.store.SetEpochDeadline(1)
-		r.store.SetEpochDeadlineCallback(func() (uint64, error) {
-			if err := ctx.Err(); err != nil {
-				return 0, fmt.Errorf("interrupted: %w", err)
-			}
+		// context cancellation or expired time limit bumps the shared engine
+		// epoch; stores with nothing to stop push their deadline forward and
+		// keep running.
+		limit := &execLimit{maxTime: r.option.MaxExecutionTime}
+		if r.option.CloseOnContextDone {
+			limit.ctx = r.option.Context
+			r.stopWatch = context.AfterFunc(limit.ctx, engine.IncrementEpoch)
+		}
 
-			return 1, nil
-		})
-		r.stopWatch = context.AfterFunc(ctx, engine.IncrementEpoch)
+		if limit.maxTime > 0 {
+			limit.timer = time.AfterFunc(limit.maxTime, func() {
+				limit.armed.Store(false)
+				engine.IncrementEpoch()
+			})
+			limit.timer.Stop()
+			r.limit = limit
+		}
+
+		r.store.SetEpochDeadline(1)
+		r.store.SetEpochDeadlineCallback(limit.check)
 	}
 
 	wasi, err := r.newWasiConfig()
@@ -183,6 +193,61 @@ func (r *Runtime) instantiate(engine *wasmtime.Engine, module *wasmtime.Module, 
 	}
 
 	return nil
+}
+
+// execLimit decides, at each epoch deadline, whether running wasm must stop.
+// It is kept apart from Runtime so the store's callback does not keep the
+// runtime alive.
+//
+// Arming a timer on every call would dominate short calls, so the timer is
+// left running across calls: it may fire before the current deadline, in
+// which case check re-arms it for the remaining time.
+type execLimit struct {
+	ctx      context.Context // checked for cancellation when set
+	maxTime  time.Duration
+	timer    *time.Timer // bumps the engine epoch when it fires
+	armed    atomic.Bool // timer is pending
+	deadline time.Time   // end of the current call, zero outside calls
+	timedOut bool
+}
+
+// start sets the deadline of an outermost call into wasm.
+func (l *execLimit) start() {
+	l.deadline = time.Now().Add(l.maxTime)
+	l.arm(l.maxTime)
+}
+
+// stop clears the deadline once the outermost call returns.
+func (l *execLimit) stop() {
+	l.deadline = time.Time{}
+}
+
+// arm makes sure the timer fires within d.
+func (l *execLimit) arm(d time.Duration) {
+	if l.armed.CompareAndSwap(false, true) {
+		l.timer.Reset(d)
+	}
+}
+
+func (l *execLimit) check() (uint64, error) {
+	if l.ctx != nil {
+		if err := l.ctx.Err(); err != nil {
+			return 0, fmt.Errorf("interrupted: %w", err)
+		}
+	}
+
+	if !l.deadline.IsZero() {
+		remaining := time.Until(l.deadline)
+		if remaining <= 0 {
+			l.timedOut = true
+
+			return 0, ErrExecutionTimeout
+		}
+
+		l.arm(remaining)
+	}
+
+	return 1, nil
 }
 
 // newWasiConfig exposes the working directory as "/" and wires stdout/stderr.
@@ -263,6 +328,10 @@ func (r *Runtime) release() {
 	if r.stopWatch != nil {
 		r.stopWatch()
 		r.stopWatch = nil
+	}
+
+	if r.limit != nil {
+		r.limit.timer.Stop()
 	}
 
 	if r.store != nil {
