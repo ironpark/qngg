@@ -1,17 +1,15 @@
-package qngg_test
+package qngg
 
 import (
 	"runtime"
 	"testing"
 	"time"
-
-	"github.com/ironpark/qngg"
 )
 
 func TestRuntimeCollectedWithoutClose(t *testing.T) {
 	collected := make(chan struct{})
 	func() {
-		rt, err := qngg.New()
+		rt, err := New()
 		if err != nil {
 			t.Fatal(err)
 		}

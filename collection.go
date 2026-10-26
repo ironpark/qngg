@@ -7,8 +7,8 @@ type Array struct {
 	*Value
 }
 
-// NewArray wraps a JavaScript array value in a Go Array type.
-func NewArray(value *Value) *Array {
+// wrapArray wraps a JavaScript array value in a Go Array type.
+func wrapArray(value *Value) *Array {
 	if value == nil || !value.IsArray() {
 		return nil
 	}
@@ -65,10 +65,10 @@ func (a *Array) Delete(index int64) bool {
 		return false
 	}
 
-	indexValue := a.context.NewInt64(index)
+	indexValue := a.runtime.NewInt64(index)
 	defer indexValue.Free()
 
-	countValue := a.context.NewInt64(1)
+	countValue := a.runtime.NewInt64(1)
 	defer countValue.Free()
 
 	removeList, err := a.InvokeJS("splice", indexValue, countValue)
@@ -86,8 +86,8 @@ type Map struct {
 	*Value
 }
 
-// NewMap wraps a JavaScript Map value in a Go Map type.
-func NewMap(value *Value) *Map {
+// wrapMap wraps a JavaScript Map value in a Go Map type.
+func wrapMap(value *Value) *Map {
 	if value == nil || !value.IsMap() {
 		return nil
 	}
@@ -183,9 +183,9 @@ func (m *Map) ForEach(forFn func(key, value *Value)) {
 		return
 	}
 
-	forEachFn := m.context.Function(func(t *This) (*Value, error) {
+	forEachFn := m.runtime.Function(func(t *This) (*Value, error) {
 		args := t.Args()
-		if len(args) >= MinMapForeachArgs {
+		if len(args) >= minMapForeachArgs {
 			forFn(args[1], args[0])
 		}
 
@@ -207,7 +207,7 @@ func (m *Map) CreateObject() *Value {
 		return nil
 	}
 
-	object := m.context.NewObject()
+	object := m.runtime.NewObject()
 	m.ForEach(func(key, value *Value) {
 		object.SetProperty(key, value)
 	})
@@ -220,8 +220,8 @@ type Set struct {
 	*Value
 }
 
-// NewSet wraps a JavaScript Set value in a Go Set type.
-func NewSet(value *Value) *Set {
+// wrapSet wraps a JavaScript Set value in a Go Set type.
+func wrapSet(value *Value) *Set {
 	if value == nil || !value.IsSet() {
 		return nil
 	}
@@ -288,7 +288,7 @@ func (s *Set) ToArray() *Array {
 		return nil
 	}
 
-	array := s.context.NewArray()
+	array := s.runtime.NewArray()
 	s.ForEach(func(value *Value) {
 		array.Push(value.Clone())
 	})
@@ -302,13 +302,13 @@ func (s *Set) ForEach(forFn func(value *Value)) {
 		return
 	}
 
-	forEachFn := s.context.Function(func(t *This) (*Value, error) {
+	forEachFn := s.runtime.Function(func(t *This) (*Value, error) {
 		args := t.Args()
 		if len(args) > 0 {
 			forFn(args[0])
 		}
 
-		return t.NewUndefined(), nil
+		return t.newUndefined(), nil
 	})
 	defer forEachFn.Free()
 

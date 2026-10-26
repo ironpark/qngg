@@ -1,6 +1,7 @@
 package qngg
 
 import (
+	"context"
 	_ "embed"
 	"errors"
 	"fmt"
@@ -30,25 +31,28 @@ type Runtime struct {
 	linker    *wasmtime.Linker
 	instance  *wasmtime.Instance
 	funcs     map[string]*wasmFunc
-	malloc    *wasmFunc
-	free      *wasmFunc
-	mem       *Mem
+	mallocFn  *wasmFunc
+	freeFn    *wasmFunc
+	mem       *wasmMemory
 	stopWatch func() bool
 	limit     *execLimit
 	// argument buffers for invoke, one per level of nested wasm calls
 	callBufs  [][]wasmtime.ValRaw
 	callDepth int
 	option    Option
-	handle    *Handle
-	context   *Context
-	registry  *ProxyRegistry
+	handle    *rawHandle
+	// goCtx is Option.Context, handed to Go functions called from JS.
+	goCtx     context.Context
+	ctxHandle *rawHandle // the JSContext
+	global    *Value
+	registry  *proxyRegistry
 	closed    bool
 }
 
 // New creates a QuickJS runtime with optional configuration.
 func New(options ...Option) (runtime *Runtime, err error) {
 	defer func() {
-		rerr := AnyToError(recover())
+		rerr := anyToError(recover())
 		if rerr != nil {
 			runtime.release()
 			runtime = nil
@@ -60,18 +64,14 @@ func New(options ...Option) (runtime *Runtime, err error) {
 		return nil, fmt.Errorf("failed to load wasmtime: %w", err)
 	}
 
-	proxyRegistry := NewProxyRegistry()
+	proxyRegistry := newProxyRegistry()
 
-	option := getRuntimeOption(proxyRegistry, options...)
-
-	proxy, ok := option.ProxyFunction.(JsFunctionProxy)
-	if !ok {
-		return nil, fmt.Errorf("invalid proxy function type %T, expected qngg.JsFunctionProxy", option.ProxyFunction)
-	}
+	option := getRuntimeOption(options...)
+	proxy := createFuncProxyWithRegistry(proxyRegistry)
 
 	qjsBytes, hash := wasmBytes, embeddedHash()
-	if len(option.QuickJSWasmBytes) > 0 {
-		qjsBytes, hash = option.QuickJSWasmBytes, hashBytes(option.QuickJSWasmBytes)
+	if len(option.quickJSWasm) > 0 {
+		qjsBytes, hash = option.quickJSWasm, hashBytes(option.quickJSWasm)
 	}
 
 	engine, module, err := getCompiledModule(
@@ -87,7 +87,7 @@ func New(options ...Option) (runtime *Runtime, err error) {
 
 	runtime = &Runtime{
 		option:   option,
-		context:  &Context{Context: option.Context},
+		goCtx:    option.Context,
 		registry: proxyRegistry,
 		funcs:    map[string]*wasmFunc{},
 	}
@@ -101,32 +101,6 @@ func New(options ...Option) (runtime *Runtime, err error) {
 	runtime.initializeRuntime()
 
 	return runtime, nil
-}
-
-func (r *Runtime) Raw() uint64 {
-	return r.handle.raw
-}
-
-// FreeQJSRuntime frees the QJS runtime.
-func (r *Runtime) FreeQJSRuntime() {
-	defer func() {
-		err := AnyToError(recover())
-		if err != nil {
-			panic(fmt.Errorf("failed to free QJS runtime: %w", err))
-		}
-	}()
-
-	// Freeing twice is undefined behavior inside QuickJS, so refuse it here.
-	if !atomic.CompareAndSwapInt32(&r.handle.freed, 0, 1) {
-		panic(errors.New("already freed"))
-	}
-
-	r.Call("QJS_Free", r.handle.raw)
-}
-
-// Mem returns the WebAssembly memory interface for this runtime.
-func (r *Runtime) Mem() *Mem {
-	return r.mem
 }
 
 // String returns a string representation of the runtime.
@@ -146,7 +120,7 @@ func (r *Runtime) Close() {
 	// and its QuickJS state may be inconsistent; releasing the store below
 	// frees its memory as a whole.
 	if r.handle != nil && r.interruptErr() == nil {
-		r.FreeQJSRuntime()
+		r.freeQJSRuntime()
 	}
 
 	r.closed = true
@@ -158,44 +132,24 @@ func (r *Runtime) Close() {
 		r.registry = nil
 	}
 
-	r.malloc = nil
-	r.free = nil
+	r.mallocFn = nil
+	r.freeFn = nil
 	r.mem = nil
 }
 
-// Load executes a JavaScript file in the runtime's context.
-func (r *Runtime) Load(file string, flags ...EvalOptionFunc) (*Value, error) {
-	return r.context.Load(file, flags...)
+// callHandle invokes a WebAssembly function by name and wraps its result.
+func (r *Runtime) callHandle(name string, args ...uint64) *rawHandle {
+	return newRawHandle(r, r.call(name, args...))
 }
 
-// Eval executes JavaScript code in the runtime's context.
-func (r *Runtime) Eval(file string, flags ...EvalOptionFunc) (*Value, error) {
-	return r.context.Eval(file, flags...)
+// callUnpack calls a WebAssembly function and unpacks the returned pointer.
+func (r *Runtime) callUnpack(name string, args ...uint64) (uint32, uint32) {
+	return r.mem.UnpackPtr(r.call(name, args...))
 }
 
-// Compile compiles JavaScript code to bytecode without executing it.
-func (r *Runtime) Compile(file string, flags ...EvalOptionFunc) ([]byte, error) {
-	return r.context.Compile(file, flags...)
-}
-
-// Context returns the JavaScript execution context for this runtime.
-func (r *Runtime) Context() *Context {
-	return r.context
-}
-
-// Call invokes a WebAssembly function by name with the given arguments.
-func (r *Runtime) Call(name string, args ...uint64) *Handle {
-	return NewHandle(r, r.call(name, args...))
-}
-
-// CallUnPack calls a WebAssembly function and unpacks the returned pointer.
-func (r *Runtime) CallUnPack(name string, args ...uint64) (uint32, uint32) {
-	return r.mem.UnpackPtr(r.Call(name, args...).raw)
-}
-
-// Malloc allocates memory in the WebAssembly linear memory and return a pointer to it.
-func (r *Runtime) Malloc(size uint64) uint64 {
-	ptr, err := r.invoke(r.malloc, size)
+// malloc allocates memory in the WebAssembly linear memory and return a pointer to it.
+func (r *Runtime) malloc(size uint64) uint64 {
+	ptr, err := r.invoke(r.mallocFn, size)
 	if err != nil {
 		panic(fmt.Errorf("failed to allocate memory: %w", err))
 	}
@@ -203,67 +157,66 @@ func (r *Runtime) Malloc(size uint64) uint64 {
 	return ptr
 }
 
-// FreeHandle releases memory allocated in WebAssembly linear memory. It is a
+// freeHandle releases memory allocated in WebAssembly linear memory. It is a
 // no-op once the runtime is closed or interrupted: the memory goes with it.
-func (r *Runtime) FreeHandle(ptr uint64) {
+func (r *Runtime) freeHandle(ptr uint64) {
 	if r.interruptErr() != nil {
 		return
 	}
 
-	if _, err := r.invoke(r.free, ptr); err != nil {
+	if _, err := r.invoke(r.freeFn, ptr); err != nil {
 		panic(fmt.Errorf("failed to free memory: %w", err))
 	}
 }
 
-// FreeJsValue frees a JavaScript value in the QuickJS runtime. Like
+// freeJsValue frees a JavaScript value in the QuickJS runtime. Like
 // FreeHandle, it is a no-op once the runtime is closed or interrupted.
-func (r *Runtime) FreeJsValue(val uint64) {
+func (r *Runtime) freeJsValue(val uint64) {
 	if r.interruptErr() != nil {
 		return
 	}
 
-	r.Call("QJS_FreeValue", r.context.Raw(), val)
+	r.call("QJS_FreeValue", r.ctxPtr(), val)
 }
 
-// NewBytesHandle creates a handle for byte data in WebAssembly memory.
-func (r *Runtime) NewBytesHandle(b []byte) *Handle {
+// newBytesHandle creates a handle for byte data in WebAssembly memory.
+func (r *Runtime) newBytesHandle(b []byte) *rawHandle {
 	if len(b) == 0 {
 		return nil
 	}
 
-	ptr := r.Malloc(uint64(len(b)))
+	ptr := r.malloc(uint64(len(b)))
 	r.mem.MustWrite(uint32(ptr), b)
 
-	return NewHandle(r, ptr)
+	return newRawHandle(r, ptr)
 }
 
-// NewStringHandle creates a handle for string data with null termination.
-func (r *Runtime) NewStringHandle(v string) *Handle {
+// newCString copies v into wasm memory as a NUL-terminated string.
+func (r *Runtime) newCString(v string) *rawHandle {
 	// Allocate len+1 for null terminator
-	ptr := r.Malloc(uint64(len(v) + 1))
+	ptr := r.malloc(uint64(len(v) + 1))
 
 	// Write string data
 	r.mem.MustWrite(uint32(ptr), []byte(v))
 	// Add null terminator
 	r.mem.MustWrite(uint32(ptr)+uint32(len(v)), []byte{0})
 
-	return NewHandle(r, ptr)
+	return newRawHandle(r, ptr)
 }
 
 // initializeRuntime sets up the runtime components after module instantiation.
 func (r *Runtime) initializeRuntime() {
-	r.malloc = r.export("malloc")
-	r.free = r.export("free")
-	r.mem = &Mem{store: r.store, mem: r.instance.GetExport(r.store, "memory").Memory()}
-	r.handle = r.Call(
+	r.mallocFn = r.export("malloc")
+	r.freeFn = r.export("free")
+	r.mem = &wasmMemory{store: r.store, mem: r.instance.GetExport(r.store, "memory").Memory()}
+	r.handle = r.callHandle(
 		"New_QJS",
 		uint64(r.option.MemoryLimit),
 		uint64(r.option.MaxStackSize),
 		uint64(r.option.GCThreshold),
 	)
 
-	r.context.handle = r.Call("QJS_GetContext", r.handle.raw)
-	r.context.runtime = r
+	r.ctxHandle = r.callHandle("QJS_GetContext", r.handle.raw)
 }
 
 // export returns the cached export `name`, looking it up on first use.
@@ -361,7 +314,7 @@ func (r *Runtime) interruptErr() error {
 		return ErrExecutionTimeout
 	}
 
-	if err := r.context.Err(); err != nil {
+	if err := r.goCtx.Err(); err != nil {
 		return fmt.Errorf("context done: %w", err)
 	}
 
@@ -464,7 +417,7 @@ func (p *Pool) Put(rt *Runtime) {
 
 	// Update stack top before returning to pool
 	if rt.handle != nil {
-		rt.Call("QJS_UpdateStackTop", rt.handle.raw)
+		rt.callHandle("QJS_UpdateStackTop", rt.handle.raw)
 	}
 
 	select {
@@ -479,7 +432,7 @@ func (p *Pool) Put(rt *Runtime) {
 // prepareRuntimeForUse prepares a pooled runtime for use.
 func (p *Pool) prepareRuntimeForUse(rt *Runtime) *Runtime {
 	if rt != nil && rt.handle != nil {
-		rt.Call("QJS_UpdateStackTop", rt.handle.raw)
+		rt.callHandle("QJS_UpdateStackTop", rt.handle.raw)
 	}
 
 	return rt
@@ -503,4 +456,26 @@ func (p *Pool) createNewRuntime() (*Runtime, error) {
 	}
 
 	return rt, nil
+}
+
+// freeQJSRuntime frees the QJS runtime.
+func (r *Runtime) freeQJSRuntime() {
+	defer func() {
+		err := anyToError(recover())
+		if err != nil {
+			panic(fmt.Errorf("failed to free QJS runtime: %w", err))
+		}
+	}()
+
+	// Freeing twice is undefined behavior inside QuickJS, so refuse it here.
+	if !atomic.CompareAndSwapInt32(&r.handle.freed, 0, 1) {
+		panic(errors.New("already freed"))
+	}
+
+	r.callHandle("QJS_Free", r.handle.raw)
+}
+
+// memory returns the WebAssembly memory interface for this runtime.
+func (r *Runtime) memory() *wasmMemory {
+	return r.mem
 }

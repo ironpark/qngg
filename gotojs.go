@@ -9,8 +9,8 @@ import (
 )
 
 // ToJsValue converts any Go value to a QuickJS value.
-func ToJsValue(c *Context, v any) (*Value, error) {
-	jsVal, err := NewTracker[uintptr]().toJsValue(c, v)
+func ToJsValue(c *Runtime, v any) (*Value, error) {
+	jsVal, err := newConvTracker[uintptr]().toJsValue(c, v)
 	if err != nil {
 		return nil, fmt.Errorf("[ToJSValue] %w", err)
 	}
@@ -18,37 +18,16 @@ func ToJsValue(c *Context, v any) (*Value, error) {
 	if !jsVal.IsNull() && jsVal.IsObject() {
 		goValueType := reflect.TypeOf(v).String()
 		jsVal.SetPropertyStr("__go_type", c.NewString(goValueType))
-		jsVal.SetPropertyStr("__registry_id", c.NewInt64(int64(c.runtime.registry.Register(v))))
+		jsVal.SetPropertyStr("__registry_id", c.NewInt64(int64(c.registry.Register(v))))
 	}
 
 	return jsVal, nil
 }
 
-// toJsValue converts any Go value to a QuickJS Value using the conversion context.
-func (tracker *Tracker[T]) toJsValue(c *Context, v any) (*Value, error) {
-	if v == nil {
-		return c.NewNull(), nil
-	}
-
-	if err, ok := v.(error); ok {
-		return c.NewError(err), nil
-	}
-
-	if jsVal := tryConvertBuiltinTypes(c, v); jsVal != nil {
-		return jsVal, nil
-	}
-
-	if jsVal := tryConvertNumeric(c, v); jsVal != nil {
-		return jsVal, nil
-	}
-
-	return tracker.convertReflectValue(c, v)
-}
-
 // GoStructToJs converts a Go struct to a JavaScript object.
 // Includes both fields and methods as object properties.
-func (tracker *Tracker[T]) GoStructToJs(
-	c *Context,
+func (tracker *convTracker[T]) GoStructToJs(
+	c *Runtime,
 	rtype reflect.Type,
 	rval reflect.Value,
 ) (*Value, error) {
@@ -82,19 +61,19 @@ func (tracker *Tracker[T]) GoStructToJs(
 }
 
 // GoSliceToJs converts a Go slice to a JavaScript array.
-func (tracker *Tracker[T]) GoSliceToJs(c *Context, rval reflect.Value) (*Value, error) {
+func (tracker *convTracker[T]) GoSliceToJs(c *Runtime, rval reflect.Value) (*Value, error) {
 	return tracker.arrayLikeToJS(c, rval, "slice")
 }
 
 // GoArrayToJs converts a Go array to a JavaScript array without unnecessary copying.
-func (tracker *Tracker[T]) GoArrayToJs(c *Context, rval reflect.Value) (*Value, error) {
+func (tracker *convTracker[T]) GoArrayToJs(c *Runtime, rval reflect.Value) (*Value, error) {
 	return tracker.arrayLikeToJS(c, rval, "array")
 }
 
 // GoMapToJs converts a Go map to a JavaScript object.
 // Non-string keys are converted to string representation.
-func (tracker *Tracker[T]) GoMapToJs(
-	c *Context,
+func (tracker *convTracker[T]) GoMapToJs(
+	c *Runtime,
 	rval reflect.Value,
 ) (*Value, error) {
 	return withJSObject(c, func(obj *Value) error {
@@ -120,8 +99,8 @@ func (tracker *Tracker[T]) GoMapToJs(
 	})
 }
 
-// GoNumberToJs converts Go numeric types to appropriate JS number types.
-func GoNumberToJs[T NumberType](c *Context, i T) *Value {
+// goNumberToJs converts Go numeric types to appropriate JS number types.
+func goNumberToJs[T numberType](c *Runtime, i T) *Value {
 	switch v := any(i).(type) {
 	case int32:
 		return c.NewInt32(v)
@@ -150,8 +129,8 @@ func GoNumberToJs[T NumberType](c *Context, i T) *Value {
 	}
 }
 
-// GoComplexToJs converts Go complex numbers to JS objects with real/imag properties.
-func GoComplexToJs[T complex64 | complex128](c *Context, z T) *Value {
+// goComplexToJs converts Go complex numbers to JS objects with real/imag properties.
+func goComplexToJs[T complex64 | complex128](c *Runtime, z T) *Value {
 	obj := c.NewObject()
 
 	var realPart, imagPart float64
@@ -171,27 +150,27 @@ func GoComplexToJs[T complex64 | complex128](c *Context, z T) *Value {
 	return obj
 }
 
-// GoStructToJs converts Go structs to JavaScript objects.
-func GoStructToJs(
-	c *Context,
+// goStructToJs converts Go structs to JavaScript objects.
+func goStructToJs(
+	c *Runtime,
 	rtype reflect.Type,
 	rval reflect.Value,
 ) (*Value, error) {
-	return NewTracker[uint64]().GoStructToJs(c, rtype, rval)
+	return newConvTracker[uint64]().GoStructToJs(c, rtype, rval)
 }
 
-// GoSliceToJs converts Go slices to JavaScript arrays.
-func GoSliceToJs(c *Context, rval reflect.Value) (*Value, error) {
-	return NewTracker[uint64]().GoSliceToJs(c, rval)
+// goSliceToJs converts Go slices to JavaScript arrays.
+func goSliceToJs(c *Runtime, rval reflect.Value) (*Value, error) {
+	return newConvTracker[uint64]().GoSliceToJs(c, rval)
 }
 
-// GoMapToJs converts Go maps to JavaScript objects.
-func GoMapToJs(c *Context, rval reflect.Value) (*Value, error) {
-	return NewTracker[uint64]().GoMapToJs(c, rval)
+// goMapToJs converts Go maps to JavaScript objects.
+func goMapToJs(c *Runtime, rval reflect.Value) (*Value, error) {
+	return newConvTracker[uint64]().GoMapToJs(c, rval)
 }
 
 // tryConvertBuiltinTypes handles built-in Go types that don't require reflection.
-func tryConvertBuiltinTypes(c *Context, v any) *Value {
+func tryConvertBuiltinTypes(c *Runtime, v any) *Value {
 	switch val := v.(type) {
 	case bool:
 		return c.NewBool(val)
@@ -219,52 +198,52 @@ func tryConvertBuiltinTypes(c *Context, v any) *Value {
 }
 
 // tryConvertNumeric handles all numeric types in a consolidated way.
-func tryConvertNumeric(c *Context, v any) *Value {
+func tryConvertNumeric(c *Runtime, v any) *Value {
 	switch val := v.(type) {
 	case int8:
-		return GoNumberToJs(c, val)
+		return goNumberToJs(c, val)
 	case int16:
-		return GoNumberToJs(c, val)
+		return goNumberToJs(c, val)
 	case int32:
-		return GoNumberToJs(c, val)
+		return goNumberToJs(c, val)
 	case int:
-		return GoNumberToJs(c, val)
+		return goNumberToJs(c, val)
 	case int64:
-		return GoNumberToJs(c, val)
+		return goNumberToJs(c, val)
 	case uint8:
-		return GoNumberToJs(c, val)
+		return goNumberToJs(c, val)
 	case uint16:
-		return GoNumberToJs(c, val)
+		return goNumberToJs(c, val)
 	case uint32:
-		return GoNumberToJs(c, val)
+		return goNumberToJs(c, val)
 	case uint:
-		return GoNumberToJs(c, val)
+		return goNumberToJs(c, val)
 	case uint64:
 		// Large uint64 values use float64 to avoid overflow
-		if val&(uint64(1)<<Uint64SignBitPosition) == 0 {
-			return GoNumberToJs(c, int64(val))
+		if val&(uint64(1)<<uint64SignBitPosition) == 0 {
+			return goNumberToJs(c, int64(val))
 		}
 
 		return c.NewFloat64(float64(val))
 	case float32:
-		return GoNumberToJs(c, val)
+		return goNumberToJs(c, val)
 	case float64:
-		return GoNumberToJs(c, val)
+		return goNumberToJs(c, val)
 	case complex64:
-		return GoComplexToJs(c, val)
+		return goComplexToJs(c, val)
 	case complex128:
-		return GoComplexToJs(c, val)
+		return goComplexToJs(c, val)
 	}
 
 	return nil
 }
 
 // convertReflectValue handles types that require reflection.
-func (tracker *Tracker[T]) convertReflectValue(c *Context, v any) (*Value, error) {
+func (tracker *convTracker[T]) convertReflectValue(c *Runtime, v any) (*Value, error) {
 	rtype := reflect.TypeOf(v)
 	rval := reflect.ValueOf(v)
 
-	var ct CircularTracker[T]
+	var ct circularTracker[T]
 	defer ct.cleanup()
 
 	if rtype.Kind() == reflect.Pointer {
@@ -277,7 +256,7 @@ func (tracker *Tracker[T]) convertReflectValue(c *Context, v any) (*Value, error
 
 		addrT, _ := addr.(T)
 		if err := ct.trackPtr(tracker, addrT); err != nil {
-			return nil, newGoToJsErr(GetGoTypeName(reflect.TypeOf(v)), err, "recursive pointer")
+			return nil, newGoToJsErr(goTypeName(reflect.TypeOf(v)), err, "recursive pointer")
 		}
 
 		// If pointer points to a struct,
@@ -292,7 +271,7 @@ func (tracker *Tracker[T]) convertReflectValue(c *Context, v any) (*Value, error
 
 	switch rtype.Kind() {
 	case reflect.Func:
-		return FuncToJS(c, v)
+		return funcToJS(c, v)
 	case reflect.Struct:
 		return tracker.GoStructToJs(c, rtype, rval)
 	case reflect.Slice:
@@ -310,22 +289,22 @@ func (tracker *Tracker[T]) convertReflectValue(c *Context, v any) (*Value, error
 	case reflect.Array:
 		return tracker.GoArrayToJs(c, rval)
 	case reflect.Chan:
-		return ChannelToJSObjectValue(c, rtype, rval)
+		return channelToJSObjectValue(c, rtype, rval)
 	case reflect.UnsafePointer:
-		return nil, newGoToJsErr(GetGoTypeName(rtype), nil)
+		return nil, newGoToJsErr(goTypeName(rtype), nil)
 
 	// Handle custom types based on their underlying type.
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return GoNumberToJs(c, rval.Int()), nil
+		return goNumberToJs(c, rval.Int()), nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		uintVal := rval.Uint()
 		if uintVal > math.MaxInt64 {
 			return c.NewFloat64(float64(uintVal)), nil
 		}
 
-		return GoNumberToJs(c, int64(uintVal)), nil
+		return goNumberToJs(c, int64(uintVal)), nil
 	case reflect.Float32, reflect.Float64:
-		return GoNumberToJs(c, rval.Float()), nil
+		return goNumberToJs(c, rval.Float()), nil
 	case reflect.String:
 		return c.NewString(rval.String()), nil
 	case reflect.Bool:
@@ -336,7 +315,7 @@ func (tracker *Tracker[T]) convertReflectValue(c *Context, v any) (*Value, error
 }
 
 // withJSObject creates a JS object and ensures it's freed on error.
-func withJSObject(c *Context, fn func(*Value) error) (*Value, error) {
+func withJSObject(c *Runtime, fn func(*Value) error) (*Value, error) {
 	obj := c.NewObject()
 	if err := fn(obj); err != nil {
 		obj.Free()
@@ -349,8 +328,8 @@ func withJSObject(c *Context, fn func(*Value) error) (*Value, error) {
 
 // addStructFieldsToObject converts struct fields to JS object properties.
 // Processes embedded fields first, then regular fields to allow overriding.
-func (tracker *Tracker[T]) addStructFieldsToObject(
-	c *Context,
+func (tracker *convTracker[T]) addStructFieldsToObject(
+	c *Runtime,
 	obj *Value,
 	rtype reflect.Type,
 	rval reflect.Value,
@@ -365,8 +344,8 @@ func (tracker *Tracker[T]) addStructFieldsToObject(
 }
 
 // processEmbeddedFields handles anonymous/embedded fields in structs.
-func (tracker *Tracker[T]) processEmbeddedFields(
-	c *Context,
+func (tracker *convTracker[T]) processEmbeddedFields(
+	c *Runtime,
 	obj *Value,
 	rtype reflect.Type,
 	rval reflect.Value,
@@ -388,8 +367,8 @@ func (tracker *Tracker[T]) processEmbeddedFields(
 }
 
 // processEmbeddedField handles a single embedded field.
-func (tracker *Tracker[T]) processEmbeddedField(
-	c *Context,
+func (tracker *convTracker[T]) processEmbeddedField(
+	c *Runtime,
 	obj *Value,
 	field reflect.StructField,
 	fieldValue reflect.Value,
@@ -405,8 +384,8 @@ func (tracker *Tracker[T]) processEmbeddedField(
 }
 
 // processEmbeddedPointer handles embedded pointer fields.
-func (tracker *Tracker[T]) processEmbeddedPointer(
-	c *Context,
+func (tracker *convTracker[T]) processEmbeddedPointer(
+	c *Runtime,
 	obj *Value,
 	fieldName string,
 	fieldType reflect.Type,
@@ -423,8 +402,8 @@ func (tracker *Tracker[T]) processEmbeddedPointer(
 }
 
 // addEmbeddedPrimitive adds an embedded primitive type as a field.
-func (tracker *Tracker[T]) addEmbeddedPrimitive(
-	c *Context,
+func (tracker *convTracker[T]) addEmbeddedPrimitive(
+	c *Runtime,
 	obj *Value,
 	fieldName string,
 	fieldValue reflect.Value,
@@ -440,8 +419,8 @@ func (tracker *Tracker[T]) addEmbeddedPrimitive(
 }
 
 // processRegularFields handles non-anonymous fields in structs.
-func (tracker *Tracker[T]) processRegularFields(
-	c *Context,
+func (tracker *convTracker[T]) processRegularFields(
+	c *Runtime,
 	obj *Value,
 	rtype reflect.Type,
 	rval reflect.Value,
@@ -470,7 +449,7 @@ func (tracker *Tracker[T]) processRegularFields(
 }
 
 // getFieldName determines the field name considering JSON tags.
-func (tracker *Tracker[T]) getFieldName(field reflect.StructField) (string, bool) {
+func (tracker *convTracker[T]) getFieldName(field reflect.StructField) (string, bool) {
 	fieldName := field.Name
 	if jsonTag := field.Tag.Get("json"); jsonTag != "" {
 		name, _, _ := strings.Cut(jsonTag, ",")
@@ -487,8 +466,8 @@ func (tracker *Tracker[T]) getFieldName(field reflect.StructField) (string, bool
 }
 
 // addStructMethodsToObject adds exported struct methods as JS functions.
-func (tracker *Tracker[T]) addStructMethodsToObject(
-	c *Context,
+func (tracker *convTracker[T]) addStructMethodsToObject(
+	c *Runtime,
 	obj *Value,
 	rtype reflect.Type,
 	rval reflect.Value,
@@ -497,10 +476,10 @@ func (tracker *Tracker[T]) addStructMethodsToObject(
 		method := rtype.Method(i)
 		methodValue := rval.Method(i)
 
-		jsMethod, err := FuncToJS(c, methodValue.Interface())
+		jsMethod, err := funcToJS(c, methodValue.Interface())
 		if err != nil {
 			return newGoToJsErr(
-				GetGoTypeName(rtype)+"."+method.Name,
+				goTypeName(rtype)+"."+method.Name,
 				err,
 				"struct method",
 			)
@@ -513,8 +492,8 @@ func (tracker *Tracker[T]) addStructMethodsToObject(
 }
 
 // arrayLikeToJS is a helper that converts arrays and slices to JS arrays.
-func (tracker *Tracker[T]) arrayLikeToJS(
-	c *Context,
+func (tracker *convTracker[T]) arrayLikeToJS(
+	c *Runtime,
 	rval reflect.Value,
 	typeName string,
 ) (*Value, error) {
@@ -527,11 +506,32 @@ func (tracker *Tracker[T]) arrayLikeToJS(
 		if err != nil {
 			arr.Free()
 
-			return nil, newGoToJsErr(typeName+": "+GetGoTypeName(rval.Type()), err)
+			return nil, newGoToJsErr(typeName+": "+goTypeName(rval.Type()), err)
 		}
 
 		arr.SetPropertyIndex(int64(i), jsElem)
 	}
 
 	return arr.Value, nil
+}
+
+// toJsValue converts any Go value to a QuickJS Value using the conversion context.
+func (tracker *convTracker[T]) toJsValue(c *Runtime, v any) (*Value, error) {
+	if v == nil {
+		return c.NewNull(), nil
+	}
+
+	if err, ok := v.(error); ok {
+		return c.NewError(err), nil
+	}
+
+	if jsVal := tryConvertBuiltinTypes(c, v); jsVal != nil {
+		return jsVal, nil
+	}
+
+	if jsVal := tryConvertNumeric(c, v); jsVal != nil {
+		return jsVal, nil
+	}
+
+	return tracker.convertReflectValue(c, v)
 }

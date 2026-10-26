@@ -11,49 +11,49 @@ import (
 type (
 	Function      func(ctx *This) (*Value, error)
 	AsyncFunction func(ctx *This)
-	JSAtom        uint32
+	atomID        uint32
 )
 
 type Value struct {
-	handle  *Handle
-	context *Context
+	handle  *rawHandle
+	runtime *Runtime
 }
 
 type This struct {
 	*Value
 
-	context *Context
+	runtime *Runtime
 	args    []*Value
 	promise *Value
 	isAsync bool
 }
 
-type JSPropertyEnum struct {
+type jsPropertyEnum struct {
 	isEnumerable bool
-	atom         JSAtom
+	atom         atomID
 }
 
-const jsPropertyEnumSize = uint32(unsafe.Sizeof(JSPropertyEnum{}))
+const jsPropertyEnumSize = uint32(unsafe.Sizeof(jsPropertyEnum{}))
 
-// Atom represents a JavaScript atom:
+// jsAtom represents a JavaScript atom:
 // Object property names and some strings are stored as Atoms (unique strings) to save memory and allow fast comparison.
-type Atom struct {
+type jsAtom struct {
 	*Value
 
-	context *Context
+	runtime *Runtime
 }
 
-type OwnProperty struct {
+type ownProperty struct {
 	isEnumerable bool
-	atom         Atom
+	atom         jsAtom
 }
 
-func (p OwnProperty) String() string {
+func (p ownProperty) String() string {
 	return p.atom.String()
 }
 
-func (t *This) Context() *Context {
-	return t.context
+func (t *This) Runtime() *Runtime {
+	return t.runtime
 }
 
 func (t *This) Args() []*Value {
@@ -68,54 +68,34 @@ func (t *This) IsAsync() bool {
 	return t.isAsync
 }
 
-func (a Atom) Free() {
-	a.context.Call("JS_FreeAtom", a.context.Raw(), a.Raw())
+func (a jsAtom) Free() {
+	a.runtime.jsCall("JS_FreeAtom", a.runtime.ctxPtr(), a.raw())
 }
 
-func (a Atom) String() string {
-	result := a.context.Call("QJS_AtomToCString", a.context.Raw(), a.Raw())
+func (a jsAtom) String() string {
+	result := a.runtime.jsCall("QJS_AtomToCString", a.runtime.ctxPtr(), a.raw())
 	defer result.handle.Free()
 
 	return result.handle.String()
 }
 
-func (a Atom) ToValue() *Value {
-	return a.context.Call("JS_AtomToValue", a.context.Raw(), a.Raw())
-}
-
-func (v *Value) Handle() *Handle {
-	return v.handle
-}
-
-func (v *Value) Raw() uint64 {
-	if v == nil || v.handle == nil {
-		return 0
-	}
-
-	return v.handle.raw
+func (a jsAtom) ToValue() *Value {
+	return a.runtime.jsCall("JS_AtomToValue", a.runtime.ctxPtr(), a.raw())
 }
 
 func (v *Value) Free() {
-	if v != nil && v.Raw() != 0 {
-		v.context.FreeJsValue(v.handle.raw)
+	if v != nil && v.raw() != 0 {
+		v.runtime.freeJsValue(v.handle.raw)
 		v.handle.raw = 0
 	}
 }
 
-func (v *Value) Context() *Context {
-	return v.context
-}
-
-func (v *Value) Ctx() uint64 {
-	return v.context.Raw()
-}
-
-func (v *Value) Call(name string, args ...uint64) *Value {
-	return v.context.Call(name, args...)
+func (v *Value) Runtime() *Runtime {
+	return v.runtime
 }
 
 func (v *Value) Clone() *Value {
-	return v.Call("QJS_CloneValue", v.Ctx(), v.Raw())
+	return v.jsCall("QJS_CloneValue", v.ctxPtr(), v.raw())
 }
 
 func (v *Value) Type() string {
@@ -124,7 +104,7 @@ func (v *Value) Type() string {
 		return "Symbol"
 	}
 
-	if v.IsQJSProxyValue() {
+	if v.isProxyValue() {
 		return "QJSProxyValue"
 	}
 
@@ -213,13 +193,9 @@ func (v *Value) Type() string {
 	return "unknown"
 }
 
-func (v *Value) NewUndefined() *Value {
-	return v.context.NewUndefined()
-}
-
 // GetOwnPropertyNames returns the names of the properties of the value.
 func (v *Value) GetOwnPropertyNames() (_ []string, err error) {
-	pList := v.GetOwnProperties()
+	pList := v.getOwnProperties()
 
 	names := make([]string, len(pList))
 
@@ -230,105 +206,65 @@ func (v *Value) GetOwnPropertyNames() (_ []string, err error) {
 	return names, nil
 }
 
-func (v *Value) GetOwnProperties() []OwnProperty {
-	ptr, entriesCount := v.context.CallUnPack(
-		"QJS_GetOwnPropertyNames",
-		v.Ctx(),
-		v.Raw(),
-	)
-	if entriesCount == 0 {
-		return []OwnProperty{}
-	}
-
-	// Block size: number of entries * sizeof(JSPropertyEnum)
-	blockSize := entriesCount * jsPropertyEnumSize
-	bytes := v.context.MemRead(ptr, uint64(blockSize))
-
-	// SAFETY: This converts C memory layout to Go structs.
-	// The memory comes from QJS C code and matches JSPropertyEnum layout.
-	// This is safe because:
-	// 1. Memory size is validated (size * jsPropertyEnumSize)
-	// 2. JSPropertyEnum layout matches C struct layout
-	// 3. Memory lifetime is managed by context.FreeHandle()
-	entries := unsafe.Slice((*JSPropertyEnum)(unsafe.Pointer(&bytes[0])), entriesCount)
-
-	property := make([]OwnProperty, len(entries))
-
-	for i, entry := range entries {
-		property[i].isEnumerable = entry.isEnumerable
-		property[i].atom = Atom{
-			context: v.context,
-			Value: v.context.NewValue(NewHandle(
-				v.context.runtime,
-				uint64(entry.atom),
-			)),
-		}
-	}
-
-	v.context.FreeHandle(uint64(ptr))
-
-	return property
-}
-
 func (v *Value) GetProperty(name *Value) *Value {
-	atom := v.Call("JS_ValueToAtom", v.Ctx(), name.Raw())
+	atom := v.jsCall("JS_ValueToAtom", v.ctxPtr(), name.raw())
 
-	return v.Call("JS_GetProperty", v.Ctx(), v.Raw(), atom.Raw())
+	return v.jsCall("JS_GetProperty", v.ctxPtr(), v.raw(), atom.raw())
 }
 
 // SetProperty sets the value of the property with the given name.
 // The property takes ownership of val; do not free val afterwards.
 func (v *Value) SetProperty(name, val *Value) {
-	atom := v.Call("JS_ValueToAtom", v.Ctx(), name.Raw())
-	v.Call("JS_SetProperty", v.Ctx(), v.Raw(), atom.Raw(), val.Raw())
+	atom := v.jsCall("JS_ValueToAtom", v.ctxPtr(), name.raw())
+	v.jsCall("JS_SetProperty", v.ctxPtr(), v.raw(), atom.raw(), val.raw())
 }
 
 // GetPropertyStr returns the value of the property with the given name.
 func (v *Value) GetPropertyStr(name string) *Value {
-	nameVal := v.context.NewStringHandle(name)
-	defer v.context.FreeHandle(nameVal.Raw())
+	nameVal := v.runtime.newStringHandle(name)
+	defer v.runtime.freeHandle(nameVal.raw())
 
-	return v.Call("JS_GetPropertyStr", v.Ctx(), v.Raw(), nameVal.Raw())
+	return v.jsCall("JS_GetPropertyStr", v.ctxPtr(), v.raw(), nameVal.raw())
 }
 
 // SetPropertyStr sets the value of the property with the given name.
 // The property takes ownership of val; do not free val afterwards.
 func (v *Value) SetPropertyStr(name string, val *Value) {
 	if val != nil {
-		nameVal := v.context.NewStringHandle(name)
-		v.Call("JS_SetPropertyStr", v.Ctx(), v.Raw(), nameVal.Raw(), val.Raw())
+		nameVal := v.runtime.newStringHandle(name)
+		v.jsCall("JS_SetPropertyStr", v.ctxPtr(), v.raw(), nameVal.raw(), val.raw())
 	}
 }
 
 // HasPropertyIndex returns true if the value has the property with the given index.
 func (v *Value) HasPropertyIndex(index int64) bool {
-	prop := v.context.NewAtomIndex(index)
+	prop := v.runtime.newAtomIndex(index)
 	defer prop.Free()
 
-	return v.Call("JS_HasProperty", v.Ctx(), v.Raw(), prop.Raw()).Bool()
+	return v.jsCall("JS_HasProperty", v.ctxPtr(), v.raw(), prop.raw()).Bool()
 }
 
 // HasProperty returns true if the value has the property with the given name.
 func (v *Value) HasProperty(name string) bool {
-	prop := v.context.NewAtom(name)
+	prop := v.runtime.newAtom(name)
 	defer prop.Free()
 
-	return v.Call("JS_HasProperty", v.Ctx(), v.Raw(), prop.Raw()).Bool()
+	return v.jsCall("JS_HasProperty", v.ctxPtr(), v.raw(), prop.raw()).Bool()
 }
 
 // DeleteProperty deletes the property with the given name.
 func (v *Value) DeleteProperty(name string) bool {
-	prop := v.context.NewAtom(name)
+	prop := v.runtime.newAtom(name)
 	defer prop.Free()
 
-	return v.Call("JS_DeleteProperty", v.Ctx(), v.Raw(), prop.Raw(), uint64(1)).Bool()
+	return v.jsCall("JS_DeleteProperty", v.ctxPtr(), v.raw(), prop.raw(), uint64(1)).Bool()
 }
 
 // Invoke call the object's method with the given name and arguments.
 func (v *Value) Invoke(fname string, args ...any) (_ *Value, err error) {
 	jsArgs := make([]*Value, len(args))
 	for i, arg := range args {
-		if jsArgs[i], err = ToJsValue(v.context, arg); err != nil {
+		if jsArgs[i], err = ToJsValue(v.runtime, arg); err != nil {
 			return nil, err
 		}
 		defer jsArgs[i].Free()
@@ -340,34 +276,34 @@ func (v *Value) Invoke(fname string, args ...any) (_ *Value, err error) {
 // InvokeJS call the object's method with the given name and JS arguments.
 func (v *Value) InvokeJS(fname string, args ...*Value) (*Value, error) {
 	if !v.IsObject() {
-		return v.NewUndefined(), ErrCallFuncOnNonObject
+		return v.newUndefined(), ErrCallFuncOnNonObject
 	}
 
 	fn := v.GetPropertyStr(fname)
 	defer fn.Free()
 
 	if !fn.IsFunction() {
-		return v.NewUndefined(), fmt.Errorf("JS property '%s' is not a function", fname)
+		return v.newUndefined(), fmt.Errorf("JS property '%s' is not a function", fname)
 	}
 
-	argc, argvPtr := createJsCallArgs(v.context, args...)
-	defer v.context.FreeHandle(argvPtr)
+	argc, argvPtr := createJsCallArgs(v.runtime, args...)
+	defer v.runtime.freeHandle(argvPtr)
 
-	jsCallArgs := []uint64{v.Ctx(), fn.Raw(), v.Raw(), argc, argvPtr}
-	result := v.Call("QJS_Call", jsCallArgs...)
+	jsCallArgs := []uint64{v.ctxPtr(), fn.raw(), v.raw(), argc, argvPtr}
+	result := v.jsCall("QJS_Call", jsCallArgs...)
 
-	return normalizeJsValue(v.context, result)
+	return normalizeJsValue(v.runtime, result)
 }
 
 // SetPropertyIndex sets the value of the property with the given index.
 // The property takes ownership of val; do not free val afterwards.
 func (v *Value) SetPropertyIndex(index int64, val *Value) {
-	v.Call("JS_SetPropertyUint32", v.Ctx(), v.Raw(), uint64(index), val.Raw())
+	v.jsCall("JS_SetPropertyUint32", v.ctxPtr(), v.raw(), uint64(index), val.raw())
 }
 
 // GetPropertyIndex returns the value of the property with the given index.
 func (v *Value) GetPropertyIndex(index int64) *Value {
-	return v.Call("QJS_GetPropertyUint32", v.Ctx(), v.Raw(), uint64(index))
+	return v.jsCall("QJS_GetPropertyUint32", v.ctxPtr(), v.raw(), uint64(index))
 }
 
 // Len returns the length of the array.
@@ -385,29 +321,14 @@ func (v *Value) ByteLen() int64 {
 
 // ToByteArray returns the byte array of the ArrayBuffer.
 func (v *Value) ToByteArray() []byte {
-	result := v.Call("QJS_GetArrayBuffer", v.Ctx(), v.Raw())
+	result := v.jsCall("QJS_GetArrayBuffer", v.ctxPtr(), v.raw())
 	defer result.handle.Free()
 
 	return result.handle.Bytes()
 }
 
-func (v *Value) Exception() error {
-	cause := v.String()
-
-	stack := v.GetPropertyStr("stack")
-	defer stack.Free()
-
-	if stack.IsUndefined() {
-		return errors.New(cause)
-	}
-
-	stackStr := stack.String()
-
-	return errors.New(cause + "\n" + stackStr)
-}
-
 func (v *Value) IsNumber() bool {
-	return v.Call("QJS_IsNumber", v.Raw()).handle.Bool()
+	return v.jsCall("QJS_IsNumber", v.raw()).handle.Bool()
 }
 
 func (v *Value) IsNaN() bool {
@@ -419,23 +340,23 @@ func (v *Value) IsInfinity() bool {
 }
 
 func (v *Value) IsBigInt() bool {
-	return v.Call("QJS_IsBigInt", v.Raw()).handle.Bool()
+	return v.jsCall("QJS_IsBigInt", v.raw()).handle.Bool()
 }
 
 func (v *Value) IsDate() bool {
-	return v.Call("JS_IsDate", v.Raw()).handle.Bool()
+	return v.jsCall("JS_IsDate", v.raw()).handle.Bool()
 }
 
 func (v *Value) IsBool() bool {
-	return v.Call("QJS_IsBool", v.Raw()).handle.Bool()
+	return v.jsCall("QJS_IsBool", v.raw()).handle.Bool()
 }
 
 func (v *Value) IsNull() bool {
-	return v.Call("QJS_IsNull", v.Raw()).handle.Bool()
+	return v.jsCall("QJS_IsNull", v.raw()).handle.Bool()
 }
 
 func (v *Value) IsUndefined() bool {
-	return v.Call("QJS_IsUndefined", v.Raw()).handle.Bool()
+	return v.jsCall("QJS_IsUndefined", v.raw()).handle.Bool()
 }
 
 // func (v *Value) IsException() bool {
@@ -443,43 +364,39 @@ func (v *Value) IsUndefined() bool {
 // }
 
 func (v *Value) IsUninitialized() bool {
-	return v.Call("QJS_IsUninitialized", v.Raw()).handle.Bool()
+	return v.jsCall("QJS_IsUninitialized", v.raw()).handle.Bool()
 }
 
 func (v *Value) IsString() bool {
-	return v.Call("QJS_IsString", v.Raw()).handle.Bool()
+	return v.jsCall("QJS_IsString", v.raw()).handle.Bool()
 }
 
 func (v *Value) IsSymbol() bool {
-	return v.Call("QJS_IsSymbol", v.Raw()).handle.Bool()
-}
-
-func (v *Value) IsQJSProxyValue() bool {
-	return v.IsObject() && v.IsGlobalInstanceOf("QJS_PROXY_VALUE")
+	return v.jsCall("QJS_IsSymbol", v.raw()).handle.Bool()
 }
 
 func (v *Value) IsObject() bool {
-	return v.Call("QJS_IsObject", v.Raw()).handle.Bool()
+	return v.jsCall("QJS_IsObject", v.raw()).handle.Bool()
 }
 
 func (v *Value) IsArray() bool {
-	return v.Call("QJS_IsArray", v.Raw()).handle.Bool()
+	return v.jsCall("QJS_IsArray", v.raw()).handle.Bool()
 }
 
 func (v *Value) IsError() bool {
-	return v.Call("QJS_IsError", v.Ctx(), v.Raw()).handle.Bool()
+	return v.jsCall("QJS_IsError", v.ctxPtr(), v.raw()).handle.Bool()
 }
 
 func (v *Value) IsFunction() bool {
-	return v.Call("QJS_IsFunction", v.Ctx(), v.Raw()).handle.Bool()
+	return v.jsCall("QJS_IsFunction", v.ctxPtr(), v.raw()).handle.Bool()
 }
 
 func (v *Value) IsConstructor() bool {
-	return v.Call("QJS_IsConstructor", v.Ctx(), v.Raw()).handle.Bool()
+	return v.jsCall("QJS_IsConstructor", v.ctxPtr(), v.raw()).handle.Bool()
 }
 
 func (v *Value) IsPromise() bool {
-	return v.Call("QJS_IsPromise", v.Ctx(), v.Raw()).handle.Bool()
+	return v.jsCall("QJS_IsPromise", v.ctxPtr(), v.raw()).handle.Bool()
 }
 
 // Resolve resolves a promise with the given arguments.
@@ -521,44 +438,25 @@ func (v *Value) Await() (*Value, error) {
 		return nil, newInvalidJsInputErr("Promise", v)
 	}
 
-	result := v.Call("js_std_await", v.Ctx(), v.Raw())
+	result := v.jsCall("js_std_await", v.ctxPtr(), v.raw())
 
-	return normalizeJsValue(v.context, result)
+	return normalizeJsValue(v.runtime, result)
 }
 
 func (v *Value) IsMap() bool {
-	return v.IsObject() && v.IsGlobalInstanceOf("Map") ||
+	return v.IsObject() && v.isGlobalInstanceOf("Map") ||
 		v.String() == "[object Map]"
 }
 
 func (v *Value) IsSet() bool {
-	return v.IsObject() && v.IsGlobalInstanceOf("Set") ||
+	return v.IsObject() && v.isGlobalInstanceOf("Set") ||
 		v.String() == "[object Set]"
-}
-
-// IsGlobalInstanceOf checks if the value is an instance of the given global constructor.
-func (v *Value) IsGlobalInstanceOf(name string) bool {
-	ctor := v.context.Global().GetPropertyStr(name)
-	defer ctor.Free()
-
-	if ctor.IsUndefined() {
-		return false
-	}
-
-	instanceOf := v.Call("QJS_IsInstanceOf", v.Ctx(), v.Raw(), ctor.Raw())
-
-	return instanceOf.handle.Bool()
 }
 
 // IsByteArray return true if the value is array buffer.
 func (v *Value) IsByteArray() bool {
-	return v.IsObject() && v.IsGlobalInstanceOf("ArrayBuffer") ||
+	return v.IsObject() && v.isGlobalInstanceOf("ArrayBuffer") ||
 		v.String() == "[object ArrayBuffer]"
-}
-
-// Object returns the object value of the value.
-func (v *Value) Object() *Value {
-	return v.Call("JS_ToObject", v.Ctx(), v.Raw())
 }
 
 // ForEach iterates over the properties of the object and calls the given function for each property.
@@ -567,7 +465,7 @@ func (v *Value) ForEach(fn func(key *Value, value *Value)) {
 		return
 	}
 
-	props := v.GetOwnProperties()
+	props := v.getOwnProperties()
 	for _, prop := range props {
 		key := prop.atom
 
@@ -588,12 +486,8 @@ func (v *Value) ForEach(fn func(key *Value, value *Value)) {
 	}
 }
 
-func (v *Value) Bytes() []byte {
-	return v.handle.Bytes()
-}
-
 func (v *Value) String() string {
-	result := v.Call("QJS_ToCString", v.Ctx(), v.Raw())
+	result := v.jsCall("QJS_ToCString", v.ctxPtr(), v.raw())
 	defer result.handle.Free()
 
 	return result.handle.String()
@@ -602,13 +496,13 @@ func (v *Value) String() string {
 // JSONStringify returns the JSON string representation of the value.
 func (v *Value) JSONStringify() (_ string, err error) {
 	defer func() {
-		r := AnyToError(recover())
+		r := anyToError(recover())
 		if r != nil {
 			err = fmt.Errorf("failed to stringify JS value: %w", r)
 		}
 	}()
 
-	result := v.Call("QJS_JSONStringify", v.Ctx(), v.Raw())
+	result := v.jsCall("QJS_JSONStringify", v.ctxPtr(), v.raw())
 	defer result.handle.Free()
 
 	return result.handle.String(), nil
@@ -618,7 +512,7 @@ func (v *Value) JSONStringify() (_ string, err error) {
 func (v *Value) DateTime(tzs ...string) *time.Time {
 	var loc *time.Location
 	if len(tzs) > 0 && tzs[0] != "" {
-		loc = ParseTimezone(tzs[0])
+		loc = parseTimezone(tzs[0])
 	} else {
 		loc = time.Local
 	}
@@ -627,7 +521,7 @@ func (v *Value) DateTime(tzs ...string) *time.Time {
 		return nil
 	}
 
-	epochValue := v.Call("QJS_ToEpochTime", v.Ctx(), v.Raw())
+	epochValue := v.jsCall("QJS_ToEpochTime", v.ctxPtr(), v.raw())
 	defer epochValue.Free()
 
 	epoch := epochValue.handle.Float64()
@@ -646,27 +540,27 @@ func (v *Value) DateTime(tzs ...string) *time.Time {
 
 // Bool returns the boolean value of the value.
 func (v *Value) Bool() bool {
-	return v.Call("JS_ToBool", v.Ctx(), v.Raw()).handle.Bool()
+	return v.jsCall("JS_ToBool", v.ctxPtr(), v.raw()).handle.Bool()
 }
 
 // Int32 returns the int32 value of the value.
 // in c int is 32 bit, but in go it is depends on the architecture.
 func (v *Value) Int32() int32 {
-	return v.Call("QJS_ToInt32", v.Ctx(), v.Raw()).handle.Int32()
+	return v.jsCall("QJS_ToInt32", v.ctxPtr(), v.raw()).handle.Int32()
 }
 
 func (v *Value) Int64() int64 {
-	return v.Call("QJS_ToInt64", v.Ctx(), v.Raw()).handle.Int64()
+	return v.jsCall("QJS_ToInt64", v.ctxPtr(), v.raw()).handle.Int64()
 }
 
 // Uint32 returns the uint32 value of the value.
 func (v *Value) Uint32() uint32 {
-	return v.Call("QJS_ToUint32", v.Ctx(), v.Raw()).handle.Uint32()
+	return v.jsCall("QJS_ToUint32", v.ctxPtr(), v.raw()).handle.Uint32()
 }
 
 // Float64 returns the float64 value of the value.
 func (v *Value) Float64() float64 {
-	return v.Call("QJS_ToFloat64", v.Ctx(), v.Raw()).handle.Float64()
+	return v.jsCall("QJS_ToFloat64", v.ctxPtr(), v.raw()).handle.Float64()
 }
 
 // BigInt returns the big.Int value of the value.
@@ -686,7 +580,7 @@ func (v *Value) ToArray() (*Array, error) {
 		return nil, fmt.Errorf("expected JS array, got %s=%s", v.Type(), v.String())
 	}
 
-	return NewArray(v), nil
+	return wrapArray(v), nil
 }
 
 // ToMap returns the map value of the value. DO NOT FREE.
@@ -695,7 +589,7 @@ func (v *Value) ToMap() *Map {
 		return nil
 	}
 
-	return NewMap(v)
+	return wrapMap(v)
 }
 
 // ToSet returns the set value of the value. DO NOT FREE.
@@ -704,7 +598,7 @@ func (v *Value) ToSet() *Set {
 		return nil
 	}
 
-	return NewSet(v)
+	return wrapSet(v)
 }
 
 // New creates a new instance of the value as a constructor with the given arguments.
@@ -715,13 +609,119 @@ func (v *Value) New(args ...*Value) *Value {
 // CallConstructor calls the constructor with the given arguments.
 func (v *Value) CallConstructor(args ...*Value) *Value {
 	if !v.IsConstructor() {
-		return v.context.NewError(ErrObjectNotAConstructor)
+		return v.runtime.NewError(ErrObjectNotAConstructor)
 	}
 
-	argc, argvPtr := createJsCallArgs(v.context, args...)
-	defer v.context.FreeHandle(argvPtr)
+	argc, argvPtr := createJsCallArgs(v.runtime, args...)
+	defer v.runtime.freeHandle(argvPtr)
 
-	jsCallArgs := []uint64{v.Ctx(), v.Raw(), argc, argvPtr}
+	jsCallArgs := []uint64{v.ctxPtr(), v.raw(), argc, argvPtr}
 
-	return v.Call("JS_CallConstructor", jsCallArgs...)
+	return v.jsCall("JS_CallConstructor", jsCallArgs...)
+}
+
+func (v *Value) rawHandle() *rawHandle {
+	return v.handle
+}
+
+func (v *Value) raw() uint64 {
+	if v == nil || v.handle == nil {
+		return 0
+	}
+
+	return v.handle.raw
+}
+
+func (v *Value) ctxPtr() uint64 {
+	return v.runtime.ctxPtr()
+}
+
+func (v *Value) jsCall(name string, args ...uint64) *Value {
+	return v.runtime.jsCall(name, args...)
+}
+
+func (v *Value) newUndefined() *Value {
+	return v.runtime.NewUndefined()
+}
+
+func (v *Value) getOwnProperties() []ownProperty {
+	ptr, entriesCount := v.runtime.callUnpack(
+		"QJS_GetOwnPropertyNames",
+		v.ctxPtr(),
+		v.raw(),
+	)
+	if entriesCount == 0 {
+		return []ownProperty{}
+	}
+
+	// Block size: number of entries * sizeof(JSPropertyEnum)
+	blockSize := entriesCount * jsPropertyEnumSize
+	bytes := v.runtime.memRead(ptr, uint64(blockSize))
+
+	// SAFETY: This converts C memory layout to Go structs.
+	// The memory comes from QJS C code and matches JSPropertyEnum layout.
+	// This is safe because:
+	// 1. Memory size is validated (size * jsPropertyEnumSize)
+	// 2. JSPropertyEnum layout matches C struct layout
+	// 3. Memory lifetime is managed by context.FreeHandle()
+	entries := unsafe.Slice((*jsPropertyEnum)(unsafe.Pointer(&bytes[0])), entriesCount)
+
+	property := make([]ownProperty, len(entries))
+
+	for i, entry := range entries {
+		property[i].isEnumerable = entry.isEnumerable
+		property[i].atom = jsAtom{
+			runtime: v.runtime,
+			Value: v.runtime.newValue(newRawHandle(
+				v.runtime,
+				uint64(entry.atom),
+			)),
+		}
+	}
+
+	v.runtime.freeHandle(uint64(ptr))
+
+	return property
+}
+
+func (v *Value) exception() error {
+	cause := v.String()
+
+	stack := v.GetPropertyStr("stack")
+	defer stack.Free()
+
+	if stack.IsUndefined() {
+		return errors.New(cause)
+	}
+
+	stackStr := stack.String()
+
+	return errors.New(cause + "\n" + stackStr)
+}
+
+func (v *Value) isProxyValue() bool {
+	return v.IsObject() && v.isGlobalInstanceOf("QJS_PROXY_VALUE")
+}
+
+// isGlobalInstanceOf checks if the value is an instance of the given global constructor.
+func (v *Value) isGlobalInstanceOf(name string) bool {
+	ctor := v.runtime.Global().GetPropertyStr(name)
+	defer ctor.Free()
+
+	if ctor.IsUndefined() {
+		return false
+	}
+
+	instanceOf := v.jsCall("QJS_IsInstanceOf", v.ctxPtr(), v.raw(), ctor.raw())
+
+	return instanceOf.handle.Bool()
+}
+
+// toObject returns the object value of the value.
+func (v *Value) toObject() *Value {
+	return v.jsCall("JS_ToObject", v.ctxPtr(), v.raw())
+}
+
+func (v *Value) takeBytes() []byte {
+	return v.handle.Bytes()
 }

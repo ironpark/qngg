@@ -138,7 +138,7 @@ func writeModuleCache(module *wasmtime.Module, cacheFile string) error {
 
 // instantiate creates the store, links WASI and the JS function proxy, and
 // instantiates the QuickJS module.
-func (r *Runtime) instantiate(engine *wasmtime.Engine, module *wasmtime.Module, proxy JsFunctionProxy) error {
+func (r *Runtime) instantiate(engine *wasmtime.Engine, module *wasmtime.Module, proxy jsFunctionProxy) error {
 	r.store = wasmtime.NewStore(engine)
 
 	if r.option.CloseOnContextDone || r.option.MaxExecutionTime > 0 {
@@ -183,13 +183,6 @@ func (r *Runtime) instantiate(engine *wasmtime.Engine, module *wasmtime.Module, 
 
 	if r.instance, err = r.linker.Instantiate(r.store, module); err != nil {
 		return fmt.Errorf("failed to instantiate module: %w", err)
-	}
-
-	// A missing start function is not an error, matching wazero's behavior.
-	if name := r.option.StartFunctionName; name != "" && r.instance.GetFunc(r.store, name) != nil {
-		if _, err := r.invoke(r.export(name)); err != nil {
-			return fmt.Errorf("failed to instantiate module: start function %s: %w", name, err)
-		}
 	}
 
 	return nil
@@ -294,7 +287,7 @@ func (r *Runtime) newWasiConfig() (wasi *wasmtime.WasiConfig, err error) {
 // functions:
 //
 //	extern JSValue jsFunctionProxy(JSContext *ctx, JSValueConst this, int argc, JSValueConst *argv);
-func (r *Runtime) defineProxy(proxy JsFunctionProxy) error {
+func (r *Runtime) defineProxy(proxy jsFunctionProxy) error {
 	i32 := wasmtime.NewValType(wasmtime.KindI32)
 	i64 := wasmtime.NewValType(wasmtime.KindI64)
 	ty := wasmtime.NewFuncType([]*wasmtime.ValType{i32, i64, i32, i32}, []*wasmtime.ValType{i64})
@@ -310,7 +303,7 @@ func (r *Runtime) defineProxy(proxy JsFunctionProxy) error {
 		}
 
 		rs := proxy(
-			rt.context,
+			rt.goCtx,
 			rt.mem,
 			uint32(vals[0].I32()),
 			uint64(vals[1].I64()),

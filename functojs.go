@@ -5,8 +5,8 @@ import (
 	"reflect"
 )
 
-// FuncToJS converts a Go function to a JavaScript function.
-func FuncToJS(c *Context, v any) (_ *Value, err error) {
+// funcToJS converts a Go function to a JavaScript function.
+func funcToJS(c *Runtime, v any) (_ *Value, err error) {
 	if v == nil {
 		return c.NewNull(), nil
 	}
@@ -38,12 +38,12 @@ func FuncToJS(c *Context, v any) (_ *Value, err error) {
 	}
 
 	fnType := rval.Type()
-	if err := VerifyGoFunc(fnType, v); err != nil {
+	if err := verifyGoFunc(fnType, v); err != nil {
 		return nil, err
 	}
 
 	return c.Function(func(this *This) (*Value, error) {
-		goArgs, err := JsFuncArgsToGo(this.Args(), fnType)
+		goArgs, err := jsFuncArgsToGo(this.Args(), fnType)
 		if err != nil {
 			return nil, err
 		}
@@ -55,13 +55,13 @@ func FuncToJS(c *Context, v any) (_ *Value, err error) {
 			results = rval.Call(goArgs)
 		}
 
-		return GoFuncResultToJs(c, results)
+		return goFuncResultToJs(c, results)
 	}), nil
 }
 
-// JsFuncArgsToGo converts JS arguments to Go arguments in both variadic and non-variadic functions,
+// jsFuncArgsToGo converts JS arguments to Go arguments in both variadic and non-variadic functions,
 // filling missing arguments with zero values.
-func JsFuncArgsToGo(jsArgs []*Value, fnType reflect.Type) ([]reflect.Value, error) {
+func jsFuncArgsToGo(jsArgs []*Value, fnType reflect.Type) ([]reflect.Value, error) {
 	numGoArgs := fnType.NumIn()
 	goArgs := make([]reflect.Value, 0, numGoArgs)
 	numJSArgs := len(jsArgs)
@@ -69,7 +69,7 @@ func JsFuncArgsToGo(jsArgs []*Value, fnType reflect.Type) ([]reflect.Value, erro
 	if fnType.IsVariadic() {
 		fixedArgs := min(numGoArgs-1, numJSArgs)
 		for i := range fixedArgs {
-			goVal, err := JsArgToGo(jsArgs[i], fnType.In(i))
+			goVal, err := jsArgToGo(jsArgs[i], fnType.In(i))
 			if err != nil {
 				return nil, newArgConversionErr(i, err)
 			}
@@ -78,7 +78,7 @@ func JsFuncArgsToGo(jsArgs []*Value, fnType reflect.Type) ([]reflect.Value, erro
 		}
 
 		// Handle variadic slice
-		variadicSlice, err := CreateVariadicSlice(jsArgs[fixedArgs:], fnType.In(numGoArgs-1), fixedArgs)
+		variadicSlice, err := createVariadicSlice(jsArgs[fixedArgs:], fnType.In(numGoArgs-1), fixedArgs)
 		if err != nil {
 			return nil, err
 		}
@@ -89,7 +89,7 @@ func JsFuncArgsToGo(jsArgs []*Value, fnType reflect.Type) ([]reflect.Value, erro
 	// Limit JS args to Go args count to avoid index out of bounds
 	argsToProcess := min(numJSArgs, numGoArgs)
 	for i := range argsToProcess {
-		goVal, err := JsArgToGo(jsArgs[i], fnType.In(i))
+		goVal, err := jsArgToGo(jsArgs[i], fnType.In(i))
 		if err != nil {
 			return nil, newArgConversionErr(i, err)
 		}
@@ -125,8 +125,8 @@ func handlePointerArgument(jsArg *Value, argType reflect.Type) (reflect.Value, e
 	return ptrVal, nil
 }
 
-// CreateNonNilSample creates appropriate non-nil samples for types that have nil zero values.
-func CreateNonNilSample(argType reflect.Type) any {
+// createNonNilSample creates appropriate non-nil samples for types that have nil zero values.
+func createNonNilSample(argType reflect.Type) any {
 	switch argType.Kind() {
 	case reflect.Interface:
 		// return nil to let the conversion
@@ -176,13 +176,13 @@ func createDummyFunction(funcType reflect.Type) any {
 	return fn.Interface()
 }
 
-// JsArgToGo converts a single JS argument to a Go value with enhanced type handling.
-func JsArgToGo(jsArg *Value, argType reflect.Type) (reflect.Value, error) {
+// jsArgToGo converts a single JS argument to a Go value with enhanced type handling.
+func jsArgToGo(jsArg *Value, argType reflect.Type) (reflect.Value, error) {
 	if argType.Kind() == reflect.Pointer {
 		return handlePointerArgument(jsArg, argType)
 	}
 
-	goZeroVal := CreateNonNilSample(argType)
+	goZeroVal := createNonNilSample(argType)
 
 	goVal, err := ToGoValue(jsArg, goZeroVal)
 	if err != nil {
@@ -192,15 +192,15 @@ func JsArgToGo(jsArg *Value, argType reflect.Type) (reflect.Value, error) {
 	return reflect.ValueOf(goVal), nil
 }
 
-// CreateVariadicSlice creates a reflect.Value slice for variadic arguments.
+// createVariadicSlice creates a reflect.Value slice for variadic arguments.
 // Converts remaining JS arguments to the slice element type and returns as a slice value.
-func CreateVariadicSlice(jsArgs []*Value, sliceType reflect.Type, fixedArgsCount int) (reflect.Value, error) {
+func createVariadicSlice(jsArgs []*Value, sliceType reflect.Type, fixedArgsCount int) (reflect.Value, error) {
 	varArgType := sliceType.Elem()
 	numVarArgs := len(jsArgs)
 	variadicSlice := reflect.MakeSlice(sliceType, numVarArgs, numVarArgs)
 
 	for i, jsArg := range jsArgs {
-		goVal, err := JsArgToGo(jsArg, varArgType)
+		goVal, err := jsArgToGo(jsArg, varArgType)
 		if err != nil {
 			return reflect.Value{}, newArgConversionErr(fixedArgsCount+i, err)
 		}
@@ -211,10 +211,10 @@ func CreateVariadicSlice(jsArgs []*Value, sliceType reflect.Type, fixedArgsCount
 	return variadicSlice, nil
 }
 
-// GoFuncResultToJs processes Go function call results and converts them to JS values.
+// goFuncResultToJs processes Go function call results and converts them to JS values.
 // If last return value is a non-nil error, it's thrown in JS context.
 // The remaining return values are converted to JS value or JS array if there are multiple.
-func GoFuncResultToJs(c *Context, results []reflect.Value) (*Value, error) {
+func goFuncResultToJs(c *Runtime, results []reflect.Value) (*Value, error) {
 	if len(results) == 0 {
 		return nil, nil
 	}
@@ -224,7 +224,7 @@ func GoFuncResultToJs(c *Context, results []reflect.Value) (*Value, error) {
 	lastResult := results[lastIdx]
 
 	// Last return is error
-	if IsImplementError(lastResult.Type()) {
+	if isImplementError(lastResult.Type()) {
 		// Last return is non-nil error -> throw in JS context
 		if !lastResult.IsNil() {
 			resultErr, _ := reflect.TypeAssert[error](lastResult)

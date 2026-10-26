@@ -1,4 +1,4 @@
-package qngg_test
+package qngg
 
 import (
 	"errors"
@@ -7,7 +7,6 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/ironpark/qngg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,28 +37,28 @@ func TestValueBasicOperations(t *testing.T) {
 		val := ctx.NewInt32(42)
 		defer val.Free()
 
-		assert.NotNil(t, val.Handle())
-		assert.NotEqual(t, uint64(0), val.Raw())
+		assert.NotNil(t, val.rawHandle())
+		assert.NotEqual(t, uint64(0), val.raw())
 	})
 
 	t.Run("Raw_nil_value", func(t *testing.T) {
-		var nilValue *qngg.Value = nil
-		result := nilValue.Raw()
+		var nilValue *Value = nil
+		result := nilValue.raw()
 		assert.Equal(t, uint64(0), result, "nil Value should return 0 from Raw()")
 	})
 
 	t.Run("Raw_after_free", func(t *testing.T) {
 		val := ctx.NewInt32(42)
-		assert.NotEqual(t, uint64(0), val.Raw())
+		assert.NotEqual(t, uint64(0), val.raw())
 		val.Free()
-		result := val.Raw()
+		result := val.raw()
 		assert.True(t, result == 0)
 	})
 
 	t.Run("Context", func(t *testing.T) {
 		val := ctx.NewInt32(42)
 		defer val.Free()
-		assert.Equal(t, ctx, val.Context())
+		assert.Equal(t, ctx, val.Runtime())
 	})
 }
 
@@ -128,7 +127,7 @@ func TestValueTypeChecks(t *testing.T) {
 	})
 
 	t.Run("IsArray", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", qngg.Code("[]")))
+		val := must(ctx.Eval("test.js", Code("[]")))
 		defer val.Free()
 		assert.True(t, val.IsArray())
 
@@ -140,7 +139,7 @@ func TestValueTypeChecks(t *testing.T) {
 	t.Run("IsFunction", func(t *testing.T) {
 		val := must(ctx.Eval(
 			"test.js",
-			qngg.Code(`
+			Code(`
 				function test() {};
 				test;
 			`),
@@ -154,7 +153,7 @@ func TestValueTypeChecks(t *testing.T) {
 	})
 
 	t.Run("IsConstructor", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", qngg.Code("Array")))
+		val := must(ctx.Eval("test.js", Code("Array")))
 		defer val.Free()
 		assert.True(t, val.IsConstructor())
 
@@ -166,7 +165,7 @@ func TestValueTypeChecks(t *testing.T) {
 	t.Run("IsPromise", func(t *testing.T) {
 		val := must(ctx.Eval(
 			"test.js",
-			qngg.Code(`({
+			Code(`({
 				data: new Promise((resolve, reject) => resolve())
 			})`),
 		))
@@ -180,7 +179,7 @@ func TestValueTypeChecks(t *testing.T) {
 	})
 
 	t.Run("IsError", func(t *testing.T) {
-		val, err := ctx.Eval("test.js", qngg.Code("new Error('test')"))
+		val, err := ctx.Eval("test.js", Code("new Error('test')"))
 		defer val.Free()
 		require.Error(t, err)
 
@@ -190,7 +189,7 @@ func TestValueTypeChecks(t *testing.T) {
 	})
 
 	t.Run("IsBigInt", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", qngg.Code("BigInt(42)")))
+		val := must(ctx.Eval("test.js", Code("BigInt(42)")))
 		defer val.Free()
 		assert.True(t, val.IsBigInt())
 
@@ -200,7 +199,7 @@ func TestValueTypeChecks(t *testing.T) {
 	})
 
 	t.Run("IsMap", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", qngg.Code("new Map()")))
+		val := must(ctx.Eval("test.js", Code("new Map()")))
 		defer val.Free()
 		assert.True(t, val.IsMap())
 
@@ -210,12 +209,12 @@ func TestValueTypeChecks(t *testing.T) {
 	})
 
 	t.Run("IsSet", func(t *testing.T) {
-		set := must(ctx.Eval("test.js", qngg.Code("new Set()")))
+		set := must(ctx.Eval("test.js", Code("new Set()")))
 		defer set.Free()
 		assert.True(t, set.IsSet())
 		assert.False(t, set.IsMap())
 
-		mapObj := must(ctx.Eval("test.js", qngg.Code("new Map()")))
+		mapObj := must(ctx.Eval("test.js", Code("new Map()")))
 		defer mapObj.Free()
 		assert.False(t, mapObj.IsSet())
 		assert.True(t, mapObj.IsMap())
@@ -226,7 +225,7 @@ func TestValueTypeChecks(t *testing.T) {
 	})
 
 	t.Run("IsByteArray", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", qngg.Code("new ArrayBuffer(10)")))
+		val := must(ctx.Eval("test.js", Code("new ArrayBuffer(10)")))
 		defer val.Free()
 		assert.True(t, val.IsByteArray())
 
@@ -236,7 +235,7 @@ func TestValueTypeChecks(t *testing.T) {
 	})
 
 	t.Run("IsNaN", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", qngg.Code("NaN")))
+		val := must(ctx.Eval("test.js", Code("NaN")))
 		defer val.Free()
 		assert.True(t, val.IsNaN())
 
@@ -246,7 +245,7 @@ func TestValueTypeChecks(t *testing.T) {
 	})
 
 	t.Run("IsInfinity", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", qngg.Code("Infinity")))
+		val := must(ctx.Eval("test.js", Code("Infinity")))
 		defer val.Free()
 		assert.True(t, val.IsInfinity())
 
@@ -256,14 +255,14 @@ func TestValueTypeChecks(t *testing.T) {
 	})
 
 	t.Run("IsGlobalInstanceOf", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", qngg.Code("new Date()")))
+		val := must(ctx.Eval("test.js", Code("new Date()")))
 		defer val.Free()
-		assert.True(t, val.IsGlobalInstanceOf("Date"))
-		assert.False(t, val.IsGlobalInstanceOf("Array"))
+		assert.True(t, val.isGlobalInstanceOf("Date"))
+		assert.False(t, val.isGlobalInstanceOf("Array"))
 
-		assert.False(t, val.IsGlobalInstanceOf("NonExistentConstructor"))
-		assert.False(t, val.IsGlobalInstanceOf("FakeConstructor"))
-		assert.False(t, val.IsGlobalInstanceOf(""))
+		assert.False(t, val.isGlobalInstanceOf("NonExistentConstructor"))
+		assert.False(t, val.isGlobalInstanceOf("FakeConstructor"))
+		assert.False(t, val.isGlobalInstanceOf(""))
 	})
 }
 
@@ -321,7 +320,7 @@ func TestValueConversions(t *testing.T) {
 	})
 
 	t.Run("BigInt", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", qngg.Code("BigInt('9007199254740991')")))
+		val := must(ctx.Eval("test.js", Code("BigInt('9007199254740991')")))
 		defer val.Free()
 		expected := new(big.Int)
 		expected.SetString("9007199254740991", 10)
@@ -333,7 +332,7 @@ func TestValueConversions(t *testing.T) {
 	})
 
 	t.Run("ToArray", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", qngg.Code("[1, 2, 3]")))
+		val := must(ctx.Eval("test.js", Code("[1, 2, 3]")))
 		defer val.Free()
 		arr := must(val.ToArray())
 		assert.NotNil(t, arr)
@@ -347,7 +346,7 @@ func TestValueConversions(t *testing.T) {
 	})
 
 	t.Run("ToMap", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", qngg.Code("new Map([['key', 'value']])")))
+		val := must(ctx.Eval("test.js", Code("new Map([['key', 'value']])")))
 		defer val.Free()
 		m := val.ToMap()
 		assert.NotNil(t, m)
@@ -358,7 +357,7 @@ func TestValueConversions(t *testing.T) {
 	})
 
 	t.Run("ToSet", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", qngg.Code("new Set([1, 2, 3])")))
+		val := must(ctx.Eval("test.js", Code("new Set([1, 2, 3])")))
 		defer val.Free()
 		assert.NotNil(t, val.ToSet())
 
@@ -369,9 +368,9 @@ func TestValueConversions(t *testing.T) {
 	})
 
 	t.Run("Object", func(t *testing.T) {
-		val := must(ctx.Eval("test.js", qngg.Code("({ prop: 'value' })")))
+		val := must(ctx.Eval("test.js", Code("({ prop: 'value' })")))
 		defer val.Free()
-		obj := val.Object()
+		obj := val.toObject()
 		defer obj.Free()
 		assert.True(t, obj.IsObject())
 
@@ -382,7 +381,7 @@ func TestValueConversions(t *testing.T) {
 
 	t.Run("DateTime", func(t *testing.T) {
 		// Normal date
-		val := must(ctx.Eval("test.js", qngg.Code("new Date('2023-01-01T00:00:00Z')")))
+		val := must(ctx.Eval("test.js", Code("new Date('2023-01-01T00:00:00Z')")))
 		defer val.Free()
 
 		dateTime := val.DateTime("UTC")
@@ -395,7 +394,7 @@ func TestValueConversions(t *testing.T) {
 		assert.Nil(t, num.DateTime())
 
 		// Unix epoch (1970-01-01 00:00:00 UTC)
-		epochVal := must(ctx.Eval("test.js", qngg.Code("new Date(0)")))
+		epochVal := must(ctx.Eval("test.js", Code("new Date(0)")))
 		defer epochVal.Free()
 		epochTime := epochVal.DateTime("UTC")
 		assert.NotNil(t, epochTime, "Unix epoch (1970-01-01) should not return nil")
@@ -405,7 +404,7 @@ func TestValueConversions(t *testing.T) {
 		assert.Equal(t, 1, epochTime.Day(), "Unix epoch should be day 1")
 
 		// Invalid Date object (NaN)
-		invalidDate := must(ctx.Eval("test.js", qngg.Code("new Date('invalid')")))
+		invalidDate := must(ctx.Eval("test.js", Code("new Date('invalid')")))
 		defer invalidDate.Free()
 		assert.Nil(t, invalidDate.DateTime(), "Invalid Date should return nil")
 
@@ -426,9 +425,9 @@ func TestValueConversions(t *testing.T) {
 }
 
 func TestValuePropertyOperations(t *testing.T) {
-	runtime := must(qngg.New())
+	runtime := must(New())
 	defer runtime.Close()
-	ctx := runtime.Context()
+	ctx := runtime
 
 	t.Run("GetSetPropertyStr", func(t *testing.T) {
 		obj := ctx.NewObject()
@@ -462,7 +461,7 @@ func TestValuePropertyOperations(t *testing.T) {
 	})
 
 	t.Run("GetSetPropertyIndex", func(t *testing.T) {
-		arr := must(ctx.Eval("test.js", qngg.Code("[]")))
+		arr := must(ctx.Eval("test.js", Code("[]")))
 		defer arr.Free()
 
 		val := ctx.NewString("value")
@@ -488,7 +487,7 @@ func TestValuePropertyOperations(t *testing.T) {
 	})
 
 	t.Run("HasPropertyIndex", func(t *testing.T) {
-		arr := must(ctx.Eval("test.js", qngg.Code("['value']")))
+		arr := must(ctx.Eval("test.js", Code("['value']")))
 		defer arr.Free()
 
 		assert.True(t, arr.HasPropertyIndex(0))
@@ -510,10 +509,10 @@ func TestValuePropertyOperations(t *testing.T) {
 	})
 
 	t.Run("GetOwnProperties", func(t *testing.T) {
-		obj := must(ctx.Eval("test.js", qngg.Code(`({a: 1, b: 2})`)))
+		obj := must(ctx.Eval("test.js", Code(`({a: 1, b: 2})`)))
 		defer obj.Free()
 
-		props := obj.GetOwnProperties()
+		props := obj.getOwnProperties()
 		assert.Len(t, props, 2)
 
 		// Check if properties include 'a' and 'b'
@@ -528,7 +527,7 @@ func TestValuePropertyOperations(t *testing.T) {
 	})
 
 	t.Run("GetOwnPropertyNames", func(t *testing.T) {
-		obj := must(ctx.Eval("test.js", qngg.Code(`({a: 1, b: 2})`)))
+		obj := must(ctx.Eval("test.js", Code(`({a: 1, b: 2})`)))
 		defer obj.Free()
 
 		names, err := obj.GetOwnPropertyNames()
@@ -548,16 +547,16 @@ func TestValuePropertyOperations(t *testing.T) {
 	t.Run("ForEach", func(t *testing.T) {
 		nonObject := ctx.NewInt32(42)
 		defer nonObject.Free()
-		nonObject.ForEach(func(key *qngg.Value, value *qngg.Value) {
+		nonObject.ForEach(func(key *Value, value *Value) {
 			t.Fail()
 		})
 
-		obj := must(ctx.Eval("test.js", qngg.Code(`({a: 1, b: 2})`)))
+		obj := must(ctx.Eval("test.js", Code(`({a: 1, b: 2})`)))
 		defer obj.Free()
 
 		props := make(map[string]string)
 
-		obj.ForEach(func(key *qngg.Value, value *qngg.Value) {
+		obj.ForEach(func(key *Value, value *Value) {
 			props[key.String()] = value.String()
 		})
 
@@ -572,7 +571,7 @@ func TestValueInvokeOperations(t *testing.T) {
 	defer rt.Close()
 
 	t.Run("Invoke", func(t *testing.T) {
-		obj := must(ctx.Eval("test.js", qngg.Code(`({
+		obj := must(ctx.Eval("test.js", Code(`({
 				add: function(a, b) { return a + b; }
 		})`)))
 		defer obj.Free()
@@ -585,7 +584,7 @@ func TestValueInvokeOperations(t *testing.T) {
 	})
 
 	t.Run("InvokeError", func(t *testing.T) {
-		obj := must(ctx.Eval("test.js", qngg.Code(`({
+		obj := must(ctx.Eval("test.js", Code(`({
 				add: function(a, b) { return a + b; }
 		})`)))
 		defer obj.Free()
@@ -598,7 +597,7 @@ func TestValueInvokeOperations(t *testing.T) {
 	})
 
 	t.Run("InvokeJS", func(t *testing.T) {
-		obj := must(ctx.Eval("test.js", qngg.Code(`({
+		obj := must(ctx.Eval("test.js", Code(`({
 				add: function(a, b) { return a + b; }
 		})`)))
 		defer obj.Free()
@@ -633,7 +632,7 @@ func TestValueInvokeOperations(t *testing.T) {
 	})
 
 	t.Run("New", func(t *testing.T) {
-		arrayConstructor := must(ctx.Eval("test.js", qngg.Code("Array")))
+		arrayConstructor := must(ctx.Eval("test.js", Code("Array")))
 		defer arrayConstructor.Free()
 
 		length := ctx.NewInt32(3)
@@ -647,13 +646,13 @@ func TestValueInvokeOperations(t *testing.T) {
 	})
 
 	t.Run("CallConstructor", func(t *testing.T) {
-		dateConstructor := must(ctx.Eval("test.js", qngg.Code("Date")))
+		dateConstructor := must(ctx.Eval("test.js", Code("Date")))
 		defer dateConstructor.Free()
 
 		newDate := dateConstructor.CallConstructor()
 		defer newDate.Free()
 
-		assert.True(t, newDate.IsGlobalInstanceOf("Date"))
+		assert.True(t, newDate.isGlobalInstanceOf("Date"))
 	})
 
 	t.Run("ConstructorError", func(t *testing.T) {
@@ -672,7 +671,7 @@ func TestValueArrayBufferOperations(t *testing.T) {
 	defer rt.Close()
 
 	t.Run("ByteLen", func(t *testing.T) {
-		buffer := must(ctx.Eval("test.js", qngg.Code("new ArrayBuffer(10)")))
+		buffer := must(ctx.Eval("test.js", Code("new ArrayBuffer(10)")))
 		defer buffer.Free()
 
 		assert.Equal(t, int64(10), buffer.ByteLen())
@@ -689,7 +688,7 @@ func TestValueArrayBufferOperations(t *testing.T) {
 			buffer;
 		`
 
-		buffer := must(ctx.Eval("test.js", qngg.Code(code)))
+		buffer := must(ctx.Eval("test.js", Code(code)))
 		defer buffer.Free()
 
 		bytes := buffer.ToByteArray()
@@ -697,7 +696,7 @@ func TestValueArrayBufferOperations(t *testing.T) {
 	})
 
 	t.Run("Len", func(t *testing.T) {
-		arr := must(ctx.Eval("test.js", qngg.Code("[1, 2, 3, 4, 5]")))
+		arr := must(ctx.Eval("test.js", Code("[1, 2, 3, 4, 5]")))
 		defer arr.Free()
 
 		assert.Equal(t, int64(5), arr.Len())
@@ -711,7 +710,7 @@ func TestValueType(t *testing.T) {
 	testCases := []struct {
 		name         string
 		code         string
-		value        *qngg.Value
+		value        *Value
 		expectedType string
 		allowedTypes []string
 	}{
@@ -732,7 +731,7 @@ func TestValueType(t *testing.T) {
 		{"Function", "(() => 42)", nil, "Function", []string{"Constructor"}},
 		{"ArrayBuffer", "new ArrayBuffer(8)", nil, "ArrayBuffer", nil},
 
-		{"IsUninitialized", "", ctx.NewUninitialized(), "Uninitialized", nil},
+		{"IsUninitialized", "", ctx.newUninitialized(), "Uninitialized", nil},
 		{"Error", "", ctx.NewError(errors.New("some error")), "Error", nil},
 		{"ProxyValue", "", ctx.NewProxyValue(42), "QJSProxyValue", nil},
 
@@ -741,11 +740,11 @@ func TestValueType(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			var val *qngg.Value
+			var val *Value
 			if tc.value != nil {
 				val = tc.value
 			} else {
-				val = must(ctx.Eval("test.js", qngg.Code(tc.code)))
+				val = must(ctx.Eval("test.js", Code(tc.code)))
 			}
 
 			defer val.Free()
@@ -761,7 +760,7 @@ func TestValueType(t *testing.T) {
 	}
 
 	t.Run("PromiseType", func(t *testing.T) {
-		result := must(ctx.Eval("test.js", qngg.Code(`({
+		result := must(ctx.Eval("test.js", Code(`({
 			promise: new Promise((resolve) => resolve(42))
 		})`)))
 		defer result.Free()
@@ -786,7 +785,7 @@ func TestValuePromiseOperations(t *testing.T) {
 	})
 
 	t.Run("ResolveOnRegularPromise", func(t *testing.T) {
-		result := must(ctx.Eval("test.js", qngg.Code(`({
+		result := must(ctx.Eval("test.js", Code(`({
 			promise: new Promise((resolve) => resolve(42))
 		})`)))
 		defer result.Free()
@@ -799,7 +798,7 @@ func TestValuePromiseOperations(t *testing.T) {
 	})
 
 	t.Run("RejectOnRegularPromise", func(t *testing.T) {
-		result := must(ctx.Eval("test.js", qngg.Code(`({
+		result := must(ctx.Eval("test.js", Code(`({
 			promise: new Promise((resolve, reject) => reject(new Error("promise rejected")))
 		})`)))
 		defer result.Free()
@@ -814,13 +813,13 @@ func TestValuePromiseOperations(t *testing.T) {
 	t.Run("AsyncGoFunctionResolveRejectError", func(t *testing.T) {
 		rt, ctx := setupTestContext(t)
 		defer rt.Close()
-		ctx.SetAsyncFunc("testAsyncFunc", func(this *qngg.This) {
-			val := this.Context().NewString("async result")
+		ctx.SetAsyncFunc("testAsyncFunc", func(this *This) {
+			val := this.Runtime().NewString("async result")
 			this.Promise().Resolve(val)
 		})
 
 		// Call the async function and verify behavior
-		result := must(ctx.Eval("test.js", qngg.Code(`({
+		result := must(ctx.Eval("test.js", Code(`({
 			promise: testAsyncFunc()
 		})`)))
 		defer result.Free()
@@ -839,14 +838,14 @@ func TestValueStringConversionsDoNotLeak(t *testing.T) {
 	rt, ctx := setupTestContext(t)
 	defer rt.Close()
 
-	str := must(ctx.Eval("test.js", qngg.Code(`"x".repeat(4096)`)))
+	str := must(ctx.Eval("test.js", Code(`"x".repeat(4096)`)))
 	defer str.Free()
-	obj := must(ctx.Eval("test.js", qngg.Code(`({ a: "x".repeat(4096) })`)))
+	obj := must(ctx.Eval("test.js", Code(`({ a: "x".repeat(4096) })`)))
 	defer obj.Free()
-	buf := must(ctx.Eval("test.js", qngg.Code(`new ArrayBuffer(4096)`)))
+	buf := must(ctx.Eval("test.js", Code(`new ArrayBuffer(4096)`)))
 	defer buf.Free()
 
-	before := rt.Mem().Size()
+	before := rt.memory().Size()
 	for range 2000 {
 		_ = str.String()
 		_, _ = obj.JSONStringify()
@@ -855,5 +854,5 @@ func TestValueStringConversionsDoNotLeak(t *testing.T) {
 
 	// Each iteration copies ~12KiB out of wasm; leaking it would grow memory
 	// by about 24MiB.
-	assert.Less(t, rt.Mem().Size()-before, uint32(1<<20))
+	assert.Less(t, rt.memory().Size()-before, uint32(1<<20))
 }

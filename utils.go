@@ -8,13 +8,13 @@ import (
 	"strings"
 )
 
-func IsImplementError(rtype reflect.Type) bool {
+func isImplementError(rtype reflect.Type) bool {
 	return rtype.Implements(reflect.TypeFor[error]())
 }
 
-// IsImplementsJSONUnmarshaler checks if a type implements json.Unmarshaler
+// implementsJSONUnmarshaler checks if a type implements json.Unmarshaler
 // or json.UnmarshalerFrom.
-func IsImplementsJSONUnmarshaler(t reflect.Type) bool {
+func implementsJSONUnmarshaler(t reflect.Type) bool {
 	implements := func(t reflect.Type) bool {
 		return t.Implements(reflect.TypeFor[json.Unmarshaler]()) ||
 			t.Implements(reflect.TypeFor[json.UnmarshalerFrom]())
@@ -30,8 +30,8 @@ func unmarshalJSON(s string, out any) error {
 	return json.Unmarshal([]byte(s), out, jsontext.AllowInvalidUTF8(true)) //nolint:wrapcheck // wrapped by callers
 }
 
-// GetGoTypeName creates a descriptive string for complex types.
-func GetGoTypeName(input any) string {
+// goTypeName creates a descriptive string for complex types.
+func goTypeName(input any) string {
 	var t reflect.Type
 
 	switch v := input.(type) {
@@ -43,33 +43,33 @@ func GetGoTypeName(input any) string {
 
 	switch t.Kind() {
 	case reflect.Pointer:
-		return "*" + GetGoTypeName(t.Elem())
+		return "*" + goTypeName(t.Elem())
 	case reflect.Slice:
-		return "[]" + GetGoTypeName(t.Elem())
+		return "[]" + goTypeName(t.Elem())
 	case reflect.Array:
-		return fmt.Sprintf("[%d]%s", t.Len(), GetGoTypeName(t.Elem()))
+		return fmt.Sprintf("[%d]%s", t.Len(), goTypeName(t.Elem()))
 	case reflect.Map:
-		return fmt.Sprintf("map[%s]%s", GetGoTypeName(t.Key()), GetGoTypeName(t.Elem()))
+		return fmt.Sprintf("map[%s]%s", goTypeName(t.Key()), goTypeName(t.Elem()))
 	case reflect.Chan:
-		return "chan " + GetGoTypeName(t.Elem())
+		return "chan " + goTypeName(t.Elem())
 	case reflect.Func:
-		return CreateGoFuncSignature(t)
+		return goFuncSignature(t)
 	default:
 		return t.String()
 	}
 }
 
-// CreateGoFuncSignature creates a readable string for function types.
-func CreateGoFuncSignature(fnType reflect.Type) string {
+// goFuncSignature creates a readable string for function types.
+func goFuncSignature(fnType reflect.Type) string {
 	parts := []string{"func("}
 	params := []string{}
 
 	for i := range fnType.NumIn() {
 		paramType := fnType.In(i)
 		if fnType.IsVariadic() && i == fnType.NumIn()-1 {
-			params = append(params, "..."+GetGoTypeName(paramType.Elem()))
+			params = append(params, "..."+goTypeName(paramType.Elem()))
 		} else {
-			params = append(params, GetGoTypeName(paramType))
+			params = append(params, goTypeName(paramType))
 		}
 	}
 
@@ -84,7 +84,7 @@ func CreateGoFuncSignature(fnType reflect.Type) string {
 
 		returns := []string{}
 		for out := range fnType.Outs() {
-			returns = append(returns, GetGoTypeName(out))
+			returns = append(returns, goTypeName(out))
 		}
 
 		parts = append(parts, strings.Join(returns, ", "))
@@ -96,8 +96,8 @@ func CreateGoFuncSignature(fnType reflect.Type) string {
 	return strings.Join(parts, "")
 }
 
-// IsConvertibleToJs checks if a Go type can be converted to a JavaScript type.
-func IsConvertibleToJs(rType reflect.Type, visited map[reflect.Type]bool, detail string) (err error) {
+// isConvertibleToJs checks if a Go type can be converted to a JavaScript type.
+func isConvertibleToJs(rType reflect.Type, visited map[reflect.Type]bool, detail string) (err error) {
 	// Prevent infinite recursion for recursive types
 	if visited[rType] {
 		return nil
@@ -105,7 +105,7 @@ func IsConvertibleToJs(rType reflect.Type, visited map[reflect.Type]bool, detail
 
 	visited[rType] = true
 	if rType.Kind() == reflect.Pointer {
-		return IsConvertibleToJs(rType.Elem(), visited, detail)
+		return isConvertibleToJs(rType.Elem(), visited, detail)
 	}
 
 	switch rType.Kind() {
@@ -116,30 +116,30 @@ func IsConvertibleToJs(rType reflect.Type, visited map[reflect.Type]bool, detail
 	case reflect.Func:
 		return nil
 	case reflect.Slice:
-		err := IsConvertibleToJs(rType.Elem(), visited, detail)
+		err := isConvertibleToJs(rType.Elem(), visited, detail)
 		if err != nil {
-			return newGoToJsErr("slice: "+GetGoTypeName(rType.Elem()), nil, detail)
+			return newGoToJsErr("slice: "+goTypeName(rType.Elem()), nil, detail)
 		}
 
 		return nil
 	case reflect.Array:
-		err := IsConvertibleToJs(rType.Elem(), visited, detail)
+		err := isConvertibleToJs(rType.Elem(), visited, detail)
 		if err != nil {
-			return newGoToJsErr("array: "+GetGoTypeName(rType.Elem()), nil, detail)
+			return newGoToJsErr("array: "+goTypeName(rType.Elem()), nil, detail)
 		}
 
 		return nil
 	case reflect.Map:
 		keyType := rType.Key()
 
-		err := IsConvertibleToJs(keyType, visited, detail)
+		err := isConvertibleToJs(keyType, visited, detail)
 		if err != nil {
-			return newGoToJsErr("map key: "+GetGoTypeName(keyType), nil, detail)
+			return newGoToJsErr("map key: "+goTypeName(keyType), nil, detail)
 		}
 
 		valueType := rType.Elem()
-		if err := IsConvertibleToJs(valueType, visited, detail); err != nil {
-			return newGoToJsErr("map value: "+GetGoTypeName(valueType), nil, detail)
+		if err := isConvertibleToJs(valueType, visited, detail); err != nil {
+			return newGoToJsErr("map value: "+goTypeName(valueType), nil, detail)
 		}
 
 		return nil
@@ -151,8 +151,8 @@ func IsConvertibleToJs(rType reflect.Type, visited map[reflect.Type]bool, detail
 				continue
 			}
 
-			if err := IsConvertibleToJs(field.Type, visited, detail); err != nil {
-				return newGoToJsErr(GetGoTypeName(rType)+"."+field.Name, err)
+			if err := isConvertibleToJs(field.Type, visited, detail); err != nil {
+				return newGoToJsErr(goTypeName(rType)+"."+field.Name, err)
 			}
 		}
 
@@ -164,8 +164,8 @@ func IsConvertibleToJs(rType reflect.Type, visited map[reflect.Type]bool, detail
 	return nil
 }
 
-// IsNumericType checks if a reflect.Type represents a numeric type.
-func IsNumericType(t reflect.Type) bool {
+// isNumericType checks if a reflect.Type represents a numeric type.
+func isNumericType(t reflect.Type) bool {
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}

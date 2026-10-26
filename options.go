@@ -7,26 +7,18 @@ import (
 )
 
 const (
-	// JsEvalTypeGlobal evaluates code in global scope (default).
-	JsEvalTypeGlobal = (0 << 0)
-	// JsEvalTypeModule evaluates code as ES6 module.
-	JsEvalTypeModule = (1 << 0)
-	// JsEvalTypeDirect performs direct call (internal use).
-	JsEvalTypeDirect = (2 << 0)
-	// JsEvalTypeInDirect performs indirect call (internal use).
-	JsEvalTypeInDirect = (3 << 0)
-	// JsEvalTypeMask masks the eval type bits.
-	JsEvalTypeMask = (3 << 0)
-	// JsEvalFlagStrict forces strict mode execution.
-	JsEvalFlagStrict = (1 << 3)
-	// JsEvalFlagUnUsed is reserved for future use.
-	JsEvalFlagUnUsed = (1 << 4)
-	// JsEvalFlagCompileOnly returns a JS bytecode/module for JS_EvalFunction().
-	JsEvalFlagCompileOnly = (1 << 5)
-	// JsEvalFlagBackTraceBarrier prevents the stack frames before this eval in the Error() backtraces.
-	JsEvalFlagBackTraceBarrier = (1 << 6)
-	// JsEvalFlagAsync enables top-level await (global scope only).
-	JsEvalFlagAsync = (1 << 7)
+	// jsEvalTypeGlobal evaluates code in global scope (default).
+	jsEvalTypeGlobal = (0 << 0)
+	// jsEvalTypeModule evaluates code as ES6 module.
+	jsEvalTypeModule = (1 << 0)
+	// jsEvalFlagStrict forces strict mode execution.
+	jsEvalFlagStrict = (1 << 3)
+	// jsEvalFlagCompileOnly returns a JS bytecode/module for JS_EvalFunction().
+	jsEvalFlagCompileOnly = (1 << 5)
+	// jsEvalFlagBackTraceBarrier prevents the stack frames before this eval in the Error() backtraces.
+	jsEvalFlagBackTraceBarrier = (1 << 6)
+	// jsEvalFlagAsync enables top-level await (global scope only).
+	jsEvalFlagAsync = (1 << 7)
 )
 
 type Option struct {
@@ -36,9 +28,8 @@ type Option struct {
 	// is set.
 	CWD string
 	// WritableCWD lets JavaScript create, modify and delete files under CWD.
-	WritableCWD       bool
-	StartFunctionName string
-	Context           context.Context
+	WritableCWD bool
+	Context     context.Context
 	// CloseOnContextDone interrupts running JavaScript when Context is done.
 	// Like MaxExecutionTime, it compiles the module with interruption checks,
 	// which makes compute-heavy JavaScript about 30% slower.
@@ -53,17 +44,18 @@ type Option struct {
 	// no limit. See CloseOnContextDone for the cost of interruption checks.
 	MaxExecutionTime time.Duration
 	GCThreshold      int
-	QuickJSWasmBytes []byte
-	ProxyFunction    any
 	// Stdout and Stderr receive console.log/console.error and std.out/std.err
 	// output. Nil discards it.
 	Stdout io.Writer
 	Stderr io.Writer
+
+	// quickJSWasm replaces the embedded QuickJS build, for tests.
+	quickJSWasm []byte
 }
 
-// EvalOption configures JavaScript evaluation behavior in QuickJS context.
-type EvalOption struct {
-	c           *Context
+// evalConfig configures JavaScript evaluation behavior in QuickJS context.
+type evalConfig struct {
+	c           *Runtime
 	file        string
 	code        string
 	bytecode    []byte
@@ -76,15 +68,15 @@ type EvalOption struct {
 	byteCodeValue *Value
 }
 
-// EvalOptionFunc configures evaluation behavior using functional option pattern.
-type EvalOptionFunc func(*EvalOption)
+// EvalOption configures evaluation behavior using functional option pattern.
+type EvalOption func(*evalConfig)
 
 // createEvalOption initializes default option with global scope and strict mode.
-func createEvalOption(c *Context, file string, flags ...EvalOptionFunc) *EvalOption {
-	evalOption := &EvalOption{
+func createEvalOption(c *Runtime, file string, flags ...EvalOption) *evalConfig {
+	evalOption := &evalConfig{
 		c:     c,
 		file:  file,
-		flags: JsEvalTypeGlobal | JsEvalFlagStrict,
+		flags: jsEvalTypeGlobal | jsEvalFlagStrict,
 	}
 
 	for _, flag := range flags {
@@ -95,143 +87,115 @@ func createEvalOption(c *Context, file string, flags ...EvalOptionFunc) *EvalOpt
 }
 
 // Code sets the JavaScript source code to evaluate.
-func Code(code string) EvalOptionFunc {
-	return func(o *EvalOption) {
+func Code(code string) EvalOption {
+	return func(o *evalConfig) {
 		o.code = code
 	}
 }
 
 // Bytecode sets precompiled JavaScript bytecode to execute.
-func Bytecode(buf []byte) EvalOptionFunc {
-	return func(o *EvalOption) {
+func Bytecode(buf []byte) EvalOption {
+	return func(o *evalConfig) {
 		o.bytecode = buf
 		o.bytecodeLen = len(buf)
 	}
 }
 
 // TypeGlobal sets evaluation to run in global scope (default behavior).
-func TypeGlobal() EvalOptionFunc {
-	return func(o *EvalOption) {
-		o.flags |= JsEvalTypeGlobal
+func TypeGlobal() EvalOption {
+	return func(o *evalConfig) {
+		o.flags |= jsEvalTypeGlobal
 	}
 }
 
 // TypeModule sets evaluation to run as ES6 module.
-func TypeModule() EvalOptionFunc {
-	return func(o *EvalOption) {
-		o.flags |= JsEvalTypeModule
+func TypeModule() EvalOption {
+	return func(o *evalConfig) {
+		o.flags |= jsEvalTypeModule
 	}
 }
 
 // FlagAsync enables top-level await in global scripts.
 // Returns a promise from JS_Eval(). Only valid with TypeGlobal.
-func FlagAsync() EvalOptionFunc {
-	return func(o *EvalOption) {
-		o.flags |= JsEvalFlagAsync
+func FlagAsync() EvalOption {
+	return func(o *evalConfig) {
+		o.flags |= jsEvalFlagAsync
 	}
 }
 
 // FlagStrict forces strict mode execution.
-func FlagStrict() EvalOptionFunc {
-	return func(o *EvalOption) {
-		o.flags |= JsEvalFlagStrict
+func FlagStrict() EvalOption {
+	return func(o *evalConfig) {
+		o.flags |= jsEvalFlagStrict
 	}
 }
 
 // FlagCompileOnly compiles code without execution.
 // Returns bytecode object for later execution with JS_EvalFunction().
-func FlagCompileOnly() EvalOptionFunc {
-	return func(o *EvalOption) {
-		o.flags |= JsEvalFlagCompileOnly
-	}
-}
-
-// TypeDirect sets direct call mode (internal QuickJS use).
-func TypeDirect() EvalOptionFunc {
-	return func(o *EvalOption) {
-		o.flags |= JsEvalTypeDirect
-	}
-}
-
-// TypeIndirect sets indirect call mode (internal QuickJS use).
-func TypeIndirect() EvalOptionFunc {
-	return func(o *EvalOption) {
-		o.flags |= JsEvalTypeInDirect
-	}
-}
-
-// TypeMask applies eval type mask (internal QuickJS use).
-func TypeMask() EvalOptionFunc {
-	return func(o *EvalOption) {
-		o.flags |= JsEvalTypeMask
-	}
-}
-
-// FlagUnused is reserved for future QuickJS features.
-func FlagUnused() EvalOptionFunc {
-	return func(o *EvalOption) {
-		o.flags |= JsEvalFlagUnUsed
+func FlagCompileOnly() EvalOption {
+	return func(o *evalConfig) {
+		o.flags |= jsEvalFlagCompileOnly
 	}
 }
 
 // FlagBacktraceBarrier excludes stack frames before this eval from error backtraces.
-func FlagBacktraceBarrier() EvalOptionFunc {
-	return func(o *EvalOption) {
-		o.flags |= JsEvalFlagBackTraceBarrier
+func FlagBacktraceBarrier() EvalOption {
+	return func(o *evalConfig) {
+		o.flags |= jsEvalFlagBackTraceBarrier
 	}
 }
 
 // Handle creates QuickJS evaluation option handle for WASM function calls.
-func (o *EvalOption) Handle() (handle uint64) {
+func (o *evalConfig) Handle() (handle uint64) {
 	codeHandle := uint64(0)
 	byteCodeHandle := uint64(0)
-	o.fileValue = o.c.NewStringHandle(o.file)
+	o.fileValue = o.c.newStringHandle(o.file)
 
 	if o.code != "" {
-		o.codeValue = o.c.NewStringHandle(o.code)
-		codeHandle = o.codeValue.Raw()
+		o.codeValue = o.c.newStringHandle(o.code)
+		codeHandle = o.codeValue.raw()
 	}
 
 	if o.bytecode != nil {
-		o.byteCodeValue = o.c.NewBytes(o.bytecode)
-		byteCodeHandle = o.byteCodeValue.Raw()
+		o.byteCodeValue = o.c.newBytes(o.bytecode)
+		byteCodeHandle = o.byteCodeValue.raw()
 	}
 
 	// Create QuickJS option struct via WASM call
-	option := o.c.Call(
+	option := o.c.jsCall(
 		"QJS_CreateEvalOption",
 		codeHandle,
 		byteCodeHandle,
 		uint64(o.bytecodeLen),
-		o.fileValue.Raw(),
+		o.fileValue.raw(),
 		o.flags,
 	)
 
-	return option.Raw()
+	return option.raw()
 }
 
 // Free releases QuickJS value handles to prevent memory leaks.
 // Must be called after Handle() to clean up WASM memory.
-func (o *EvalOption) Free() {
+func (o *evalConfig) Free() {
 	// An interrupted runtime cannot run wasm; its memory goes with the store.
-	if o.c.runtime.interruptErr() != nil {
+	if o.c.interruptErr() != nil {
 		return
 	}
 
-	if o.fileValue.Raw() != 0 {
-		o.c.Call("JS_FreeValue", o.c.Raw(), o.fileValue.Raw())
+	if o.fileValue.raw() != 0 {
+		o.c.jsCall("JS_FreeValue", o.c.ctxPtr(), o.fileValue.raw())
 	}
 
-	if o.codeValue != nil && o.codeValue.Raw() != 0 {
-		o.c.Call("JS_FreeValue", o.c.Raw(), o.codeValue.Raw())
+	if o.codeValue != nil && o.codeValue.raw() != 0 {
+		o.c.jsCall("JS_FreeValue", o.c.ctxPtr(), o.codeValue.raw())
 	}
 
-	if o.byteCodeValue != nil && o.byteCodeValue.Raw() != 0 {
-		o.c.Call("JS_FreeValue", o.c.Raw(), o.byteCodeValue.Raw())
+	if o.byteCodeValue != nil && o.byteCodeValue.raw() != 0 {
+		o.c.jsCall("JS_FreeValue", o.c.ctxPtr(), o.byteCodeValue.raw())
 	}
 }
 
-func getRuntimeOption(registry *ProxyRegistry, options ...Option) (option Option) {
+func getRuntimeOption(options ...Option) (option Option) {
 	if len(options) == 0 {
 		option = Option{}
 	} else {
@@ -240,10 +204,6 @@ func getRuntimeOption(registry *ProxyRegistry, options ...Option) (option Option
 
 	if option.Context == nil {
 		option.Context = context.Background()
-	}
-
-	if option.ProxyFunction == nil {
-		option.ProxyFunction = createFuncProxyWithRegistry(registry)
 	}
 
 	return option

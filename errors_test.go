@@ -148,7 +148,7 @@ func TestNewJsToGoErr_EmptyErrorConditions(t *testing.T) {
 	require.NoError(t, err)
 	defer rt.Close()
 
-	ctx := rt.Context()
+	ctx := rt
 
 	t.Run("with nil error", func(t *testing.T) {
 		value := ctx.NewString("test")
@@ -179,7 +179,7 @@ func TestNewJsToGoErr_EmptyErrorConditions(t *testing.T) {
 	})
 }
 
-func createCircularValue(ctx *Context) *Value {
+func createCircularValue(ctx *Runtime) *Value {
 	result, err := ctx.Eval("test.js", Code(`
 		const obj = {};
 		obj.self = obj;
@@ -196,7 +196,7 @@ func TestNewJsToGoErr(t *testing.T) {
 	require.NoError(t, err)
 	defer rt.Close()
 
-	ctx := rt.Context()
+	ctx := rt
 
 	t.Run("JSONStringifyFailure", func(t *testing.T) {
 		// Create a value that will cause JSONStringify to fail
@@ -250,7 +250,7 @@ func TestNewInvalidJsInputErr_SuccessfulJSONStringify(t *testing.T) {
 	require.NoError(t, err)
 	defer rt.Close()
 
-	ctx := rt.Context()
+	ctx := rt
 
 	// Create a simple value that JSONStringify will work on
 	value := ctx.NewString("test string")

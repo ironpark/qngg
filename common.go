@@ -13,23 +13,23 @@ import (
 )
 
 const (
-	// MinMapForeachArgs is the minimum number of arguments for Map forEach callback (value, key).
-	MinMapForeachArgs = 2
-	// NanosToMillis is the conversion factor from nanoseconds to milliseconds.
-	NanosToMillis = 1e6
-	// Uint64ByteSize is the size of a uint64 value in bytes.
-	Uint64ByteSize = 8
-	// Uint64SignBitPosition is the bit position of the sign bit in a 64-bit unsigned integer.
-	Uint64SignBitPosition = 63
-	// PackedPtrSize is the size in bytes of a packed pointer structure.
-	PackedPtrSize = 8
-	// NullPtr represents a null pointer value.
-	NullPtr = uint32(0)
-	// StringTerminator is the null terminator byte for C-style strings.
-	StringTerminator = byte(0)
+	// minMapForeachArgs is the minimum number of arguments for Map forEach callback (value, key).
+	minMapForeachArgs = 2
+	// nanosToMillis is the conversion factor from nanoseconds to milliseconds.
+	nanosToMillis = 1e6
+	// uint64ByteSize is the size of a uint64 value in bytes.
+	uint64ByteSize = 8
+	// uint64SignBitPosition is the bit position of the sign bit in a 64-bit unsigned integer.
+	uint64SignBitPosition = 63
+	// packedPtrSize is the size in bytes of a packed pointer structure.
+	packedPtrSize = 8
+	// nullPtr represents a null pointer value.
+	nullPtr = uint32(0)
+	// stringTerminator is the null terminator byte for C-style strings.
+	stringTerminator = byte(0)
 )
 
-type NumberType interface {
+type numberType interface {
 	int |
 		int8 |
 		int16 |
@@ -76,8 +76,8 @@ var (
 	}
 )
 
-// ObjectOrMap interface for unified object/map handling.
-type ObjectOrMap interface {
+// objectOrMap interface for unified object/map handling.
+type objectOrMap interface {
 	IsObject() bool
 	IsMap() bool
 	ToMap() *Map
@@ -86,30 +86,30 @@ type ObjectOrMap interface {
 	ForEach(callback func(*Value, *Value))
 }
 
-// FieldMapper handles struct field mapping with caching for performance.
-type FieldMapper struct {
+// fieldMapper handles struct field mapping with caching for performance.
+type fieldMapper struct {
 	mu    sync.RWMutex
-	cache map[reflect.Type]map[string]FieldPath
+	cache map[reflect.Type]map[string]fieldPath
 }
 
-// FieldPath stores the path to a field through embedded structs.
-type FieldPath struct {
+// fieldPath stores the path to a field through embedded structs.
+type fieldPath struct {
 	indices []int               // Path to the field through embedded structs
 	field   reflect.StructField // Field info
 }
 
-// NewFieldMapper creates a new field mapper with initialized cache.
-func NewFieldMapper() *FieldMapper {
-	return &FieldMapper{
-		cache: make(map[reflect.Type]map[string]FieldPath),
+// newFieldMapper creates a new field mapper with initialized cache.
+func newFieldMapper() *fieldMapper {
+	return &fieldMapper{
+		cache: make(map[reflect.Type]map[string]fieldPath),
 	}
 }
 
 // Global field mapper instance for backward compatibility.
-var globalFieldMapper = NewFieldMapper()
+var globalFieldMapper = newFieldMapper()
 
 // GetFieldMap returns or builds a field map for a struct type.
-func (fm *FieldMapper) GetFieldMap(structType reflect.Type) map[string]FieldPath {
+func (fm *fieldMapper) GetFieldMap(structType reflect.Type) map[string]fieldPath {
 	// First try read lock for existing cache
 	fm.mu.RLock()
 
@@ -130,7 +130,7 @@ func (fm *FieldMapper) GetFieldMap(structType reflect.Type) map[string]FieldPath
 		return fieldMap
 	}
 
-	fieldMap := make(map[string]FieldPath)
+	fieldMap := make(map[string]fieldPath)
 	seen := make(map[string]bool)
 
 	fm.processFields(structType, []int{}, seen, fieldMap)
@@ -142,11 +142,11 @@ func (fm *FieldMapper) GetFieldMap(structType reflect.Type) map[string]FieldPath
 }
 
 // processFields recursively processes struct fields including embedded struct promotion.
-func (fm *FieldMapper) processFields(
+func (fm *fieldMapper) processFields(
 	structType reflect.Type,
 	indexPrefix []int,
 	seen map[string]bool,
-	fieldMap map[string]FieldPath,
+	fieldMap map[string]fieldPath,
 ) {
 	for i := range structType.NumField() {
 		field := structType.Field(i)
@@ -165,7 +165,7 @@ func (fm *FieldMapper) processFields(
 
 			// Respect Go's field promotion: shallowest field wins
 			if !seen[fieldName] {
-				fieldMap[fieldName] = FieldPath{indices: fieldIndices, field: field}
+				fieldMap[fieldName] = fieldPath{indices: fieldIndices, field: field}
 				seen[fieldName] = true
 			}
 
@@ -186,7 +186,7 @@ func (fm *FieldMapper) processFields(
 }
 
 // getJSONFieldName extracts the JSON field name from struct tags.
-func (fm *FieldMapper) getJSONFieldName(field reflect.StructField) string {
+func (fm *fieldMapper) getJSONFieldName(field reflect.StructField) string {
 	fieldName := field.Name
 
 	if tag := field.Tag.Get("json"); tag != "" {
@@ -204,25 +204,25 @@ func (fm *FieldMapper) getJSONFieldName(field reflect.StructField) string {
 }
 
 // getFieldMap provides backward compatibility for the old API.
-func getFieldMap(structType reflect.Type) map[string]FieldPath {
+func getFieldMap(structType reflect.Type) map[string]fieldPath {
 	return globalFieldMapper.GetFieldMap(structType)
 }
 
-// Tracker tracks objects during Go-JS conversion to detect circular references.
-type Tracker[T uintptr | uint64] struct {
+// convTracker tracks objects during Go-JS conversion to detect circular references.
+type convTracker[T uintptr | uint64] struct {
 	processing map[T]bool
 }
 
-// NewTracker creates a new conversion context for tracking circular references.
-func NewTracker[T uintptr | uint64]() *Tracker[T] {
-	return &Tracker[T]{
+// newConvTracker creates a new conversion context for tracking circular references.
+func newConvTracker[T uintptr | uint64]() *convTracker[T] {
+	return &convTracker[T]{
 		processing: make(map[T]bool),
 	}
 }
 
 // Track registers an object for circular reference detection.
 // Returns true if the object is already being processed (circular reference detected).
-func (tracker *Tracker[T]) Track(ptr T) bool {
+func (tracker *convTracker[T]) Track(ptr T) bool {
 	if tracker.processing[ptr] {
 		return true
 	}
@@ -233,19 +233,19 @@ func (tracker *Tracker[T]) Track(ptr T) bool {
 }
 
 // UnTrack removes an object from circular reference tracking.
-func (tracker *Tracker[T]) UnTrack(ptr T) {
+func (tracker *convTracker[T]) UnTrack(ptr T) {
 	delete(tracker.processing, ptr)
 }
 
-// CircularTracker manages the lifecycle of circular reference tracking for a single object.
-type CircularTracker[T uintptr | uint64] struct {
-	ctx             *Tracker[T]
+// circularTracker manages the lifecycle of circular reference tracking for a single object.
+type circularTracker[T uintptr | uint64] struct {
+	ctx             *convTracker[T]
 	ptr             T
 	needsUnregister bool
 }
 
 // trackPtr sets up circular reference tracking for a pointer.
-func (ct *CircularTracker[T]) trackPtr(ctx *Tracker[T], ptr T) error {
+func (ct *circularTracker[T]) trackPtr(ctx *convTracker[T], ptr T) error {
 	if ctx.Track(ptr) {
 		return newGoToJsErr("", nil, "recursive pointer")
 	}
@@ -258,8 +258,8 @@ func (ct *CircularTracker[T]) trackPtr(ctx *Tracker[T], ptr T) error {
 }
 
 // // trackValue sets up circular reference tracking for a JS value.
-func (ct *CircularTracker[T]) trackValue(ctx *Tracker[T], value *Value) error {
-	var ptr any = value.Raw()
+func (ct *circularTracker[T]) trackValue(ctx *convTracker[T], value *Value) error {
+	var ptr any = value.raw()
 
 	typeT, _ := ptr.(T)
 	if ctx.Track(typeT) {
@@ -274,37 +274,37 @@ func (ct *CircularTracker[T]) trackValue(ctx *Tracker[T], value *Value) error {
 }
 
 // cleanup removes the object from circular reference tracking.
-func (ct *CircularTracker[T]) cleanup() {
+func (ct *circularTracker[T]) cleanup() {
 	if ct.needsUnregister && ct.ctx != nil {
 		ct.ctx.UnTrack(ct.ptr)
 	}
 }
 
-// JsNumericToGoConverter handles conversion from float64 to various numeric types.
-type JsNumericToGoConverter struct {
+// jsNumericToGoConverter handles conversion from float64 to various numeric types.
+type jsNumericToGoConverter struct {
 	targetType reflect.Type
 	isPointer  bool
 }
 
-func NewJsNumericToGoConverter(targetType reflect.Type) *JsNumericToGoConverter {
+func newJsNumericToGoConverter(targetType reflect.Type) *jsNumericToGoConverter {
 	isPointer := targetType.Kind() == reflect.Pointer
 	if isPointer {
 		targetType = targetType.Elem()
 	}
 
-	return &JsNumericToGoConverter{
+	return &jsNumericToGoConverter{
 		targetType: targetType,
 		isPointer:  isPointer,
 	}
 }
 
-func (nc *JsNumericToGoConverter) Convert(floatVal float64) (any, error) {
+func (nc *jsNumericToGoConverter) Convert(floatVal float64) (any, error) {
 	targetKind := nc.targetType.Kind()
-	if err := NumericBoundsCheck(floatVal, targetKind); err != nil {
+	if err := numericBoundsCheck(floatVal, targetKind); err != nil {
 		return nil, err
 	}
 
-	result, err := FloatToInt(floatVal, targetKind)
+	result, err := floatToInt(floatVal, targetKind)
 	if err != nil {
 		return nil, err
 	}
@@ -318,29 +318,29 @@ func (nc *JsNumericToGoConverter) Convert(floatVal float64) (any, error) {
 	return result, nil
 }
 
-// JsArrayToGoConverter handles array conversions with better error handling and performance.
-type JsArrayToGoConverter[T any] struct {
-	tracker    *Tracker[uint64]
+// jsArrayToGoConverter handles array conversions with better error handling and performance.
+type jsArrayToGoConverter[T any] struct {
+	tracker    *convTracker[uint64]
 	input      *Value
 	targetType reflect.Type
 	sample     T
 }
 
-func NewJsArrayToGoConverter[T any](input *Value, samples ...T) *JsArrayToGoConverter[T] {
+func newJsArrayToGoConverter[T any](input *Value, samples ...T) *jsArrayToGoConverter[T] {
 	var sample T
 	if len(samples) > 0 {
 		sample = samples[0]
 	}
 
-	return &JsArrayToGoConverter[T]{
-		tracker:    NewTracker[uint64](),
+	return &jsArrayToGoConverter[T]{
+		tracker:    newConvTracker[uint64](),
 		input:      input,
 		targetType: reflect.TypeOf(sample),
 		sample:     sample,
 	}
 }
 
-func (ac *JsArrayToGoConverter[T]) Convert() (T, error) {
+func (ac *jsArrayToGoConverter[T]) Convert() (T, error) {
 	var zero T
 
 	jsArray, err := ac.input.ToArray()
@@ -363,7 +363,7 @@ func (ac *JsArrayToGoConverter[T]) Convert() (T, error) {
 	}
 }
 
-func (ac *JsArrayToGoConverter[T]) convertToInterface(jsArray *Array, jsLen int64) (T, error) {
+func (ac *jsArrayToGoConverter[T]) convertToInterface(jsArray *Array, jsLen int64) (T, error) {
 	result := make([]any, 0, jsLen)
 
 	for i := range jsLen {
@@ -391,7 +391,7 @@ func (ac *JsArrayToGoConverter[T]) convertToInterface(jsArray *Array, jsLen int6
 	return resultT, nil
 }
 
-func (ac *JsArrayToGoConverter[T]) convertToSlice(jsArray *Array, jsLen int64) (T, error) {
+func (ac *jsArrayToGoConverter[T]) convertToSlice(jsArray *Array, jsLen int64) (T, error) {
 	elemType := ac.targetType.Elem()
 	sliceValue := reflect.MakeSlice(ac.targetType, 0, int(jsLen))
 
@@ -421,7 +421,7 @@ func (ac *JsArrayToGoConverter[T]) convertToSlice(jsArray *Array, jsLen int64) (
 	return sliceT, nil
 }
 
-func (ac *JsArrayToGoConverter[T]) convertToArray(jsArray *Array, jsLen int64) (T, error) {
+func (ac *jsArrayToGoConverter[T]) convertToArray(jsArray *Array, jsLen int64) (T, error) {
 	elemType := ac.targetType.Elem()
 	goArrayLen := ac.targetType.Len()
 	goArrayValue := reflect.New(ac.targetType).Elem()
@@ -456,7 +456,7 @@ func (ac *JsArrayToGoConverter[T]) convertToArray(jsArray *Array, jsLen int64) (
 	return arrayT, nil
 }
 
-func (ac *JsArrayToGoConverter[T]) convertElementValue(goElem any, elemType reflect.Type) reflect.Value {
+func (ac *jsArrayToGoConverter[T]) convertElementValue(goElem any, elemType reflect.Type) reflect.Value {
 	if goElem == nil {
 		return reflect.Zero(elemType)
 	}
@@ -464,7 +464,7 @@ func (ac *JsArrayToGoConverter[T]) convertElementValue(goElem any, elemType refl
 	return reflect.ValueOf(goElem)
 }
 
-func (ac *JsArrayToGoConverter[T]) convertViaJSON(jsArray *Array) (T, error) {
+func (ac *jsArrayToGoConverter[T]) convertViaJSON(jsArray *Array) (T, error) {
 	jsonString, err := jsArray.JSONStringify()
 	if err != nil {
 		return ac.sample, newJsStringifyErr("array", err)
@@ -480,7 +480,7 @@ func (ac *JsArrayToGoConverter[T]) convertViaJSON(jsArray *Array) (T, error) {
 	return arrayT, nil
 }
 
-func FloatToInt(floatVal float64, targetKind reflect.Kind) (any, error) {
+func floatToInt(floatVal float64, targetKind reflect.Kind) (any, error) {
 	var result any
 
 	switch targetKind {
@@ -521,7 +521,7 @@ func FloatToInt(floatVal float64, targetKind reflect.Kind) (any, error) {
 	return result, nil
 }
 
-func IsValid32BitFloat(floatVal float64, targetKind reflect.Kind) error {
+func isValid32BitFloat(floatVal float64, targetKind reflect.Kind) error {
 	var bounds [2]float64
 	if targetKind == reflect.Int {
 		bounds = [2]float64{math.MinInt32, math.MaxInt32}
@@ -536,7 +536,7 @@ func IsValid32BitFloat(floatVal float64, targetKind reflect.Kind) error {
 	return nil
 }
 
-func NumericBoundsCheck(floatVal float64, targetKind reflect.Kind) error {
+func numericBoundsCheck(floatVal float64, targetKind reflect.Kind) error {
 	if bounds, ok := numericBounds[targetKind]; ok {
 		if floatVal < bounds[0] || floatVal > bounds[1] {
 			return newOverflowErr(floatVal, targetKind.String())
@@ -545,16 +545,16 @@ func NumericBoundsCheck(floatVal float64, targetKind reflect.Kind) error {
 
 	// Special handling for int/uint on 32-bit platforms
 	isIntUint := targetKind == reflect.Int || targetKind == reflect.Uint
-	if isIntUint && Is32BitPlatform() {
-		return IsValid32BitFloat(floatVal, targetKind)
+	if isIntUint && is32BitPlatform() {
+		return isValid32BitFloat(floatVal, targetKind)
 	}
 
 	return nil
 }
 
-// IsTypedArray returns true if the input is TypedArray or DataView.
-func IsTypedArray(input *Value) bool {
-	return slices.ContainsFunc(typedArrayTypes, input.IsGlobalInstanceOf)
+// isTypedArray returns true if the input is TypedArray or DataView.
+func isTypedArray(input *Value) bool {
+	return slices.ContainsFunc(typedArrayTypes, input.isGlobalInstanceOf)
 }
 
 // processTempValue validates if temp is a valid result for the given T type.
@@ -587,7 +587,7 @@ func processTempValue[T any](prefix string, temp any, err error, samples ...T) (
 			return tempT, nil
 		}
 
-		return v, newInvalidGoTypeErr(GetGoTypeName(sample), temp)
+		return v, newInvalidGoTypeErr(goTypeName(sample), temp)
 	}
 
 	valueT, _ := temp.(T)
@@ -595,13 +595,13 @@ func processTempValue[T any](prefix string, temp any, err error, samples ...T) (
 	return valueT, nil
 }
 
-func StringToNumeric(s string, targetType reflect.Type) (result any, err error) {
+func stringToNumeric(s string, targetType reflect.Type) (result any, err error) {
 	s = strings.TrimSpace(s)
 
 	if targetType.Kind() == reflect.Pointer {
 		elemType := targetType.Elem()
 
-		result, err := StringToNumeric(s, elemType)
+		result, err := stringToNumeric(s, elemType)
 		if err != nil {
 			return nil, err
 		}
@@ -694,9 +694,9 @@ func StringToNumeric(s string, targetType reflect.Type) (result any, err error) 
 	return nil, fmt.Errorf("cannot convert JS string %q to %s", s, targetType.String())
 }
 
-func createGoObjectTarget[T any](input ObjectOrMap, samples ...T) (
+func createGoObjectTarget[T any](input objectOrMap, samples ...T) (
 	temp any,
-	obj ObjectOrMap,
+	obj objectOrMap,
 	sample T,
 	target reflect.Type,
 ) {
@@ -760,15 +760,15 @@ func isGoStruct(goType reflect.Type) bool {
 		(goType.Kind() == reflect.Pointer && goType.Elem().Kind() == reflect.Struct)
 }
 
-// VerifyGoFunc validates that a function signature is compatible with JS conversion.
-func VerifyGoFunc(fnType reflect.Type, sample any) error {
+// verifyGoFunc validates that a function signature is compatible with JS conversion.
+func verifyGoFunc(fnType reflect.Type, sample any) error {
 	if fnType == nil || fnType.Kind() != reflect.Func {
 		return newInvalidGoTypeErr("function", sample)
 	}
 
 	// Validate that all return values are convertible to JS
 	for out := range fnType.Outs() {
-		err := IsConvertibleToJs(out, make(map[reflect.Type]bool), "func return")
+		err := isConvertibleToJs(out, make(map[reflect.Type]bool), "func return")
 		if err != nil {
 			return err
 		}
@@ -776,7 +776,7 @@ func VerifyGoFunc(fnType reflect.Type, sample any) error {
 
 	// Validate that all parameters are convertible from JS
 	for i := range fnType.NumIn() {
-		err := IsConvertibleToJs(fnType.In(i), make(map[reflect.Type]bool), "func param")
+		err := isConvertibleToJs(fnType.In(i), make(map[reflect.Type]bool), "func param")
 		if err != nil {
 			return fmt.Errorf("parameter %d error: %w", i, err)
 		}
@@ -785,20 +785,20 @@ func VerifyGoFunc(fnType reflect.Type, sample any) error {
 	return nil
 }
 
-func CreateGoBindFuncType[T any](sample T) (fnType reflect.Type, err error) {
+func createGoBindFuncType[T any](sample T) (fnType reflect.Type, err error) {
 	sampleVal := reflect.ValueOf(sample)
 	if sampleVal.IsValid() && sampleVal.Kind() == reflect.Func {
 		fnType = sampleVal.Type()
 	}
 
-	if err = VerifyGoFunc(fnType, sample); err != nil {
+	if err = verifyGoFunc(fnType, sample); err != nil {
 		return fnType, err
 	}
 
 	return fnType, nil
 }
 
-func AnyToError(err any) error {
+func anyToError(err any) error {
 	if err == nil {
 		return nil
 	}
@@ -822,9 +822,9 @@ func hashBytes(data []byte) uint64 {
 	return h.Sum64()
 }
 
-// ParseTimezone attempts to parse a timezone string as either an IANA location name
+// parseTimezone attempts to parse a timezone string as either an IANA location name
 // or a UTC offset format (+/-HH:MM). Returns UTC location if parsing fails.
-func ParseTimezone(tz string) *time.Location {
+func parseTimezone(tz string) *time.Location {
 	// First try to parse as IANA timezone name (e.g., "America/New_York", "Asia/Tokyo")
 	if loc, err := time.LoadLocation(tz); err == nil {
 		return loc
@@ -864,14 +864,14 @@ func ParseTimezone(tz string) *time.Location {
 	return time.UTC
 }
 
-// Is32BitPlatform check if the platform is 32-bit by comparing the size of uintptr.
-func Is32BitPlatform() bool {
+// is32BitPlatform check if the platform is 32-bit by comparing the size of uintptr.
+func is32BitPlatform() bool {
 	return strconv.IntSize == 32
 }
 
-// ChannelToJSObjectValue converts a Go channel to a JavaScript object with async methods.
-func ChannelToJSObjectValue(
-	c *Context,
+// channelToJSObjectValue converts a Go channel to a JavaScript object with async methods.
+func channelToJSObjectValue(
+	c *Runtime,
 	rtype reflect.Type,
 	rval reflect.Value,
 ) (*Value, error) {
@@ -885,27 +885,27 @@ func ChannelToJSObjectValue(
 		canSend := chanDir == reflect.BothDir || chanDir == reflect.SendDir
 		canRecv := chanDir == reflect.BothDir || chanDir == reflect.RecvDir
 		objMethods := map[string]any{
-			"close":    CreateChannelCloseFunc(rval),
+			"close":    createChannelCloseFunc(rval),
 			"length":   rval.Len,
 			"capacity": rval.Cap,
 		}
 
 		obj.SetPropertyStr("type", c.NewString("channel"))
-		obj.SetPropertyStr("elementType", c.NewString(GetGoTypeName(rtype.Elem())))
+		obj.SetPropertyStr("elementType", c.NewString(goTypeName(rtype.Elem())))
 		obj.SetPropertyStr("canSend", c.NewBool(canSend))
 		obj.SetPropertyStr("canReceive", c.NewBool(canRecv))
 
 		if canSend {
-			objMethods["send"] = CreateChannelSendFunc(rval)
+			objMethods["send"] = createChannelSendFunc(rval)
 		}
 
 		if canRecv {
-			objMethods["receive"] = CreateChannelReceiveFunc(rval)
+			objMethods["receive"] = createChannelReceiveFunc(rval)
 		}
 
 		for name, method := range objMethods {
 			// Skip error check since we know the function signatures are correct
-			jsMethod, _ := FuncToJS(c, method)
+			jsMethod, _ := funcToJS(c, method)
 			obj.SetPropertyStr(name, jsMethod)
 		}
 
@@ -913,13 +913,13 @@ func ChannelToJSObjectValue(
 	})
 }
 
-// CreateChannelSendFunc creates 'func(T) error' for sending T to a channel.
-func CreateChannelSendFunc(chanRValue reflect.Value) any {
-	errValue := ErrZeroRValue
+// createChannelSendFunc creates 'func(T) error' for sending T to a channel.
+func createChannelSendFunc(chanRValue reflect.Value) any {
+	errValue := errZeroRValue
 	chanElemRType := chanRValue.Type().Elem()
 	funcRType := reflect.FuncOf(
 		[]reflect.Type{chanElemRType}, // params
-		[]reflect.Type{ErrRType},      // returns
+		[]reflect.Type{errRType},      // returns
 		false,                         // variadic
 	)
 
@@ -942,8 +942,8 @@ func CreateChannelSendFunc(chanRValue reflect.Value) any {
 	return fn.Interface()
 }
 
-// CreateChannelReceiveFunc creates a function for receiving values from a channel.
-func CreateChannelReceiveFunc(chanRValue reflect.Value) func() (any, error) {
+// createChannelReceiveFunc creates a function for receiving values from a channel.
+func createChannelReceiveFunc(chanRValue reflect.Value) func() (any, error) {
 	return func() (any, error) {
 		chosen, recv, ok := reflect.Select([]reflect.SelectCase{
 			{Dir: reflect.SelectRecv, Chan: chanRValue},
@@ -965,8 +965,8 @@ func CreateChannelReceiveFunc(chanRValue reflect.Value) func() (any, error) {
 	}
 }
 
-// CreateChannelCloseFunc creates a function for closing a channel.
-func CreateChannelCloseFunc(rval reflect.Value) func() error {
+// createChannelCloseFunc creates a function for closing a channel.
+func createChannelCloseFunc(rval reflect.Value) func() error {
 	return func() error {
 		// Only close if it's a send or bidirectional channel
 		if rval.Type().ChanDir() == reflect.RecvDir {
