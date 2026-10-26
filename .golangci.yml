@@ -2,7 +2,7 @@ version: '2'
 
 run:
   concurrency: 4
-  go: '1.22.0'
+  go: '1.27'
 
 linters:
   default: all
@@ -14,6 +14,7 @@ linters:
     - err113
     - exhaustive
     - exhaustruct
+    - exhaustruct_v5
     - gochecknoglobals
     - gosmopolitan
     - ireturn
@@ -61,6 +62,8 @@ linters:
     paths:
       - examples$
       - _test\.go
+      # Vendored port of wasmtime-go; keeps upstream and C API naming.
+      - internal/wasmtime
 
 formatters:
   enable:

@@ -533,13 +533,15 @@ func TestAsyncFunctions(t *testing.T) {
 	t.Run("async_function_with_goroutine", func(t *testing.T) {
 		_, ctx := setupTestContext(t)
 		done := make(chan struct{})
+		evalDone := make(chan struct{})
 
 		ctx.SetAsyncFunc("testAsyncFunc", func(this *qjs.This) {
 			// Simulate async work and resolve with a value
 			go func() {
 				defer close(done)
-				// Simulate some delay
-				time.Sleep(10 * time.Millisecond)
+				// A runtime must not be used from multiple goroutines
+				// concurrently, so only resolve once Eval has returned.
+				<-evalDone
 				val := this.Context().NewString("async result")
 				this.Promise().Resolve(val)
 			}()
@@ -548,6 +550,7 @@ func TestAsyncFunctions(t *testing.T) {
 		result := must(ctx.Eval("test.js", qjs.Code(`({
 			promise: testAsyncFunc()
 		})`)))
+		close(evalDone)
 		defer result.Free()
 
 		// Wait for the goroutine to complete before touching the context again:

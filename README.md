@@ -1,4 +1,4 @@
-# QJS - JavaScript in Go with QuickJS and Wazero
+# QJS - JavaScript in Go with QuickJS and Wasmtime
 
 <p align="center">
   <a href="https://pkg.go.dev/github.com/fastschema/qjs#section-readme" target="_blank" rel="noopener">
@@ -26,20 +26,20 @@
 	</a>
 </p>
 
-QJS is a CGO-Free, modern, secure JavaScript runtime for Go applications, built on the powerful QuickJS engine and Wazero WebAssembly runtime.
+QJS is a CGO-Free, modern, secure JavaScript runtime for Go applications, built on the powerful QuickJS engine and the Wasmtime WebAssembly runtime.
 
 QJS allows you to run JavaScript code safely and efficiently, with full support for ES2023 features, async/await, and Go-JS interoperability.
 
 ## Features
 
 - **JavaScript ES6+ Support**: Full ES2023 compatibility via QuickJS (NG fork).
-- **WebAssembly Execution**: Secure, sandboxed runtime using Wazero.
+- **WebAssembly Execution**: Secure, sandboxed runtime using Wasmtime.
 - **Go-JS Interoperability**: Seamless data conversion between Go and JavaScript.
 - **ProxyValue Support**: Zero-copy sharing of Go values with JavaScript via lightweight proxies.
 - **Function Binding**: Expose Go functions to JavaScript and vice versa.
 - **Async/Await**: Full support for asynchronous JavaScript execution.
 - **Memory Safety**: Memory-safe execution environment with configurable limits.
-- **No CGO Dependencies**: Pure Go implementation with WebAssembly.
+- **No CGO Dependencies**: Wasmtime is loaded at runtime through [purego](https://github.com/ebitengine/purego), so builds work with `CGO_ENABLED=0` and cross-compile without a C toolchain.
 
 ## Benchmarks
 
@@ -58,7 +58,7 @@ Computing factorial(10) 1,000,000 times
 | Total | 5.637s | 9.549s | **3.731s** |
 | Speed | 1.51x | 2.56x | 1.00x |
 
-*Benchmarks run on AMD Ryzen 7 7840HS, 32GB RAM, Linux*
+*Benchmarks run on AMD Ryzen 7 7840HS, 32GB RAM, Linux, with the previous Wazero backend*
 
 ### AreWeFastYet V8-V7
 
@@ -75,7 +75,7 @@ Computing factorial(10) 1,000,000 times
 | Score (version 7) | 442 | 323 | **498** |
 | Duration (seconds) | 78.349s | 97.240s | **72.004s** |
 
-*Benchmarks run on AMD Ryzen 7 7840HS, 32GB RAM, Linux*
+*Benchmarks run on AMD Ryzen 7 7840HS, 32GB RAM, Linux, with the previous Wazero backend*
 
 ## Example Usage
 
@@ -648,7 +648,7 @@ import "github.com/fastschema/qjs"
 
 ```
 ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
-│   Your Go   │      │   Wazero    │      │   QuickJS   │
+│   Your Go   │      │  Wasmtime   │      │   QuickJS   │
 │ Application │ ---> │ WebAssembly │ ---> │ JavaScript  │
 │             │      │  Runtime    │      │   Engine    │
 └─────────────┘      └─────────────┘      └─────────────┘
@@ -714,14 +714,33 @@ qjs.ToJSValue(ctx, goValue)             // Convert Go value to JS (auto-detects 
 
 ```go
 type Option struct {
-    CWD                string  // Working directory
+    CWD                string  // Working directory, mounted as "/" for JavaScript
     MaxStackSize       int     // Stack size limit
-    MemoryLimit        int     // Memory usage limit  
+    MemoryLimit        int     // Memory usage limit
     MaxExecutionTime   int     // Execution timeout
     GCThreshold        int     // GC trigger threshold
-    CacheDir           string  // Compilation cache directory
+    CacheDir           string  // Directory for compiled module cache files
+    Context            context.Context
+    CloseOnContextDone bool    // Interrupt running JavaScript when Context is done
+    Stdout, Stderr     io.Writer
 }
 ```
+
+### Wasmtime native library
+
+QJS runs QuickJS on [Wasmtime](https://wasmtime.dev/). The Wasmtime C API shared
+library for the target platform (macOS, Linux and Windows on amd64/arm64) is
+embedded in the binary, zstd-compressed, and extracted on first use into the
+user cache directory (`os.UserCacheDir()/qjs/wasmtime`, falling back to the
+system temp directory).
+
+- Set `QJS_WASMTIME_LIB` to the path of a Wasmtime C API shared library to load
+  it instead of the embedded one. Its version must match the bindings (currently
+  Wasmtime v50.0.0).
+- Build with `-tags wasmtime_noembed` to leave the embedded library out of the
+  binary (about 6-7 MB per platform) and rely on `QJS_WASMTIME_LIB`.
+- Linux builds require glibc; musl-based systems such as Alpine need a musl
+  build of Wasmtime provided through `QJS_WASMTIME_LIB`.
 
 ## Performance & Security
 
@@ -737,7 +756,7 @@ type Option struct {
 - **Complete filesystem isolation** (unless explicitly configured).
 - **No network access** from JavaScript (unless explicitly allowed).
 - **Memory safe** - no buffer overflows.
-- **No CGO attack surface**.
+- **No CGO**: the Wasmtime native library is loaded at runtime through purego.
 - **Deterministic resource cleanup**.
 
 ### Memory Management
@@ -761,7 +780,7 @@ defer result.Free()
 
 **Choose QJS when you need:**
 - Secure modern JavaScript features.
-- Single dependency (Wazero), no CGO.
+- No CGO, cross-compiles with a plain Go toolchain.
 - Supports plugin systems and user-generated code.
 - Compliant with strict security requirements.
 - High performance with low memory footprint.
@@ -840,7 +859,9 @@ MIT License - see [LICENSE](LICENSE) file.
 Built on the shoulders of giants:
 
 - **[QuickJS](https://bellard.org/quickjs/)** by Fabrice Bellard - The elegant JavaScript engine.
-- **[Wazero](https://wazero.io/)** - Pure Go WebAssembly runtime.
+- **[Wasmtime](https://wasmtime.dev/)** - Fast and secure WebAssembly runtime.
+- **[wasmtime-go](https://github.com/bytecodealliance/wasmtime-go)** - Go bindings for Wasmtime, vendored and ported to purego.
+- **[purego](https://github.com/ebitengine/purego)** - Calling C from Go without cgo.
 - **[QuickJS-NG](https://github.com/quickjs-ng/quickjs)** - Maintained QuickJS fork.
 
 ---

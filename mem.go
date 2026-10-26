@@ -2,22 +2,30 @@ package qjs
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math"
 	"sync"
 
-	"github.com/tetratelabs/wazero/api"
+	"github.com/fastschema/qjs/internal/wasmtime"
 )
 
 // Mem provides a safe interface for WebAssembly memory operations.
-// It wraps the underlying wazero api.Memory with bounds checking and error handling.
+// It wraps the underlying wasm linear memory with bounds checking and error handling.
 type Mem struct {
-	mu  sync.Mutex
-	mem api.Memory
+	mu    sync.Mutex
+	store *wasmtime.Store
+	mem   *wasmtime.Memory
+	// data caches a view of the linear memory. The engine is configured so
+	// memory never moves, so only the length can become outdated when wasm
+	// grows the memory; it is refreshed whenever an access falls outside it.
+	data []byte
 }
 
 // Size returns the current size of the WebAssembly memory in bytes.
 func (m *Mem) Size() uint32 {
-	return m.mem.Size()
+	m.data = m.mem.UnsafeData(m.store)
+
+	return uint32(len(m.data))
 }
 
 // UnpackPtr extracts address and size from a packed 64-bit value in memory.
@@ -66,7 +74,7 @@ func (m *Mem) Read(addr uint32, size uint64) ([]byte, error) {
 
 	sizeU32 := uint32(size)
 
-	buf, ok := m.mem.Read(addr, sizeU32)
+	buf, ok := m.view(addr, sizeU32)
 	if !ok {
 		return nil, ErrIndexOutOfRange
 	}
@@ -110,47 +118,32 @@ func (m *Mem) MustWrite(addr uint32, b []byte) {
 
 // ReadUint8 reads a single byte from WebAssembly memory at the specified address.
 func (m *Mem) ReadUint8(ptr uint32) (uint8, error) {
-	err := m.validatePointer(ptr)
+	buf, err := m.Read(ptr, 1)
 	if err != nil {
 		return 0, err
 	}
 
-	v, ok := m.mem.ReadByte(ptr)
-	if !ok {
-		return 0, ErrIndexOutOfRange
-	}
-
-	return v, nil
+	return buf[0], nil
 }
 
 // ReadUint32 reads a 32-bit unsigned integer from WebAssembly memory at the specified address.
 func (m *Mem) ReadUint32(ptr uint32) (uint32, error) {
-	err := m.validatePointer(ptr)
+	buf, err := m.Read(ptr, 4)
 	if err != nil {
 		return 0, err
 	}
 
-	v, ok := m.mem.ReadUint32Le(ptr)
-	if !ok {
-		return 0, ErrIndexOutOfRange
-	}
-
-	return v, nil
+	return binary.LittleEndian.Uint32(buf), nil
 }
 
 // ReadUint64 reads a 64-bit unsigned integer from WebAssembly memory at the specified address.
 func (m *Mem) ReadUint64(ptr uint32) (uint64, error) {
-	err := m.validatePointer(ptr)
+	buf, err := m.Read(ptr, 8)
 	if err != nil {
 		return 0, err
 	}
 
-	v, ok := m.mem.ReadUint64Le(ptr)
-	if !ok {
-		return 0, ErrIndexOutOfRange
-	}
-
-	return v, nil
+	return binary.LittleEndian.Uint64(buf), nil
 }
 
 // ReadFloat64 reads a 64-bit floating point number from WebAssembly memory at the specified address.
@@ -165,42 +158,36 @@ func (m *Mem) ReadFloat64(ptr uint32) (float64, error) {
 
 // WriteUint8 writes a single byte to WebAssembly memory at the specified address.
 func (m *Mem) WriteUint8(ptr uint32, v uint8) error {
-	err := m.validatePointer(ptr)
+	buf, err := m.Read(ptr, 1)
 	if err != nil {
 		return err
 	}
 
-	if ok := m.mem.WriteByte(ptr, v); !ok {
-		return ErrIndexOutOfRange
-	}
+	buf[0] = v
 
 	return nil
 }
 
 // WriteUint32 writes a 32-bit unsigned integer to WebAssembly memory at the specified address.
 func (m *Mem) WriteUint32(ptr uint32, v uint32) error {
-	err := m.validatePointer(ptr)
+	buf, err := m.Read(ptr, 4)
 	if err != nil {
 		return err
 	}
 
-	if ok := m.mem.WriteUint32Le(ptr, v); !ok {
-		return ErrIndexOutOfRange
-	}
+	binary.LittleEndian.PutUint32(buf, v)
 
 	return nil
 }
 
 // WriteUint64 writes a 64-bit unsigned integer to WebAssembly memory at the specified address.
 func (m *Mem) WriteUint64(ptr uint32, v uint64) error {
-	err := m.validatePointer(ptr)
+	buf, err := m.Read(ptr, 8)
 	if err != nil {
 		return err
 	}
 
-	if ok := m.mem.WriteUint64Le(ptr, v); !ok {
-		return ErrIndexOutOfRange
-	}
+	binary.LittleEndian.PutUint64(buf, v)
 
 	return nil
 }
@@ -224,7 +211,7 @@ func (m *Mem) ReadString(addr, maxlen uint32) (string, error) {
 
 	readLen := m.calculateSafeReadLength(addr, maxlen)
 
-	buf, ok := m.mem.Read(addr, readLen)
+	buf, ok := m.view(addr, readLen)
 	if !ok {
 		return "", ErrIndexOutOfRange
 	}
@@ -302,7 +289,12 @@ func (m *Mem) validateMemoryAccess(ptr uint32, size uint64) error {
 
 // calculateSafeReadLength calculates a safe read length for string operations.
 func (m *Mem) calculateSafeReadLength(addr, maxlen uint32) uint32 {
-	memSize := m.mem.Size()
+	// Refresh the cached view only if the read may reach past it.
+	if maxlen == math.MaxUint32 || uint64(addr)+uint64(maxlen)+1 > uint64(len(m.data)) {
+		m.data = m.mem.UnsafeData(m.store)
+	}
+
+	memSize := uint32(len(m.data))
 
 	if maxlen == math.MaxUint32 {
 		return memSize - addr
@@ -315,4 +307,18 @@ func (m *Mem) calculateSafeReadLength(addr, maxlen uint32) uint32 {
 	}
 
 	return maxlen + 1
+}
+
+// view returns the `size` bytes of linear memory at `addr`, backed by the
+// memory itself, or false if the range is out of bounds.
+func (m *Mem) view(addr, size uint32) ([]byte, bool) {
+	end := uint64(addr) + uint64(size)
+	if end > uint64(len(m.data)) {
+		m.data = m.mem.UnsafeData(m.store)
+		if end > uint64(len(m.data)) {
+			return nil, false
+		}
+	}
+
+	return m.data[addr:end:end], true
 }

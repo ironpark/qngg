@@ -5,8 +5,6 @@ import (
 	"encoding/binary"
 	"sync"
 	"sync/atomic"
-
-	"github.com/tetratelabs/wazero/api"
 )
 
 // ProxyRegistry stores Go functions that can be called from JavaScript.
@@ -99,13 +97,15 @@ func (r *ProxyRegistry) Clear() {
 //	extern JSValue jsFunctionProxy(JSContext *ctx, JSValueConst this, int argc, JSValueConst *argv);
 //
 // Parameters:
-//   - ctx: 	JSContext pointer
+//   - ctx: 	the Go context of the runtime
+//   - mem: 	the WebAssembly memory of the runtime
+//   - jsCtx: 	JSContext pointer
 //   - this: 	JSValueConst this (the "this" value)
 //   - argc: 	int argc (number of arguments)
 //   - argv: 	pointer to argv (an array of JSValueConst/JSValue, each 8 bytes - uint64)
 type JsFunctionProxy = func(
 	ctx context.Context,
-	module api.Module,
+	mem *Mem,
 	jsCtx uint32,
 	thisVal uint64,
 	argc uint32,
@@ -117,13 +117,13 @@ type JsFunctionProxy = func(
 func createFuncProxyWithRegistry(registry *ProxyRegistry) JsFunctionProxy {
 	return func(
 		_ context.Context,
-		module api.Module,
+		mem *Mem,
 		_ uint32,
 		thisVal uint64,
 		argc uint32,
 		argv uint32,
 	) (rs uint64) {
-		goFunc, this := getProxyFuncParams(registry, module.Memory(), thisVal, argc, argv)
+		goFunc, this := getProxyFuncParams(registry, mem, thisVal, argc, argv)
 
 		defer func() {
 			if r := recover(); r != nil {
@@ -170,7 +170,7 @@ func validateAndReturnResult(this *This, result *Value) uint64 {
 // It parses WASM memory to extract function ID, context, arguments, and async information.
 func getProxyFuncParams(
 	registry *ProxyRegistry,
-	mem api.Memory,
+	mem *Mem,
 	thisRef uint64,
 	argc uint32,
 	argv uint32,
@@ -242,15 +242,17 @@ func retrieveGoResources(
 
 // readArgsFromWasmMem reads the argument array from WASM memory with proper validation.
 // Each argument is 8 bytes (uint64) in little-endian format.
-func readArgsFromWasmMem(mem api.Memory, argc uint32, argv uint32) []uint64 {
+func readArgsFromWasmMem(mem *Mem, argc uint32, argv uint32) []uint64 {
 	args := make([]uint64, argc)
+	if argc == 0 {
+		return args
+	}
 
-	for i := range argc {
-		// Calculate the offset for the i-th argument
-		offset := argv + (i * 8)
-		data, _ := mem.Read(offset, 8)
-		// Convert the 8 bytes to a uint64 (little-endian encoding)
-		args[i] = binary.LittleEndian.Uint64(data)
+	data := mem.MustRead(argv, uint64(argc)*8)
+
+	for i := range args {
+		// Each argument is 8 bytes in little-endian encoding
+		args[i] = binary.LittleEndian.Uint64(data[i*8:])
 	}
 
 	return args

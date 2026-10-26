@@ -23,7 +23,7 @@ jobs:
           args: --verbose
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.platform }}
     strategy:
       matrix:
         go: ['1.27.x']
@@ -43,6 +43,12 @@ jobs:
         run: go install gotest.tools/gotestsum@v1.12.3
       - name: Test
         run: gotestsum -f testname -- ./... -race -count=1 -coverprofile=coverage.txt -covermode=atomic
+      - name: Test without cgo
+        run: go test ./... -count=1
+        env:
+          CGO_ENABLED: '0'
+      - name: Test wasmtime bindings with aggressive GC
+        run: go test ./internal/wasmtime -count=1 -tags debug
       - name: Upload coverage reports to Codecov
         if: ${{ matrix.platform == 'ubuntu-latest' && matrix.go == '1.27.x' }}
         uses: codecov/codecov-action@v5.5.1

@@ -1,84 +1,45 @@
 package qjs
 
 import (
-	"context"
 	_ "embed"
 	"errors"
 	"fmt"
 	"runtime/debug"
 	"sync"
 
-	"github.com/tetratelabs/wazero"
-	"github.com/tetratelabs/wazero/api"
-	wsp1 "github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
+	"github.com/fastschema/qjs/internal/wasmtime"
 )
 
 //go:embed qjs.wasm
 var wasmBytes []byte
 
-var (
-	compiledQJSModule   wazero.CompiledModule
-	cachedRuntimeConfig wazero.RuntimeConfig
-	cachedBytesHash     uint64
-	compilationMutex    sync.Mutex
-)
+// wasmFunc is a cached export of the QuickJS module.
+type wasmFunc struct {
+	fn *wasmtime.Func
+	// size of the args-and-results buffer: max(params, results)
+	slots     int
+	hasResult bool
+	// whether the single result is a 32-bit value that must be zero-extended
+	result32 bool
+}
 
 // Runtime wraps a QuickJS WebAssembly runtime with memory management.
 type Runtime struct {
-	wrt      wazero.Runtime
-	module   api.Module
-	malloc   api.Function
-	free     api.Function
-	mem      *Mem
-	option   Option
-	handle   *Handle
-	context  *Context
-	registry *ProxyRegistry
-}
-
-func createGlobalCompiledModule(
-	ctx context.Context,
-	closeOnContextDone bool,
-	disableBuildCache bool,
-	cacheDir string,
-	quickjsWasmBytes ...[]byte,
-) (qjsBytes []byte, err error) {
-	// Protect global compilation state with mutex
-	compilationMutex.Lock()
-	defer compilationMutex.Unlock()
-
-	if len(quickjsWasmBytes) > 0 && len(quickjsWasmBytes[0]) > 0 {
-		qjsBytes = quickjsWasmBytes[0]
-	} else {
-		qjsBytes = wasmBytes
-	}
-
-	// Calculate hash of the bytes to check if we need to recompile
-	currentHash := hashBytes(qjsBytes)
-
-	// Check if we need to compile or recompile
-	if compiledQJSModule == nil || cachedBytesHash != currentHash || disableBuildCache {
-		var cache wazero.CompilationCache
-		if cacheDir == "" {
-			cache = wazero.NewCompilationCache()
-		} else if cache, err = wazero.NewCompilationCacheWithDir(cacheDir); err != nil {
-			return nil, fmt.Errorf("failed to create compilation cache with dir %s: %w", cacheDir, err)
-		}
-
-		cachedRuntimeConfig = wazero.
-			NewRuntimeConfig().
-			WithCompilationCache(cache).
-			WithCloseOnContextDone(closeOnContextDone)
-		wrt := wazero.NewRuntimeWithConfig(ctx, cachedRuntimeConfig)
-
-		if compiledQJSModule, err = wrt.CompileModule(ctx, qjsBytes); err != nil {
-			return nil, fmt.Errorf("failed to compile qjs module: %w", err)
-		}
-
-		cachedBytesHash = currentHash
-	}
-
-	return qjsBytes, nil
+	store     *wasmtime.Store
+	linker    *wasmtime.Linker
+	instance  *wasmtime.Instance
+	funcs     map[string]*wasmFunc
+	malloc    *wasmFunc
+	free      *wasmFunc
+	mem       *Mem
+	stopWatch func() bool
+	// argument buffers for invoke, one per level of nested wasm calls
+	callBufs  [][]wasmtime.ValRaw
+	callDepth int
+	option    Option
+	handle    *Handle
+	context   *Context
+	registry  *ProxyRegistry
 }
 
 // New creates a QuickJS runtime with optional configuration.
@@ -86,10 +47,15 @@ func New(options ...Option) (runtime *Runtime, err error) {
 	defer func() {
 		rerr := AnyToError(recover())
 		if rerr != nil {
+			runtime.release()
 			runtime = nil
 			err = fmt.Errorf("failed to create QJS runtime: %w", rerr)
 		}
 	}()
+
+	if err := wasmtime.LoadError(); err != nil {
+		return nil, fmt.Errorf("failed to load wasmtime: %w", err)
+	}
 
 	proxyRegistry := NewProxyRegistry()
 
@@ -98,12 +64,22 @@ func New(options ...Option) (runtime *Runtime, err error) {
 		return nil, fmt.Errorf("failed to get runtime options: %w", err)
 	}
 
-	qjsBytes, err := createGlobalCompiledModule(
-		option.Context,
+	proxy, ok := option.ProxyFunction.(JsFunctionProxy)
+	if !ok {
+		return nil, fmt.Errorf("invalid proxy function type %T, expected qjs.JsFunctionProxy", option.ProxyFunction)
+	}
+
+	qjsBytes, hash := wasmBytes, embeddedHash()
+	if len(option.QuickJSWasmBytes) > 0 {
+		qjsBytes, hash = option.QuickJSWasmBytes, hashBytes(option.QuickJSWasmBytes)
+	}
+
+	engine, module, err := getCompiledModule(
 		option.CloseOnContextDone,
 		option.DisableBuildCache,
 		option.CacheDir,
-		option.QuickJSWasmBytes,
+		qjsBytes,
+		hash,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create global compiled module: %w", err)
@@ -113,48 +89,13 @@ func New(options ...Option) (runtime *Runtime, err error) {
 		option:   option,
 		context:  &Context{Context: option.Context},
 		registry: proxyRegistry,
+		funcs:    map[string]*wasmFunc{},
 	}
 
-	runtime.wrt = wazero.NewRuntimeWithConfig(
-		option.Context,
-		cachedRuntimeConfig,
-	)
+	if err := runtime.instantiate(engine, module, proxy); err != nil {
+		runtime.release()
 
-	if _, err := wsp1.Instantiate(option.Context, runtime.wrt); err != nil {
-		return nil, fmt.Errorf("failed to instantiate WASI: %w", err)
-	}
-
-	if _, err := runtime.wrt.NewHostModuleBuilder("env").
-		NewFunctionBuilder().
-		WithFunc(option.ProxyFunction).
-		Export("jsFunctionProxy").
-		Instantiate(option.Context); err != nil {
-		return nil, fmt.Errorf("failed to setup host module: %w", err)
-	}
-
-	fsConfig := wazero.
-		NewFSConfig().
-		WithDirMount(runtime.option.CWD, "/")
-	// A CompiledModule can only be instantiated by the runtime that compiled it,
-	// so compile per runtime; the shared compilation cache makes this cheap.
-	compiled, err := runtime.wrt.CompileModule(option.Context, qjsBytes)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compile qjs module: %w", err)
-	}
-
-	if runtime.module, err = runtime.wrt.InstantiateModule(
-		option.Context,
-		compiled,
-		wazero.NewModuleConfig().
-			WithStartFunctions(option.StartFunctionName).
-			WithSysWalltime().
-			WithSysNanotime().
-			WithSysNanosleep().
-			WithFSConfig(fsConfig).
-			WithStdout(option.Stdout).
-			WithStderr(option.Stderr),
-	); err != nil {
-		return nil, fmt.Errorf("failed to instantiate module: %w", err)
+		return nil, err
 	}
 
 	runtime.initializeRuntime()
@@ -200,11 +141,7 @@ func (r *Runtime) Close() {
 		r.handle = nil
 	}
 
-	// Close WASM module
-	if r.module != nil {
-		r.module.Close(r.context)
-		r.module = nil
-	}
+	r.release()
 
 	// Clear references
 	if r.context != nil {
@@ -254,17 +191,17 @@ func (r *Runtime) CallUnPack(name string, args ...uint64) (uint32, uint32) {
 
 // Malloc allocates memory in the WebAssembly linear memory and return a pointer to it.
 func (r *Runtime) Malloc(size uint64) uint64 {
-	ptrs, err := r.malloc.Call(r.context, size)
+	ptr, err := r.invoke(r.malloc, size)
 	if err != nil {
 		panic(fmt.Errorf("failed to allocate memory: %w", err))
 	}
 
-	return ptrs[0]
+	return ptr
 }
 
 // FreeHandle releases memory allocated in WebAssembly linear memory.
 func (r *Runtime) FreeHandle(ptr uint64) {
-	if _, err := r.free.Call(r.context, ptr); err != nil {
+	if _, err := r.invoke(r.free, ptr); err != nil {
 		panic(fmt.Errorf("failed to free memory: %w", err))
 	}
 }
@@ -301,9 +238,9 @@ func (r *Runtime) NewStringHandle(v string) *Handle {
 
 // initializeRuntime sets up the runtime components after module instantiation.
 func (r *Runtime) initializeRuntime() {
-	r.malloc = r.module.ExportedFunction("malloc")
-	r.free = r.module.ExportedFunction("free")
-	r.mem = &Mem{mem: r.module.Memory()}
+	r.malloc = r.export("malloc")
+	r.free = r.export("free")
+	r.mem = &Mem{store: r.store, mem: r.instance.GetExport(r.store, "memory").Memory()}
 	r.handle = r.Call(
 		"New_QJS",
 		uint64(r.option.MemoryLimit),
@@ -316,23 +253,88 @@ func (r *Runtime) initializeRuntime() {
 	r.context.runtime = r
 }
 
-func (r *Runtime) call(name string, args ...uint64) uint64 {
-	fn := r.module.ExportedFunction(name)
+// export returns the cached export `name`, looking it up on first use.
+func (r *Runtime) export(name string) *wasmFunc {
+	if f, ok := r.funcs[name]; ok {
+		return f
+	}
+
+	fn := r.instance.GetFunc(r.store, name)
 	if fn == nil {
 		panic(fmt.Errorf("WASM function %s not found", name))
 	}
 
-	results, err := fn.Call(r.context, args...)
+	ty := fn.Type(r.store)
+	params, results := ty.Params(), ty.Results()
+	f := &wasmFunc{
+		fn:        fn,
+		slots:     max(len(params), len(results)),
+		hasResult: len(results) > 0,
+	}
+
+	if len(results) == 1 {
+		kind := results[0].Kind()
+		f.result32 = kind == wasmtime.KindI32 || kind == wasmtime.KindF32
+	}
+
+	r.funcs[name] = f
+
+	return f
+}
+
+// invoke calls `f` with raw wasm arguments: every value is passed as a
+// uint64 holding the little-endian bits of the wasm value. It returns the
+// first result encoded the same way.
+func (r *Runtime) invoke(f *wasmFunc, args ...uint64) (uint64, error) {
+	if err := r.context.Err(); err != nil {
+		return 0, fmt.Errorf("context done: %w", err)
+	}
+
+	// Calls nest when JavaScript calls back into Go, so each nesting level
+	// gets its own reusable buffer.
+	if r.callDepth == len(r.callBufs) {
+		r.callBufs = append(r.callBufs, nil)
+	}
+
+	n := max(f.slots, len(args))
+	if len(r.callBufs[r.callDepth]) < n {
+		r.callBufs[r.callDepth] = make([]wasmtime.ValRaw, max(n, 8))
+	}
+
+	vals := r.callBufs[r.callDepth][:n]
+	clear(vals)
+
+	for i, arg := range args {
+		vals[i] = wasmtime.ValRawI64(int64(arg))
+	}
+
+	r.callDepth++
+	defer func() { r.callDepth-- }()
+
+	if err := f.fn.CallUnchecked(r.store, vals); err != nil {
+		return 0, fmt.Errorf("wasm call failed: %w", err)
+	}
+
+	if !f.hasResult {
+		return 0, nil
+	}
+
+	result := uint64(vals[0].I64())
+	if f.result32 {
+		result = uint64(uint32(result))
+	}
+
+	return result, nil
+}
+
+func (r *Runtime) call(name string, args ...uint64) uint64 {
+	result, err := r.invoke(r.export(name), args...)
 	if err != nil {
 		stack := debug.Stack()
 		panic(fmt.Errorf("failed to call %s: %w\nstack: %s", name, err, stack))
 	}
 
-	if len(results) == 0 {
-		return 0
-	}
-
-	return results[0]
+	return result
 }
 
 // Pool manages a collection of reusable QuickJS runtimes.
