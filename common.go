@@ -5,7 +5,6 @@ import (
 	"hash/fnv"
 	"math"
 	"reflect"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,12 +15,6 @@ const (
 	nanosToMillis = 1e6
 	// uint64SignBitPosition is the bit position of the sign bit in a 64-bit unsigned integer.
 	uint64SignBitPosition = 63
-	// packedPtrSize is the size in bytes of a packed pointer structure.
-	packedPtrSize = 8
-	// nullPtr represents a null pointer value.
-	nullPtr = uint32(0)
-	// stringTerminator is the null terminator byte for C-style strings.
-	stringTerminator = byte(0)
 )
 
 type numberType interface {
@@ -53,21 +46,6 @@ var (
 		reflect.Uint64:  {0, math.MaxUint64},
 		reflect.Float32: {-math.MaxFloat32, math.MaxFloat32},
 		reflect.Float64: {-math.MaxFloat64, math.MaxFloat64},
-	}
-
-	// TypedArray types for validation.
-	typedArrayTypes = []string{
-		"Uint8Array",
-		"Int8Array",
-		"Uint16Array",
-		"Int16Array",
-		"Uint32Array",
-		"Int32Array",
-		"Float32Array",
-		"Float64Array",
-		"BigInt64Array",
-		"BigUint64Array",
-		"DataView",
 	}
 )
 
@@ -200,9 +178,7 @@ type convTracker[T uintptr | uint64] struct {
 
 // newConvTracker creates a new conversion context for tracking circular references.
 func newConvTracker[T uintptr | uint64]() *convTracker[T] {
-	return &convTracker[T]{
-		processing: make(map[T]bool),
-	}
+	return &convTracker[T]{}
 }
 
 // Track registers an object for circular reference detection.
@@ -210,6 +186,11 @@ func newConvTracker[T uintptr | uint64]() *convTracker[T] {
 func (tracker *convTracker[T]) Track(ptr T) bool {
 	if tracker.processing[ptr] {
 		return true
+	}
+
+	// Most conversions never track anything, so the map is created lazily.
+	if tracker.processing == nil {
+		tracker.processing = make(map[T]bool)
 	}
 
 	tracker.processing[ptr] = true
@@ -542,11 +523,6 @@ func numericBoundsCheck(floatVal float64, targetKind reflect.Kind) error {
 	return nil
 }
 
-// isTypedArray returns true if the input is TypedArray or DataView.
-func isTypedArray(input *Value) bool {
-	return slices.ContainsFunc(typedArrayTypes, input.isGlobalInstanceOf)
-}
-
 // processTempValue validates if temp is a valid result for the given T type.
 func processTempValue[T any](prefix string, temp any, err error, samples ...T) (v T, _ error) {
 	if err != nil {
@@ -750,6 +726,24 @@ func verifyGoFunc(fnType reflect.Type, sample any) error {
 		return newInvalidGoTypeErr("function", sample)
 	}
 
+	if err, ok := funcChecks.Load(fnType); ok {
+		err, _ := err.(error)
+
+		return err
+	}
+
+	err := checkGoFunc(fnType)
+	funcChecks.Store(fnType, err)
+
+	return err
+}
+
+// funcChecks caches the result of checkGoFunc per function type.
+var funcChecks sync.Map // reflect.Type -> error
+
+// checkGoFunc reports whether the parameters and results of a function type
+// can be converted.
+func checkGoFunc(fnType reflect.Type) error {
 	// Validate that all return values are convertible to JS
 	for out := range fnType.Outs() {
 		err := isConvertibleToJs(out, make(map[reflect.Type]bool), "func return")

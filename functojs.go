@@ -220,6 +220,10 @@ func jsArgToGo(jsArg *Value, argType reflect.Type) (reflect.Value, error) {
 		return handlePointerArgument(jsArg, argType)
 	}
 
+	if goVal, ok := jsBasicToGo(jsArg, argType); ok {
+		return goVal, nil
+	}
+
 	goZeroVal := createNonNilSample(argType)
 
 	goVal, err := toGo(jsArg, goZeroVal)
@@ -303,4 +307,32 @@ func goFuncResultToJs(c *Runtime, results []reflect.Value) (*Value, error) {
 	}
 
 	return c.ToValue(jsValues)
+}
+
+// jsBasicToGo converts a string, boolean or finite number to a Go type of
+// the same basic kind, like the generic conversion but without its
+// overhead. It reports false for other combinations and for values the
+// generic conversion rejects, so that it reports the error.
+func jsBasicToGo(jsArg *Value, argType reflect.Type) (reflect.Value, bool) {
+	switch kind := argType.Kind(); {
+	case kind == reflect.String && jsArg.IsString():
+		return reflect.ValueOf(jsArg.String()).Convert(argType), true
+	case kind == reflect.Bool && jsArg.IsBool():
+		return reflect.ValueOf(jsArg.Bool()).Convert(argType), true
+	case kind >= reflect.Int && kind <= reflect.Float64 && canConvertToGoNumber(jsArg) == nil:
+		// What jsNumericToGoConverter.Convert does, without allocating it.
+		f := jsArg.Float64()
+		if numericBoundsCheck(f, kind) != nil {
+			return reflect.Value{}, false
+		}
+
+		n, err := floatToInt(f, kind)
+		if err != nil {
+			return reflect.Value{}, false
+		}
+
+		return reflect.ValueOf(n).Convert(argType), true
+	}
+
+	return reflect.Value{}, false
 }

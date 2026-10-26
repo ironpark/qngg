@@ -97,25 +97,3 @@ JSContext *QJS_GetContext(QJSRuntime *qjs)
 {
   return qjs->context;
 }
-
-void QJS_UpdateStackTop(QJSRuntime *qjs)
-{
-  JS_UpdateStackTop(qjs->runtime);
-}
-
-QJSRuntime *qjs = NULL;
-
-QJSRuntime *QJS_GetRuntime()
-{
-  return qjs;
-}
-
-void initialize()
-{
-  if (qjs != NULL)
-    return;
-  size_t memory_limit = 0;
-  size_t gc_threshold = 0;
-  size_t max_stack_size = 0;
-  qjs = New_QJS(memory_limit, max_stack_size, gc_threshold);
-}

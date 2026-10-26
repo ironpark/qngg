@@ -2,6 +2,7 @@
 #include <sys/stat.h>
 #include <limits.h>
 #include <float.h>
+#include <math.h>
 
 #ifdef QJS_DEBUG_RUNTIME_ADDRESS
 /**
@@ -33,69 +34,6 @@ void randomize_address_space(void)
     }
 }
 #endif
-
-JSValue JS_NewNull() { return JS_NULL; }
-JSValue JS_NewUndefined() { return JS_UNDEFINED; }
-JSValue JS_NewUninitialized() { return JS_UNINITIALIZED; }
-
-JSValue QJS_ThrowSyntaxError(JSContext *ctx, const char *fmt)
-{
-    return JS_ThrowSyntaxError(ctx, "%s", fmt);
-}
-JSValue QJS_ThrowTypeError(JSContext *ctx, const char *fmt)
-{
-    return JS_ThrowTypeError(ctx, "%s", fmt);
-}
-JSValue QJS_ThrowReferenceError(JSContext *ctx, const char *fmt)
-{
-    return JS_ThrowReferenceError(ctx, "%s", fmt);
-}
-JSValue QJS_ThrowRangeError(JSContext *ctx, const char *fmt)
-{
-    return JS_ThrowRangeError(ctx, "%s", fmt);
-}
-JSValue QJS_ThrowInternalError(JSContext *ctx, const char *fmt)
-{
-    return JS_ThrowInternalError(ctx, "%s", fmt);
-}
-
-// int QJS_TimeoutHandler(JSRuntime *rt, void *opaque)
-// {
-//     TimeoutArgs *ts = (TimeoutArgs *)opaque;
-//     time_t timeout = ts->timeout;
-//     time_t start = ts->start;
-//     if (timeout <= 0)
-//     {
-//         return 0;
-//     }
-
-//     time_t now = time(NULL);
-//     if (now - start > timeout)
-//     {
-//         free(ts);
-//         return 1;
-//     }
-
-//     return 0;
-// }
-
-// void SetExecuteTimeout(JSRuntime *rt, time_t timeout)
-// {
-//     TimeoutArgs *ts = malloc(sizeof(TimeoutArgs));
-//     ts->start = time(NULL);
-//     ts->timeout = timeout;
-//     JS_SetInterruptHandler(rt, &QJS_TimeoutHandler, ts);
-// }
-
-// int QJS_InterruptHandler(JSRuntime *rt, void *handlerArgs)
-// {
-//     return goInterruptHandler(rt, handlerArgs);
-// }
-
-// void SetInterruptHandler(JSRuntime *rt, void *handlerArgs)
-// {
-//     JS_SetInterruptHandler(rt, &QJS_InterruptHandler, handlerArgs);
-// }
 
 // Copied from "quickjs/qjs.c"
 #ifndef countof
@@ -259,377 +197,308 @@ char *detect_entry_point(char *module_name)
     return module_name;
 }
 
-bool QJS_IsUndefined(JSValue val)
-{
-    return JS_IsUndefined(val);
-}
+// Results that may not fit in the caller's buffer `buf` of `cap` bytes are
+// returned as (ptr << 32 | len): ptr is 0 if the data was copied into buf,
+// and otherwise points to memory the caller releases as documented. Failures
+// return UINT64_MAX, with the exception left pending.
 
-bool QJS_IsException(JSValue val)
+// Copies data into buf if it fits, or else returns it by pointer.
+static uint64_t out_bytes(const void *data, size_t len, void *buf, uint32_t cap)
 {
-    return JS_IsException(val);
-}
-
-bool QJS_IsError(JSContext *ctx, JSValue val)
-{
-    return JS_IsError(val);
-}
-
-bool QJS_IsUninitialized(JSValue val)
-{
-    return JS_IsUninitialized(val);
-}
-
-bool QJS_IsString(JSValue val)
-{
-    return JS_IsString(val);
-}
-
-bool QJS_IsSymbol(JSValue val)
-{
-    return JS_IsSymbol(val);
-}
-
-bool QJS_IsPromise(JSContext *ctx, JSValue v)
-{
-    JSPromiseStateEnum state = JS_PromiseState(ctx, v);
-    if (state == JS_PROMISE_PENDING ||
-        state == JS_PROMISE_FULFILLED ||
-        state == JS_PROMISE_REJECTED)
+    if (len <= cap)
     {
-        return true;
-    }
-    return false;
-}
-
-bool QJS_IsFunction(JSContext *ctx, JSValue v)
-{
-    return JS_IsFunction(ctx, v);
-}
-
-bool QJS_IsConstructor(JSContext *ctx, JSValue v)
-{
-    return JS_IsConstructor(ctx, v);
-}
-
-bool QJS_IsInstanceOf(JSContext *ctx, JSValue v, JSValue obj)
-{
-    return JS_IsInstanceOf(ctx, v, obj) == 0 ? false : true;
-}
-
-bool QJS_IsObject(JSValue v)
-{
-    return JS_IsObject(v);
-}
-
-bool QJS_IsNumber(JSValue v)
-{
-    return JS_IsNumber(v);
-}
-
-bool QJS_IsBigInt(JSValue v)
-{
-    return JS_IsBigInt(v);
-}
-
-bool QJS_IsBool(JSValue v)
-{
-    return JS_IsBool(v);
-}
-
-bool QJS_IsNull(JSValue v)
-{
-    return JS_IsNull(v);
-}
-
-bool QJS_IsArray(JSValue v)
-{
-    return JS_IsArray(v);
-}
-
-/**
- * Packs a malloc'd buffer into a malloc'd uint64_t holding its address (high
- * 32 bits) and length (low 32 bits). The caller frees both. On allocation
- * failure `data` is freed and NULL is returned.
- */
-static uint64_t *pack_buffer(void *data, size_t len)
-{
-    uint64_t *result = malloc(sizeof(uint64_t));
-    if (!result)
-    {
-        free(data);
-        return NULL;
+        memcpy(buf, data, len);
+        return len;
     }
 
-    *result = ((uint64_t)(uintptr_t)data << 32) | (uint32_t)len;
-    return result;
+    return ((uint64_t)(uintptr_t)data << 32) | (uint32_t)len;
 }
 
-/**
- * Copies a string obtained from JS_ToCString and friends into malloc'd memory,
- * releases the original and packs the copy with pack_buffer.
- */
-static uint64_t *pack_cstring(JSContext *ctx, const char *str)
+static uint64_t out_cstring(JSContext *ctx, const char *str, size_t len, char *buf, uint32_t cap)
 {
     if (!str)
-    {
-        return NULL;
-    }
+        return UINT64_MAX;
 
-    size_t len = strlen(str);
-    char *copy = malloc(len + 1);
-    if (copy)
-    {
-        memcpy(copy, str, len + 1);
-    }
-    JS_FreeCString(ctx, str);
+    uint64_t res = out_bytes(str, len, buf, cap);
+    if (res == len)
+        JS_FreeCString(ctx, str);
 
-    return copy ? pack_buffer(copy, len) : NULL;
+    return res;
 }
 
-/**
- * Converts a JSValue to a C string and returns a packed uint64_t value
- * containing both the string's memory address (high 32 bits) and length (low 32 bits).
- * NOTE: The caller must free both the returned pointer and the string.
- * NOTE: This assumes a 32-bit memory model (as in WebAssembly 1.0).
- */
-uint64_t *QJS_ToCString(JSContext *ctx, JSValueConst val)
+// Converts a value to a string like String(val). A string returned by
+// pointer is released with JS_FreeCString.
+uint64_t QJS_ToStringBuf(JSContext *ctx, JSValueConst val, char *buf, uint32_t cap)
 {
-    return pack_cstring(ctx, JS_ToCString(ctx, val));
+    size_t len;
+    const char *str = JS_ToCStringLen(ctx, &len, val);
+    return out_cstring(ctx, str, len, buf, cap);
 }
 
-int64_t QJS_ToInt64(JSContext *ctx, JSValue val)
+// Returns the name of an atom. A string returned by pointer is released
+// with JS_FreeCString.
+uint64_t QJS_AtomToStringBuf(JSContext *ctx, JSAtom atom, char *buf, uint32_t cap)
+{
+    size_t len;
+    const char *str = JS_AtomToCStringLen(ctx, &len, atom);
+    return out_cstring(ctx, str, len, buf, cap);
+}
+
+// Returns JSON.stringify(val), or "undefined" for values JSON cannot
+// represent. A string returned by pointer is released with JS_FreeCString.
+uint64_t QJS_JSONStringifyBuf(JSContext *ctx, JSValueConst val, char *buf, uint32_t cap)
+{
+    JSValue json = JS_JSONStringify(ctx, val, JS_NULL, JS_NULL);
+    if (JS_IsException(json))
+        return UINT64_MAX;
+
+    size_t len;
+    const char *str = JS_ToCStringLen(ctx, &len, json);
+    JS_FreeValue(ctx, json);
+    return out_cstring(ctx, str, len, buf, cap);
+}
+
+// Returns the contents of an ArrayBuffer as (ptr << 32 | len), valid until
+// JavaScript runs again, or UINT64_MAX with the exception left pending.
+uint64_t QJS_GetArrayBuffer(JSContext *ctx, JSValueConst obj)
+{
+    size_t len = 0;
+    uint8_t *data = JS_GetArrayBuffer(ctx, &len, obj);
+    if (!data)
+        return UINT64_MAX;
+
+    return ((uint64_t)(uintptr_t)data << 32) | (uint32_t)len;
+}
+
+// QJS_GPN_SKIP_LENGTH makes QJS_GetOwnPropertyAtoms leave out `length`.
+#define QJS_GPN_SKIP_LENGTH (1 << 8)
+
+// Returns the atoms of the own properties of obj selected by the JS_GPN_*
+// flags and QJS_GPN_SKIP_LENGTH, as uint32 values, with lengths in bytes.
+// The caller frees the atoms with QJS_FreeAtoms, and an array returned by
+// pointer with free.
+uint64_t QJS_GetOwnPropertyAtoms(JSContext *ctx, JSValueConst obj, int flags, uint32_t *buf, uint32_t cap)
+{
+    cap /= sizeof(uint32_t);
+
+    JSPropertyEnum *tab;
+    uint32_t len;
+    if (JS_GetOwnPropertyNames(ctx, &tab, &len, obj, flags & ~QJS_GPN_SKIP_LENGTH) < 0)
+        return UINT64_MAX;
+
+    uint32_t *atoms = buf;
+    if (len > cap)
+    {
+        atoms = malloc(len * sizeof(uint32_t));
+        if (!atoms)
+        {
+            JS_FreePropertyEnum(ctx, tab, len);
+            JS_ThrowOutOfMemory(ctx);
+            return UINT64_MAX;
+        }
+    }
+
+    JSAtom skip = JS_ATOM_NULL;
+    if (flags & QJS_GPN_SKIP_LENGTH)
+        skip = JS_NewAtom(ctx, "length");
+
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < len; i++)
+    {
+        if (tab[i].atom == skip)
+            JS_FreeAtom(ctx, tab[i].atom);
+        else
+            atoms[n++] = tab[i].atom;
+    }
+
+    if (skip != JS_ATOM_NULL)
+        JS_FreeAtom(ctx, skip);
+
+    // The atoms now belong to the caller. The array comes from the QuickJS
+    // allocator, so it must not be released with free.
+    js_free(ctx, tab);
+
+    uint32_t size = n * sizeof(uint32_t);
+    return atoms == buf ? size : ((uint64_t)(uintptr_t)atoms << 32) | size;
+}
+
+// Frees atoms returned by QJS_GetOwnPropertyAtoms.
+void QJS_FreeAtoms(JSContext *ctx, const uint32_t *atoms, uint32_t len)
+{
+    for (uint32_t i = 0; i < len; i++)
+        JS_FreeAtom(ctx, atoms[i]);
+}
+
+// Property access by name. Names are UTF-8 of the given length and need no
+// NUL terminator. Setters take over val, after duplicating it if dup is set.
+
+JSValue QJS_GetPropertyLen(JSContext *ctx, JSValueConst obj, const char *name, size_t len)
+{
+    JSAtom atom = JS_NewAtomLen(ctx, name, len);
+    if (atom == JS_ATOM_NULL)
+        return JS_EXCEPTION;
+
+    JSValue val = JS_GetProperty(ctx, obj, atom);
+    JS_FreeAtom(ctx, atom);
+    return val;
+}
+
+int QJS_SetPropertyLen(JSContext *ctx, JSValueConst obj, const char *name, size_t len, JSValue val, int dup)
+{
+    if (dup)
+        val = JS_DupValue(ctx, val);
+
+    JSAtom atom = JS_NewAtomLen(ctx, name, len);
+    if (atom == JS_ATOM_NULL)
+    {
+        JS_FreeValue(ctx, val);
+        return -1;
+    }
+
+    int ret = JS_SetProperty(ctx, obj, atom, val);
+    JS_FreeAtom(ctx, atom);
+    return ret;
+}
+
+int QJS_HasPropertyLen(JSContext *ctx, JSValueConst obj, const char *name, size_t len)
+{
+    JSAtom atom = JS_NewAtomLen(ctx, name, len);
+    if (atom == JS_ATOM_NULL)
+        return -1;
+
+    int ret = JS_HasProperty(ctx, obj, atom);
+    JS_FreeAtom(ctx, atom);
+    return ret;
+}
+
+int QJS_DeletePropertyLen(JSContext *ctx, JSValueConst obj, const char *name, size_t len)
+{
+    JSAtom atom = JS_NewAtomLen(ctx, name, len);
+    if (atom == JS_ATOM_NULL)
+        return -1;
+
+    int ret = JS_DeleteProperty(ctx, obj, atom, 0);
+    JS_FreeAtom(ctx, atom);
+    return ret;
+}
+
+// Property access by key value, such as a symbol. The setter does not take
+// over val.
+
+JSValue QJS_GetPropertyValue(JSContext *ctx, JSValueConst obj, JSValueConst key)
+{
+    JSAtom atom = JS_ValueToAtom(ctx, key);
+    if (atom == JS_ATOM_NULL)
+        return JS_EXCEPTION;
+
+    JSValue val = JS_GetProperty(ctx, obj, atom);
+    JS_FreeAtom(ctx, atom);
+    return val;
+}
+
+int QJS_SetPropertyValue(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst val)
+{
+    JSAtom atom = JS_ValueToAtom(ctx, key);
+    if (atom == JS_ATOM_NULL)
+        return -1;
+
+    int ret = JS_SetProperty(ctx, obj, atom, JS_DupValue(ctx, val));
+    JS_FreeAtom(ctx, atom);
+    return ret;
+}
+
+int QJS_SetPropertyUint32(JSContext *ctx, JSValueConst obj, uint32_t idx, JSValue val, int dup)
+{
+    if (dup)
+        val = JS_DupValue(ctx, val);
+
+    return JS_SetPropertyUint32(ctx, obj, idx, val);
+}
+
+// Conversions. They return 0 when the conversion throws, leaving the
+// exception pending.
+
+int64_t QJS_ToInt64(JSContext *ctx, JSValueConst val)
 {
     int64_t i64;
-    int ret = JS_ToInt64(ctx, &i64, val);
-    if (ret != 0)
-    {
-        return 0;
-    }
-    return i64;
+    return JS_ToInt64(ctx, &i64, val) ? 0 : i64;
 }
 
-int32_t QJS_ToInt32(JSContext *ctx, JSValue val)
+int32_t QJS_ToInt32(JSContext *ctx, JSValueConst val)
 {
     int32_t i32;
-    int ret = JS_ToInt32(ctx, &i32, val);
-    if (ret != 0)
-    {
-        return 0;
-    }
-
-    return i32;
+    return JS_ToInt32(ctx, &i32, val) ? 0 : i32;
 }
 
-uint32_t QJS_ToUint32(JSContext *ctx, JSValue val)
+uint32_t QJS_ToUint32(JSContext *ctx, JSValueConst val)
 {
     uint32_t u32;
-    int ret = JS_ToUint32(ctx, &u32, val);
-    if (ret != 0)
-    {
-        return 0;
-    }
-    return u32;
+    return JS_ToUint32(ctx, &u32, val) ? 0 : u32;
 }
 
-double QJS_ToFloat64(JSContext *ctx, JSValue val)
+double QJS_ToFloat64(JSContext *ctx, JSValueConst val)
 {
     double d;
-    int ret = JS_ToFloat64(ctx, &d, val);
-    if (ret != 0)
-    {
-        return 0.0;
-    }
-    return d;
+    return JS_ToFloat64(ctx, &d, val) ? 0.0 : d;
 }
 
-double QJS_ToEpochTime(JSContext *ctx, JSValue val)
+// Returns the time of a Date in milliseconds since the epoch, or NaN.
+double QJS_ToEpochTime(JSContext *ctx, JSValueConst val)
 {
-    // val is JSValue create from JS_NewDate
-    // First check if val is a Date object
-    if (!JS_IsDate(val))
-    {
-        return 0.0; // Return 0 for non-Date objects
-    }
+    JSAtom get_time = JS_NewAtom(ctx, "getTime");
+    JSValue time = JS_Invoke(ctx, val, get_time, 0, NULL);
+    JS_FreeAtom(ctx, get_time);
+    double ms = NAN;
+    if (JS_IsException(time) || JS_ToFloat64(ctx, &ms, time))
+        JS_FreeValue(ctx, JS_GetException(ctx));
 
-    // Get the "getTime" method from the Date object
-    JSAtom getTime_atom = JS_NewAtom(ctx, "getTime");
-    JSValue getTime_func = JS_GetProperty(ctx, val, getTime_atom);
-    JS_FreeAtom(ctx, getTime_atom);
-
-    if (JS_IsException(getTime_func))
-    {
-        JS_FreeValue(ctx, getTime_func);
-        return 0.0;
-    }
-
-    // Call getTime() method
-    JSValue result = JS_Call(ctx, getTime_func, val, 0, NULL);
-    JS_FreeValue(ctx, getTime_func);
-
-    if (JS_IsException(result))
-    {
-        JS_FreeValue(ctx, result);
-        return 0.0;
-    }
-
-    // Convert the result to double (milliseconds since epoch)
-    double epoch_ms = QJS_ToFloat64(ctx, result);
-    JS_FreeValue(ctx, result);
-
-    return epoch_ms;
-}
-
-JSValue QJS_NewString(JSContext *ctx, const char *str)
-{
-    return JS_NewString(ctx, str);
-}
-
-JSValue QJS_NewInt64(JSContext *ctx, int64_t val)
-{
-    return JS_NewInt64(ctx, val);
-}
-
-JSValue QJS_NewUint32(JSContext *ctx, uint32_t val)
-{
-    return JS_NewUint32(ctx, val);
-}
-
-JSValue QJS_NewInt32(JSContext *ctx, int32_t val)
-{
-    return JS_NewInt32(ctx, val);
-}
-
-JSValue QJS_NewBigInt64(JSContext *ctx, int64_t val)
-{
-    return JS_NewBigInt64(ctx, val);
-}
-
-JSValue QJS_NewBigUint64(JSContext *ctx, uint64_t val)
-{
-    return JS_NewBigUint64(ctx, val);
-}
-
-JSValue QJS_NewFloat64(JSContext *ctx, uint64_t bits)
-{
-    double val = uint64_as_float64(bits); // Using the helper function from cutils.h
-    return JS_NewFloat64(ctx, val);
-}
-
-/**
- * Converts a JSAtom to a C string and returns a packed uint64_t value
- * containing both the string's memory address (high 32 bits) and length (low 32 bits).
- * NOTE: The caller must free both the returned pointer and the string.
- */
-uint64_t *QJS_AtomToCString(JSContext *ctx, JSAtom atom)
-{
-    return pack_cstring(ctx, JS_AtomToCString(ctx, atom));
-}
-
-// returns a packed uint64_t value containing both the string's memory address (high 32 bits) and length (low 32 bits).
-uint64_t *QJS_GetOwnPropertyNames(JSContext *ctx, JSValue v)
-{
-    JSPropertyEnum *ptr;
-    uint32_t size;
-
-    int result = JS_GetOwnPropertyNames(
-        ctx,
-        &ptr,
-        &size,
-        v,
-        JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK | JS_GPN_PRIVATE_MASK);
-
-    if (result < 0)
-    {
-        return NULL;
-    }
-
-    uint64_t *packed_result = malloc(sizeof(uint64_t));
-    if (!packed_result)
-    {
-        // Free the property array if allocation fails
-        js_free(ctx, ptr);
-        return NULL;
-    }
-
-    // Pack the pointer and size into the allocated memory
-    *packed_result = ((uint64_t)(uintptr_t)ptr << 32) | (uint32_t)size;
-    return packed_result;
+    JS_FreeValue(ctx, time);
+    return ms;
 }
 
 JSValue QJS_ParseJSON(JSContext *ctx, const char *buf)
 {
-    size_t len = strlen(buf);
-    JSValue obj = JS_ParseJSON(ctx, buf, len, "<parse_json>");
+    return JS_ParseJSON(ctx, buf, strlen(buf), "<parse_json>");
+}
+
+// Returns the BigInt written in decimal in `digits`, with an optional leading
+// minus sign. QuickJS has no API for BigInts beyond 64 bits, so this
+// evaluates the literal, which cannot run anything else once validated.
+JSValue QJS_NewBigIntDecimal(JSContext *ctx, const char *digits, size_t len)
+{
+    size_t start = len > 0 && digits[0] == '-';
+    if (start == len)
+        return JS_ThrowSyntaxError(ctx, "invalid BigInt");
+    for (size_t i = start; i < len; i++)
+        if (digits[i] < '0' || digits[i] > '9')
+            return JS_ThrowSyntaxError(ctx, "invalid BigInt");
+
+    char *src = js_malloc(ctx, len + 2);
+    if (!src)
+        return JS_EXCEPTION;
+    memcpy(src, digits, len);
+    src[len] = 'n';
+    src[len + 1] = '\0';
+
+    JSValue v = JS_Eval(ctx, src, len + 1, "<bigint>", JS_EVAL_TYPE_GLOBAL);
+    js_free(ctx, src);
+    return v;
+}
+
+// Returns `new globalThis[name](...argv)`, or undefined if there is no such
+// constructor.
+JSValue QJS_NewGlobal(JSContext *ctx, const char *name, int argc, JSValueConst *argv)
+{
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue ctor = JS_GetPropertyStr(ctx, global, name);
+    JS_FreeValue(ctx, global);
+    if (JS_IsException(ctor))
+        return ctor;
+
+    JSValue obj = JS_UNDEFINED;
+    if (JS_IsConstructor(ctx, ctor))
+        obj = JS_CallConstructor(ctx, ctor, argc, argv);
+
+    JS_FreeValue(ctx, ctor);
     return obj;
-}
-
-JSValue QJS_NewBool(JSContext *ctx, int val)
-{
-    return JS_NewBool(ctx, val == 0 ? 0 : 1);
-}
-
-uint64_t *QJS_GetArrayBuffer(JSContext *ctx, JSValue obj)
-{
-    size_t len = 0;
-    uint8_t *arr = JS_GetArrayBuffer(ctx, &len, obj);
-    if (!arr)
-    {
-        return NULL;
-    }
-
-    // The buffer belongs to the ArrayBuffer; hand out a copy the caller owns.
-    uint8_t *copy = malloc(len ? len : 1);
-    if (!copy)
-    {
-        return NULL;
-    }
-    memcpy(copy, arr, len);
-
-    return pack_buffer(copy, len);
-}
-
-uint64_t *QJS_JSONStringify(JSContext *ctx, JSValue v)
-{
-    JSValue ref = JS_JSONStringify(ctx, v, JS_NULL, JS_NULL);
-    const char *str = JS_ToCString(ctx, ref);
-    JS_FreeValue(ctx, ref);
-
-    return pack_cstring(ctx, str);
-}
-
-int QJS_SetPropertyUint32(JSContext *ctx, JSValue this_obj, uint64_t idx, JSValue val)
-{
-    uint32_t idx32 = (uint32_t)idx;
-    return JS_SetPropertyUint32(ctx, this_obj, idx32, val);
-}
-
-JSValue QJS_GetPropertyUint32(JSContext *ctx, JSValue this_obj, uint32_t idx)
-{
-    uint32_t idx32 = (uint32_t)idx;
-    return JS_GetPropertyUint32(ctx, this_obj, idx32);
-}
-
-int QJS_NewAtomUInt32(JSContext *ctx, uint64_t n)
-{
-    uint32_t n32 = (uint32_t)n;
-    return JS_NewAtomUInt32(ctx, n32);
-}
-
-JSValue QJS_NewArrayBufferCopy(JSContext *ctx, uint64_t addr, uint64_t len)
-{
-    uint8_t *arr = (uint8_t *)(uintptr_t)addr;
-    return JS_NewArrayBufferCopy(ctx, arr, len);
-}
-
-JSValue QJS_Call(JSContext *ctx, JSValue func, JSValue this, int argc, uint64_t argv)
-{
-    JSValue *js_argv = (JSValue *)(uintptr_t)argv;
-    return JS_Call(ctx, func, this, argc, js_argv);
-}
-
-void QJS_Panic()
-{
-    // Handle panic situation
-    fprintf(stderr, "QJS Panic: Unrecoverable error occurred\n");
-    abort();
 }

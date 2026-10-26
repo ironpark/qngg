@@ -1,7 +1,9 @@
 package qngg
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 )
 
@@ -111,7 +113,7 @@ func (r *Runtime) LoadModuleBytecode(ctx context.Context, bytecode []byte) error
 
 func (r *Runtime) eval(ctx context.Context, in evalInput, config evalConfig) (result *Value, err error) {
 	err = r.withEvalOptions(ctx, in, config.flags, func(opts uint64) (err error) {
-		result, err = r.result(r.call("QJS_Eval", r.jsCtx, opts))
+		result, err = r.result(r.call(xEval, r.jsCtx, opts))
 
 		return err
 	})
@@ -123,7 +125,7 @@ func (r *Runtime) load(ctx context.Context, in evalInput) error {
 	return r.withEvalOptions(ctx, in, jsEvalTypeModule|jsEvalFlagStrict, func(opts uint64) error {
 		// The module value stays referenced by the context's module list;
 		// it must not be freed as a value.
-		if raw := r.call("QJS_Load", r.jsCtx, opts); tagOf(raw) == tagException {
+		if raw := r.call(xLoad, r.jsCtx, opts); tagOf(raw) == tagException {
 			return r.takeException()
 		}
 
@@ -133,12 +135,14 @@ func (r *Runtime) load(ctx context.Context, in evalInput) error {
 
 func (r *Runtime) compile(in evalInput, config evalConfig) (bytecode []byte, err error) {
 	err = r.withEvalOptions(context.Background(), in, config.flags, func(opts uint64) error {
-		box := r.call("QJS_Compile2", r.jsCtx, opts)
-		if box == 0 {
+		res := r.call(xCompile, r.jsCtx, opts)
+		if res == outFailed {
 			return r.takeException()
 		}
 
-		bytecode = r.takeBytes(box)
+		ptr, size := uint32(res>>32), uint32(res)
+		bytecode = bytes.Clone(r.view(ptr, size))
+		r.call(xJSFree, r.jsCtx, uint64(ptr))
 
 		return nil
 	})
@@ -161,38 +165,30 @@ func (r *Runtime) withEvalOptions(
 	defer r.exit()
 	defer recoverInterrupt(r, &err)
 
-	opts, free := r.newEvalOptions(in, flags)
-	defer free()
+	var source, bytecode tmp
 
-	return fn(opts)
-}
-
-// newEvalOptions builds a QJSEvalOptions struct in wasm memory. free
-// releases it and the buffers it points to.
-func (r *Runtime) newEvalOptions(in evalInput, flags uint64) (opts uint64, free func()) {
-	var buffers []uint64
-
-	alloc := func(ptr uint64) uint64 {
-		buffers = append(buffers, ptr)
-
-		return ptr
-	}
-
-	var source, bytecode uint64
 	if in.source != nil {
-		source = alloc(r.newCString(*in.source))
+		source = r.pushCString(*in.source)
+		defer r.drop(source)
 	}
 
 	if in.bytecode != nil {
-		bytecode = alloc(r.newBuffer(in.bytecode))
+		bytecode = r.push(in.bytecode)
+		defer r.drop(bytecode)
 	}
 
-	file := alloc(r.newCString(in.name))
-	opts = alloc(r.call("QJS_CreateEvalOption", source, bytecode, uint64(len(in.bytecode)), file, flags))
+	file := r.pushCString(in.name)
+	defer r.drop(file)
 
-	return opts, func() {
-		for _, ptr := range buffers {
-			r.free(ptr)
-		}
+	// QJSEvalOptions on wasm32: buf, bytecode_buf, bytecode_len, filename
+	// and eval_flags, each 4 bytes.
+	opts := r.alloc(5 * 4)
+	defer r.drop(opts)
+
+	view := r.view(opts.ptr, 5*4)
+	for i, field := range [5]uint32{source.ptr, bytecode.ptr, uint32(len(in.bytecode)), file.ptr, uint32(flags)} {
+		binary.LittleEndian.PutUint32(view[4*i:], field)
 	}
+
+	return fn(uint64(opts.ptr))
 }

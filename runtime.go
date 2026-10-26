@@ -1,7 +1,6 @@
 package qngg
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
 	"errors"
@@ -56,16 +55,6 @@ type Config struct {
 	quickJSWasm []byte
 }
 
-// wasmFunc is a cached export of the QuickJS module.
-type wasmFunc struct {
-	fn *wasmtime.Func
-	// size of the args-and-results buffer: max(params, results)
-	slots     int
-	hasResult bool
-	// whether the single result is a 32-bit value that must be zero-extended
-	result32 bool
-}
-
 // Runtime is a QuickJS runtime with its JavaScript context, running in its
 // own WebAssembly instance. A Runtime is not safe for concurrent use; use a
 // Pool to run JavaScript from several goroutines.
@@ -75,10 +64,9 @@ type Runtime struct {
 	linker    *wasmtime.Linker
 	instance  *wasmtime.Instance
 	engine    *wasmtime.Engine
-	funcs     map[string]*wasmFunc
-	mallocFn  *wasmFunc
-	freeFn    *wasmFunc
+	funcs     [numExports]*wasmFunc
 	mem       *wasmMemory
+	scratch   scratch
 	interrupt *interrupter
 	// argument buffers for invoke, one per level of nested wasm calls
 	callBufs  [][]wasmtime.ValRaw
@@ -125,7 +113,6 @@ func New(config Config) (runtime *Runtime, err error) {
 		engine:    engine,
 		interrupt: &interrupter{},
 		registry:  newProxyRegistry(),
-		funcs:     map[string]*wasmFunc{},
 	}
 
 	if err := runtime.instantiate(module); err != nil {
@@ -162,7 +149,7 @@ func (r *Runtime) Close() (err error) {
 	r.interrupt.unwatch()
 	r.release()
 	r.registry.Clear()
-	r.mallocFn, r.freeFn, r.mem = nil, nil, nil
+	r.mem = nil
 
 	return err
 }
@@ -177,24 +164,23 @@ func (r *Runtime) freeQJS() (err error) {
 
 	qjs := r.qjs
 	r.qjs = 0
-	r.call("QJS_Free", qjs)
+	r.call(xQJSFree, qjs)
 
 	return nil
 }
 
 // initializeRuntime sets up the runtime components after module instantiation.
 func (r *Runtime) initializeRuntime() {
-	r.mallocFn = r.export("malloc")
-	r.freeFn = r.export("free")
 	r.mem = &wasmMemory{store: r.store, mem: r.instance.GetExport(r.store, "memory").Memory()}
+	r.scratch.base = uint32(r.malloc(scratchSize))
 	r.qjs = r.call(
-		"New_QJS",
+		xNewQJS,
 		uint64(r.config.MemoryLimit),
 		uint64(r.config.MaxStackSize),
 		uint64(r.config.GCThreshold),
 	)
-	r.jsCtx = r.call("QJS_GetContext", r.qjs)
-	r.global = r.borrowValue(r.call("JS_GetGlobalObject", r.jsCtx))
+	r.jsCtx = r.call(xGetContext, r.qjs)
+	r.global = r.borrowValue(r.call(xGetGlobalObject, r.jsCtx))
 }
 
 // interrupter tracks the context of the current call and stops running
@@ -298,35 +284,6 @@ func recoverInterrupt(r *Runtime, err *error) {
 	panic(rec)
 }
 
-// export returns the cached export `name`, looking it up on first use.
-func (r *Runtime) export(name string) *wasmFunc {
-	if f, ok := r.funcs[name]; ok {
-		return f
-	}
-
-	fn := r.instance.GetFunc(r.store, name)
-	if fn == nil {
-		panic(fmt.Errorf("WASM function %s not found", name))
-	}
-
-	ty := fn.Type(r.store)
-	params, results := ty.Params(), ty.Results()
-	f := &wasmFunc{
-		fn:        fn,
-		slots:     max(len(params), len(results)),
-		hasResult: len(results) > 0,
-	}
-
-	if len(results) == 1 {
-		kind := results[0].Kind()
-		f.result32 = kind == wasmtime.KindI32 || kind == wasmtime.KindF32
-	}
-
-	r.funcs[name] = f
-
-	return f
-}
-
 // invoke calls `f` with raw wasm arguments: every value is passed as a
 // uint64 holding the little-endian bits of the wasm value. It returns the
 // first result encoded the same way.
@@ -376,16 +333,16 @@ func (r *Runtime) invoke(f *wasmFunc, args ...uint64) (uint64, error) {
 	return result, nil
 }
 
-// call invokes the wasm export `name`. It panics if the call fails, which
-// only happens when the runtime is closed or interrupted, or on a bug.
-func (r *Runtime) call(name string, args ...uint64) uint64 {
-	result, err := r.invoke(r.export(name), args...)
+// call invokes the wasm export x. It panics if the call fails, which only
+// happens when the runtime is closed or interrupted, or on a bug.
+func (r *Runtime) call(x export, args ...uint64) uint64 {
+	result, err := r.invoke(r.export(x), args...)
 	if err != nil {
 		if errors.Is(err, ErrRuntimeClosed) || errors.Is(err, ErrInterrupted) {
 			panic(err)
 		}
 
-		panic(fmt.Errorf("failed to call %s: %w\nstack: %s", name, err, debug.Stack()))
+		panic(fmt.Errorf("failed to call %s: %w\nstack: %s", x, err, debug.Stack()))
 	}
 
 	return result
@@ -393,12 +350,7 @@ func (r *Runtime) call(name string, args ...uint64) uint64 {
 
 // malloc allocates size bytes of wasm memory.
 func (r *Runtime) malloc(size uint64) uint64 {
-	ptr, err := r.invoke(r.mallocFn, size)
-	if err != nil {
-		panic(fmt.Errorf("failed to allocate memory: %w", err))
-	}
-
-	return ptr
+	return r.call(xMalloc, size)
 }
 
 // free releases wasm memory from malloc or a C helper. It is a no-op once
@@ -408,9 +360,7 @@ func (r *Runtime) free(ptr uint64) {
 		return
 	}
 
-	if _, err := r.invoke(r.freeFn, ptr); err != nil {
-		panic(fmt.Errorf("failed to free memory: %w", err))
-	}
+	r.call(xFree, ptr)
 }
 
 // freeValue releases a reference to a JS value. Like free, it is a no-op
@@ -420,7 +370,7 @@ func (r *Runtime) freeValue(raw uint64) {
 		return
 	}
 
-	r.call("QJS_FreeValue", r.jsCtx, raw)
+	r.call(xFreeValue, r.jsCtx, raw)
 }
 
 // dupValue returns a new reference to a JS value.
@@ -429,57 +379,7 @@ func (r *Runtime) dupValue(raw uint64) uint64 {
 		return raw
 	}
 
-	return r.call("QJS_CloneValue", r.jsCtx, raw)
-}
-
-// newCString copies s into wasm memory as a NUL-terminated string. The
-// caller frees it.
-func (r *Runtime) newCString(s string) uint64 {
-	ptr := r.malloc(uint64(len(s) + 1))
-	r.mem.MustWrite(uint32(ptr), append([]byte(s), 0))
-
-	return ptr
-}
-
-// newBuffer copies b into wasm memory. The caller frees it.
-func (r *Runtime) newBuffer(b []byte) uint64 {
-	if len(b) == 0 {
-		return 0
-	}
-
-	ptr := r.malloc(uint64(len(b)))
-	r.mem.MustWrite(uint32(ptr), b)
-
-	return ptr
-}
-
-// takeString reads and frees a string handed over by a C helper as a
-// malloc'd box holding (addr<<32 | len) of a malloc'd buffer.
-func (r *Runtime) takeString(box uint64) string {
-	return string(r.takeBytes(box))
-}
-
-// takeBytes reads and frees binary data handed over like takeString. The
-// result is a copy.
-func (r *Runtime) takeBytes(box uint64) []byte {
-	if box == 0 {
-		return nil
-	}
-
-	defer r.free(box)
-
-	addr, size := r.mem.UnpackPtr(box)
-	if addr == 0 {
-		return nil
-	}
-
-	defer r.free(uint64(addr))
-
-	if size == 0 {
-		return nil
-	}
-
-	return bytes.Clone(r.mem.MustRead(addr, uint64(size)))
+	return r.call(xCloneValue, r.jsCtx, raw)
 }
 
 // newValue wraps a JS value the caller owns.
@@ -515,7 +415,7 @@ func (r *Runtime) status(res uint64) (bool, error) {
 
 // takeException clears the pending exception and returns it as an error.
 func (r *Runtime) takeException() error {
-	exc := r.newValue(r.call("JS_GetException", r.jsCtx))
+	exc := r.newValue(r.call(xGetException, r.jsCtx))
 	defer exc.Free()
 
 	return exc.toError()
@@ -523,7 +423,7 @@ func (r *Runtime) takeException() error {
 
 // clearException discards a pending exception, if any.
 func (r *Runtime) clearException() {
-	if uint32(r.call("JS_HasException", r.jsCtx)) != 0 {
-		r.freeValue(r.call("JS_GetException", r.jsCtx))
+	if uint32(r.call(xHasException, r.jsCtx)) != 0 {
+		r.freeValue(r.call(xGetException, r.jsCtx))
 	}
 }

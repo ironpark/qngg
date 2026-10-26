@@ -28,46 +28,17 @@ QNGG is a maintained fork of [fastschema/qjs](https://github.com/fastschema/qjs)
 - Requires **Go 1.27** and decodes JSON with `encoding/json/v2`.
 - Is **sandboxed by default**: no filesystem, no output and interruptible calls unless configured otherwise.
 - Has a smaller, redesigned API: one ownership rule for values, `context.Context` on every call that runs JavaScript, errors instead of silent failures and panics, and `Value.As[T]()` for conversions.
-- Fixes memory bugs inherited from upstream, such as leaked strings, property names and eval buffers, use-after-free in `JSONStringify` and a double free in `Await`.
+- Fixes memory bugs inherited from upstream, such as leaked strings, property names and eval buffers, use-after-free in `JSONStringify`, a double free in `Await`, heap corruption when converting objects, and Go functions and ProxyValues that were never released.
+- Crosses the Go/WebAssembly boundary less often: Go functions are native QuickJS closures, type checks and property access take one call each, temporary buffers come from a per-runtime scratch area instead of malloc, and struct layouts are cached per type.
 
 | `go test -bench .` (Apple M1 Ultra) | QJS on Wazero | QNGG |
 | --- | --- | --- |
-| RuntimeNew | 17 ms | 0.36 ms |
-| EvalFactorial | 97 ms | 52 ms (40 ms with `DisableInterruption`) |
-| GoFunctionCall | 168 ms | 11 ms |
-| ValueProperties | 503 µs | 220 µs |
+| RuntimeNew | 17 ms | 0.40 ms |
+| EvalFactorial | 97 ms | 52 ms (39 ms with `DisableInterruption`) |
+| GoFunctionCall | 168 ms | 4.8 ms |
+| ValueProperties | 503 µs | 88 µs |
 
-### Migrating from fastschema/qjs
-
-The API changed in ways the compiler will point out:
-
-| fastschema/qjs | QNGG |
-| --- | --- |
-| `qjs.New(qjs.Option{...})` | `qngg.New(qngg.Config{...})` |
-| `rt.Context().X(...)` | `rt.X(...)`: `Context` was merged into `Runtime` |
-| `rt.Eval(name, qjs.Code(src), qjs.TypeModule())` | `rt.Eval(ctx, name, src, qngg.AsModule())` |
-| `rt.Eval(name)` / `qjs.Bytecode(b)` | `rt.EvalFile(ctx, path)` / `rt.EvalBytecode(ctx, b)` |
-| `rt.Load(name, ...)` | `rt.LoadModule`, `LoadModuleFile`, `LoadModuleBytecode` |
-| `qjs.FlagAsync()` | `qngg.TopLevelAwait()` |
-| `Option.Context`, `CloseOnContextDone`, `MaxExecutionTime` | the `ctx` of each call: cancel it or give it a deadline |
-| `v.GetPropertyStr(n)`, `SetPropertyStr`, `GetPropertyIndex`, ... | `v.Get(n)`, `Set`, `Index`, `SetIndex`, `GetKey`, `SetKey`, `Has`, `Delete`, `Keys`: all return errors |
-| `v.InvokeJS(name, args...)`, `rt.Invoke(fn, this, args...)` | `v.Invoke(ctx, name, args...)`, `fn.Call(ctx, this, args...)` |
-| `v.CallConstructor(args...)` | `v.New(ctx, args...)` |
-| `v.JSONStringify()` | `json.Marshal(v)`: `Value` implements `json.Marshaler` |
-| `v.DateTime()`, `v.ToByteArray()` | `v.Time()`, `v.Bytes()` |
-| `qjs.ToJsValue(ctx, x)`, `qjs.ToGoValue[T](v)`, `qjs.JsFuncToGo[F](v)` | `rt.ToValue(x)`, `v.As[T]()`, `v.As[F]()` |
-| `func(this *qjs.This) (*qjs.Value, error)` | `func(call *qngg.FunctionCall) (*qngg.Value, error)` |
-| `SetAsyncFunc(name, func(this *qjs.This) { this.Promise().Resolve(v) })` | `SetAsyncFunc(name, fn)`: the promise settles with `fn`'s result or error |
-| `rt.ThrowTypeError(...)` | `return nil, &qngg.Error{Name: "TypeError", Message: ...}` |
-| `pool.Get()` / `pool.Put(rt)` | `pool.Do(ctx, func(rt *qngg.Runtime) error { ... })` |
-| `Array`, `Map`, `Set` wrappers | plain `*Value`s: `Index`, `Invoke(ctx, "get", k)`, `Keys`, ... |
-
-Behavior changes to watch for:
-
-- **Ownership**: passing a value to a method no longer takes it over. Free what you create even after `Set`ting it on an object.
-- **Sandbox**: JavaScript gets no filesystem unless `Config.CWD` is set, read-only unless `WritableCWD` is set, and its output is discarded unless `Stdout`/`Stderr` are set.
-- **Errors as values**: evaluating to an `Error` object returns the object, not a Go error. Only thrown exceptions are errors, as `*qngg.Error`.
-- **No hidden properties**: `ToValue` no longer adds `__go_type`/`__registry_id` to objects, so `As` converts them structurally. Use `NewProxyValue` to pass a Go value through JavaScript unchanged.
+Coming from fastschema/qjs? See the [migration guide](docs/migration.md).
 
 ## Features
 
@@ -76,8 +47,24 @@ Behavior changes to watch for:
 - **Interruptible**: cancel a call's context or give it a deadline to stop runaway scripts, even `for (;;) {}`.
 - **Go-JS interoperability**: convert structs, maps, slices, functions and channels both ways, or share Go values by reference with ProxyValues.
 - **No cgo**: Wasmtime is loaded at runtime through [purego](https://github.com/ebitengine/purego), so builds work with `CGO_ENABLED=0` and cross-compile without a C toolchain.
+- **Fast startup**: a new runtime takes well under a millisecond, so one per request or per tenant is affordable.
+
+QNGG fits plugin systems, user-defined rules and formulas, templating, and
+running code you do not trust.
+
+## Installation
+
+```bash
+go get github.com/ironpark/qngg
+```
+
+QNGG requires Go 1.27 or later. The Wasmtime native library is embedded, so
+there is nothing else to install (see [Wasmtime native library](#wasmtime-native-library)).
 
 ## Example Usage
+
+The snippets below assume a runtime `rt` and a context `ctx`, and return
+errors from the enclosing function.
 
 ### Basic Execution
 
@@ -112,36 +99,124 @@ func main() {
 }
 ```
 
-### Go Functions
+### Values and Memory
 
-`Set` converts Go values, functions included, and assigns them to globals. A
-leading `context.Context` parameter receives the context of the call, and a
-returned error is thrown into JavaScript.
+JavaScript values live in the QuickJS heap, not Go's, so the Go garbage
+collector cannot release them. One rule covers every method:
+
+- Every `*Value` returned to you is yours: `Free` it when done.
+- Passing a value to a method never takes it over: you still free it.
+- Values you do not own have a no-op `Free`: `Runtime.Global()`, and the
+  arguments and `this` of a `Function`, which are only valid until it returns.
+  `Clone` them to keep them longer.
+- A value returned from a `Function` is handed to JavaScript.
+- `Close` frees everything that is left, and makes further use of the runtime
+  and its values fail with `ErrRuntimeClosed`. Using a freed value fails with
+  `ErrFreed`.
 
 ```go
-rt.Set("add", func(a, b int) int { return a + b })
-rt.Set("lookup", func(ctx context.Context, id string) (string, error) {
+user := rt.NewObject()
+defer user.Free()
+
+name := rt.NewString("Alice")
+defer name.Free()
+
+if err := user.Set("name", name); err != nil { // name is still yours
+	return err
+}
+
+tags, err := rt.Eval(ctx, "tags.js", `["admin", "editor"]`)
+if err != nil {
+	return err
+}
+defer tags.Free()
+
+if err := user.Set("tags", tags); err != nil {
+	return err
+}
+
+keys, err := user.Keys()       // [name tags]
+out, err := json.Marshal(user) // {"name":"Alice","tags":["admin","editor"]}
+```
+
+`Value.Type()` names a value's type (`"String"`, `"Array"`, `"Map"`,
+`"Object"`, ...), and the `Is*` methods test for one. `String()`, `Int32()`,
+`Float64()` and friends convert like JavaScript does; use `As` for strict
+conversions that report errors.
+
+### Go Functions
+
+`Set` converts Go values, functions included, and assigns them to globals.
+
+```go
+if err := rt.Set("add", func(a, b int) int { return a + b }); err != nil {
+	return err
+}
+
+err := rt.Set("lookup", func(ctx context.Context, id string) (string, error) {
 	if id == "" {
 		return "", errors.New("id is required")
 	}
 	return "user:" + id, nil
 })
+if err != nil {
+	return err
+}
 
 result, err := rt.Eval(ctx, "main.js", `lookup(String(add(40, 2)))`)
+if err != nil {
+	return err
+}
+defer result.Free()
 // result.String() == "user:42"
 ```
 
-For direct access to JavaScript values, register a `Function`. Its arguments
-belong to the caller; return an `*Error` to throw a specific error type.
+How calls are converted:
+
+- Arguments are converted to the parameter types with the same rules as
+  `As`. Missing arguments are zero values, extra ones are ignored, and
+  variadic functions take the rest. An argument that does not convert, such
+  as `"x"` for an `int`, throws an error into JavaScript.
+- A leading `context.Context` parameter receives the context of the call
+  that is running the script.
+- A last `error` result is thrown into JavaScript when it is not nil. One
+  other result is returned as is, and several are returned as an array.
+
+For direct access to JavaScript values, register a `Function` instead. Its
+arguments belong to the caller; return an `*Error` to throw a specific error
+type.
 
 ```go
-rt.SetFunc("describe", func(call *qngg.FunctionCall) (*qngg.Value, error) {
+err := rt.SetFunc("describe", func(call *qngg.FunctionCall) (*qngg.Value, error) {
 	if len(call.Args()) == 0 {
 		return nil, &qngg.Error{Name: "TypeError", Message: "describe needs an argument"}
 	}
 	return call.Runtime().NewString(call.Arg(0).Type()), nil
 })
+// describe([1, 2]) === "Array"; describe() throws a TypeError
 ```
+
+### Errors
+
+A JavaScript exception is returned as an `*Error` with its name, message and
+stack. Evaluating to an `Error` object without throwing it is not an error.
+
+```go
+_, err := rt.Eval(ctx, "main.js", `JSON.parse("{")`)
+
+var jsErr *qngg.Error
+if errors.As(err, &jsErr) {
+	fmt.Println(jsErr.Name)    // SyntaxError
+	fmt.Println(jsErr.Message) // Expected property name or '}' in JSON at position 1 ...
+	fmt.Println(jsErr.Stack)   // the JavaScript stack trace, ending "at <eval> (main.js:1:5)"
+}
+```
+
+Other errors are sentinels to test with `errors.Is`: `ErrInterrupted` when a
+call's context was done, `ErrRuntimeClosed` and `ErrFreed` when a runtime or
+value is used after `Close` or `Free`. Methods without an error result, such
+as `Int32()`, panic with these instead, except `String()`, which returns
+`<invalid qngg.Value>`.
 
 ### Timeouts and Cancellation
 
@@ -270,10 +345,26 @@ module bytecode with `LoadModuleBytecode`.
 
 ### Go-JS Conversion
 
-`ToValue` (and `Set`) converts Go values to JavaScript: structs become
-objects using their `json` tags and methods, maps become objects, slices
-become arrays, functions become callable functions and `[]byte` becomes an
-ArrayBuffer. `Value.As[T]()` converts back.
+`ToValue` (and `Set`) converts Go values to JavaScript, and `Value.As[T]()`
+converts back to the Go type you ask for:
+
+| Go | JavaScript |
+| --- | --- |
+| `bool`, numbers, `string` | boolean, number, string |
+| `nil`, nil pointers, maps and slices | `null` |
+| `time.Time` | Date |
+| `*big.Int` | BigInt (`As` also converts BigInts to integer types that fit) |
+| `[]byte` | ArrayBuffer (`As` also reads typed arrays and DataViews) |
+| slices and arrays | Array (`As` also reads Sets) |
+| maps | object (`As` also reads Maps) |
+| structs | object with the exported fields, named by their `json` tags, and methods |
+| functions | function, see [Go Functions](#go-functions) |
+| `error` | Error |
+| `*Value` | the value itself (cloned) |
+| any value wrapped by `NewProxyValue` | an opaque object, see [ProxyValue](#proxyvalue) |
+
+`As[any]` picks Go types for you: objects become `map[string]any`, arrays
+`[]any`, numbers `int` or `float64`, and BigInts `*big.Int`.
 
 ```go
 type User struct {
@@ -282,19 +373,21 @@ type User struct {
 }
 
 type Post struct {
-	ID      int    `json:"id"`
-	Title   string `json:"title"`
-	Author  User   `json:"author"`
-	Content string `json:"content"`
+	ID      int       `json:"id"`
+	Title   string    `json:"title"`
+	Author  User      `json:"author"`
+	Created time.Time `json:"created"`
 }
 
-rt.Set("user", User{ID: 1, Name: "Alice"})
+if err := rt.Set("user", User{ID: 1, Name: "Alice"}); err != nil {
+	return err
+}
 
 result, err := rt.Eval(ctx, "main.js", `({
 	id: 10,
 	title: "Hello from " + user.name,
 	author: user,
-	content: "Written in JavaScript",
+	created: new Date("2026-01-02T03:04:05Z"),
 })`)
 if err != nil {
 	return err
@@ -302,27 +395,40 @@ if err != nil {
 defer result.Free()
 
 post, err := result.As[Post]()
-// post.Author.Name == "Alice"
+// post.Author.Name == "Alice", post.Created.Year() == 2026
 ```
+
+JavaScript functions convert to Go functions with `As`, as shown in
+[Calling JavaScript from Go](#calling-javascript-from-go).
 
 ### ProxyValue
 
-A ProxyValue passes a Go value through JavaScript by reference: Go
-functions receive the original value, not a converted copy. Use it for
+`ToValue` copies: a Go function that receives a converted struct gets a new
+copy, not the original. A ProxyValue instead passes a Go value through
+JavaScript by reference. JavaScript sees an opaque object it cannot read or
+forge, and Go functions and `As` get the original value back. Use it for
 `context.Context`, connections, or large structs that should not be copied.
 
 ```go
 type Counter struct{ hits int }
 
 counter := &Counter{}
-rt.Set("bump", func(c *Counter) int { c.hits++; return c.hits })
+if err := rt.Set("bump", func(c *Counter) int { c.hits++; return c.hits }); err != nil {
+	return err
+}
 
 proxy := rt.NewProxyValue(counter)
 defer proxy.Free()
-rt.Global().Set("counter", proxy)
+if err := rt.Global().Set("counter", proxy); err != nil {
+	return err
+}
 
-rt.Eval(ctx, "main.js", `bump(counter); bump(counter)`)
-// counter.hits == 2
+result, err := rt.Eval(ctx, "main.js", `bump(counter); bump(counter)`)
+if err != nil {
+	return err
+}
+defer result.Free()
+// result.Int32() == 2, counter.hits == 2
 ```
 
 ### Pool
@@ -334,9 +440,13 @@ interrupted, or whose function panicked, are discarded instead of reused.
 ```go
 pool, err := qngg.NewPool(8, qngg.Config{}, func(rt *qngg.Runtime) error {
 	// Runs once for each new runtime.
-	_, err := rt.Eval(context.Background(), "setup.js",
+	v, err := rt.Eval(context.Background(), "setup.js",
 		`globalThis.greet = (name) => "Hello, " + name + "!"`)
-	return err
+	if err != nil {
+		return err
+	}
+	v.Free()
+	return nil
 })
 if err != nil {
 	log.Fatal(err)
@@ -371,35 +481,24 @@ http.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
 
 Values created inside `Do` must not be used after it returns.
 
-## Installation
-
-```bash
-go get github.com/ironpark/qngg
-```
-
-
-```go
-import "github.com/ironpark/qngg"
-```
-
-**Compatible with Go 1.27+**
-
 ## Architecture
 
 ```
-┌─────────────┐      ┌─────────────┐      ┌─────────────┐
-│   Your Go   │      │  Wasmtime   │      │   QuickJS   │
-│ Application │ ---> │ WebAssembly │ ---> │ JavaScript  │
-│             │      │  Runtime    │      │   Engine    │
-└─────────────┘      └─────────────┘      └─────────────┘
-       ^                    ^                     ^
-       │                    │                     │
-   Structured           Sandboxed              ES2023
-      Data              Execution            JavaScript
-       │                    │                     │
-       └────────────────────┴─────────────────────┘
-                           QNGG
+Go application
+  │  qngg API: Runtime, Value, Pool
+  ▼
+Wasmtime C API, loaded at runtime through purego (no cgo)
+  │  one store and instance per Runtime
+  ▼
+qjs.wasm: QuickJS-NG compiled with wasi-sdk
+  │  WASI: CWD mount, stdout/stderr, clocks
+  └─ calls back into Go for Go functions and to release Go references
 ```
+
+Each `Runtime` is a separate WebAssembly instance with its own linear memory,
+so runtimes share nothing and a crash in one cannot affect another. The
+compiled `qjs.wasm` is shared between runtimes, and optionally cached on disk
+with `Config.CacheDir`.
 
 ## API Reference
 
@@ -425,6 +524,7 @@ rt.Close()                                     // Free it and all its values
 rt.Eval(ctx, name, src, opts...)               // Run a script (or module with AsModule)
 rt.EvalFile(ctx, path, opts...)                // Run a file from Config.CWD
 rt.Compile(name, src, opts...)                 // Compile to bytecode
+rt.CompileFile(path, opts...)                  // Compile a file from Config.CWD
 rt.EvalBytecode(ctx, bytecode, opts...)        // Run bytecode
 rt.LoadModule(ctx, name, src)                  // Register a module for imports
 rt.Set(name, goValue)                          // Convert and assign a global
@@ -462,8 +562,8 @@ type Config struct {
     MaxStackSize        int       // QuickJS stack limit in bytes
     GCThreshold         int       // GC trigger threshold in bytes
     DisableInterruption bool      // ~30% faster compute, but contexts can no longer stop running code
-    CacheDir            string    // Directory for compiled module cache files
-    DisableBuildCache   bool      // Do not reuse in-memory compiled modules
+    CacheDir            string    // On-disk cache of the compiled QuickJS WebAssembly module
+    DisableBuildCache   bool      // Recompile the QuickJS module for every runtime
 }
 ```
 
@@ -489,7 +589,7 @@ system temp directory).
 1. Use a `Pool` for concurrent applications.
 2. Compile frequently-used scripts to bytecode.
 3. Use ProxyValue for large objects or shared state to avoid conversion.
-4. Set `CacheDir` so compiled modules are reused across processes.
+4. Set `CacheDir` so the compiled QuickJS WebAssembly module is reused across processes.
 5. Set `DisableInterruption` for trusted, compute-heavy code.
 
 **Security**
@@ -498,42 +598,10 @@ system temp directory).
 - **Filesystem**: none by default. With `CWD` set, only that directory is visible, as `/`, and it is read-only unless `WritableCWD` is set. WASI enforces this, so `qjs:std`/`qjs:os` cannot reach anything else.
 - **Environment and output**: no environment variables are passed, and output is discarded unless `Stdout`/`Stderr` are set.
 - **No network access**: no sockets are exposed to JavaScript.
+- **Go references**: ProxyValues and Go functions are native objects that JavaScript cannot forge, and the Go values behind them are released when JavaScript garbage collects them.
 - **Interruptible**: calls stop when their context is done, even in the middle of an infinite loop.
 - **Isolation between users**: runtimes in a `Pool` keep their global state between calls. Use separate runtimes, or reset the globals you set, when running code for different tenants.
 - **No CGO**: the Wasmtime native library is loaded at runtime through purego.
-
-### Memory Management
-
-Values live in QuickJS's heap, not Go's, so they must be released with
-`Free`. The rule is simple:
-
-- Every `*Value` returned to you is yours: `Free` it when done.
-- Passing a value to a method never takes it over: you still free it.
-- Values you do not own have a no-op `Free`: `Runtime.Global()`, and the
-  arguments and `this` of a `Function`, which are only valid until it returns.
-  `Clone` them to keep them longer.
-- A value returned from a `Function` is handed to JavaScript.
-- `Close` frees everything that is left, and makes further use of the runtime
-  and its values fail with `ErrRuntimeClosed`. Using a freed value fails with
-  `ErrFreed`.
-
-```go
-obj := rt.NewObject()
-defer obj.Free()
-
-name := rt.NewString("Alice")
-defer name.Free()
-
-if err := obj.Set("name", name); err != nil { // name is still yours
-	return err
-}
-```
-
-**Choose QNGG when you need:**
-- Modern JavaScript (ES2023) in Go.
-- No CGO, cross-compiles with a plain Go toolchain.
-- Plugin systems and user-generated code.
-- Fast startup: a new runtime takes well under a millisecond.
 
 ## Building from Source
 
@@ -545,8 +613,6 @@ if err := obj.Set("name", name); err != nil { // name is still yours
 - Make
 
 ### Quick Build
-
-**Development Setup:**
 
 ```bash
 # Clone with submodules
@@ -564,16 +630,6 @@ make build WASM_OPT=$PWD/binaryen-version_133/bin/wasm-opt
 # Run tests
 go test ./...
 ```
-
-**Code Standards:**
-- Follow standard Go conventions (`gofmt`, `golangci-lint`).
-- Add tests for new features.
-- Update documentation for API changes.
-- Keep commit messages clear and descriptive.
-
-## Contributing
-
-Bug reports and pull requests are welcome on [GitHub](https://github.com/ironpark/qngg/issues). When reporting a bug, include the Go version, OS and a minimal reproduction.
 
 ## License
 

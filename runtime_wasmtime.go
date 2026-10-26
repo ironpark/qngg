@@ -210,26 +210,29 @@ func (r *Runtime) newWasiConfig() (wasi *wasmtime.WasiConfig, err error) {
 	return wasi, nil
 }
 
-// defineProxy links `env.jsFunctionProxy`, through which QuickJS calls Go
-// functions:
+// defineProxy links the imports through which QuickJS calls Go:
 //
-//	extern JSValue jsFunctionProxy(JSContext *ctx, JSValueConst this, int argc, JSValueConst *argv);
+//	JSValue jsFunctionProxy(JSContext *ctx, JSValueConst this, int argc, JSValueConst *argv,
+//	                        uint32_t id, JSValue *resolvers);
+//	void jsReleaseProxy(uint32_t id);
 func (r *Runtime) defineProxy() error {
 	i32 := wasmtime.NewValType(wasmtime.KindI32)
 	i64 := wasmtime.NewValType(wasmtime.KindI64)
-	ty := wasmtime.NewFuncType([]*wasmtime.ValType{i32, i64, i32, i32}, []*wasmtime.ValType{i64})
 
-	// The handler lives in a process-wide registry until the linker is freed,
-	// so it must not keep the runtime alive: a runtime that is dropped without
-	// Close is then still collected, and its finalizers free the linker.
+	// The handlers live in a process-wide registry until the linker is
+	// freed, so they must not keep the runtime alive: a runtime that is
+	// dropped without Close is then still collected, and its finalizers
+	// free the linker.
 	weakRuntime := weak.Make(r)
-	handler := func(_ *wasmtime.Caller, vals []wasmtime.ValRaw) *wasmtime.Trap {
+
+	call := func(_ *wasmtime.Caller, vals []wasmtime.ValRaw) *wasmtime.Trap {
 		rt := weakRuntime.Value()
 		if rt == nil {
 			return wasmtime.NewTrap("qjs runtime has been released")
 		}
 
-		rs, err := rt.callGoFunction(uint64(vals[1].I64()), uint32(vals[2].I32()), uint32(vals[3].I32()))
+		rs, err := rt.callGoFunction(uint64(vals[1].I64()),
+			uint32(vals[2].I32()), uint32(vals[3].I32()), uint32(vals[4].I32()), uint32(vals[5].I32()))
 		if err != nil {
 			return wasmtime.NewTrap(err.Error())
 		}
@@ -239,8 +242,22 @@ func (r *Runtime) defineProxy() error {
 		return nil
 	}
 
-	if err := r.linker.FuncNewUnchecked("env", "jsFunctionProxy", ty, handler); err != nil {
+	callType := wasmtime.NewFuncType([]*wasmtime.ValType{i32, i64, i32, i32, i32, i32}, []*wasmtime.ValType{i64})
+	if err := r.linker.FuncNewUnchecked("env", "jsFunctionProxy", callType, call); err != nil {
 		return fmt.Errorf("failed to define jsFunctionProxy: %w", err)
+	}
+
+	release := func(_ *wasmtime.Caller, vals []wasmtime.ValRaw) *wasmtime.Trap {
+		if rt := weakRuntime.Value(); rt != nil {
+			rt.registry.Unregister(uint32(vals[0].I32()))
+		}
+
+		return nil
+	}
+
+	releaseType := wasmtime.NewFuncType([]*wasmtime.ValType{i32}, nil)
+	if err := r.linker.FuncNewUnchecked("env", "jsReleaseProxy", releaseType, release); err != nil {
+		return fmt.Errorf("failed to define jsReleaseProxy: %w", err)
 	}
 
 	return nil
@@ -264,5 +281,5 @@ func (r *Runtime) release() {
 	}
 
 	r.instance = nil
-	r.funcs = nil
+	r.funcs = [numExports]*wasmFunc{}
 }

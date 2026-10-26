@@ -3,15 +3,7 @@
 #include "./quickjs/cutils.h"
 #include <time.h>
 
-JSValue JS_NewNull();
-JSValue JS_NewUndefined();
-JSValue JS_NewUninitialized();
 JSValue JS_GetException(JSContext *ctx);
-JSValue QJS_ThrowSyntaxError(JSContext *ctx, const char *fmt);
-JSValue QJS_ThrowTypeError(JSContext *ctx, const char *fmt);
-JSValue QJS_ThrowReferenceError(JSContext *ctx, const char *fmt);
-JSValue QJS_ThrowRangeError(JSContext *ctx, const char *fmt);
-JSValue QJS_ThrowInternalError(JSContext *ctx, const char *fmt);
 int JS_DeletePropertyInt64(JSContext *ctx, JSValueConst obj, int64_t idx, int flags);
 
 /* Minimum and maximum values a `signed long int' can hold. (Same as `int').  */
@@ -27,17 +19,6 @@ int JS_DeletePropertyInt64(JSContext *ctx, JSValueConst obj, int64_t idx, int fl
 #define QJS_NATIVE_MODULE_SUFFIX ".so"
 #endif
 #endif
-
-typedef struct TimeoutArgs
-{
-  time_t start;
-  time_t timeout;
-} TimeoutArgs;
-
-typedef struct
-{
-  uintptr_t fn;
-} InterruptHandler;
 
 typedef struct QJSEvalOptions
 {
@@ -68,17 +49,6 @@ JSValue QJS_CloneValue(JSContext *ctx, JSValue val);
 JSContext *QJS_GetContext(QJSRuntime *qjs);
 JSRuntime *JS_GetRuntime(JSContext *ctx);
 
-JSValue InvokeFunctionProxy(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-JSValue InvokeAsyncFunctionProxy(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-// void SetInterruptHandler(JSRuntime *rt, void *handlerArgs);
-// void SetExecuteTimeout(JSRuntime *rt, time_t timeout);
-
-// Headers for GO exported functions
-// int goInterruptHandler(JSRuntime *rt, void *handler);
-// JSValue goFunctionProxy(JSContext *ctx, JSValueConst thisVal, int argc, JSValueConst *argv);
-// JSValue goAsyncFunctionProxy(JSContext *ctx, JSValueConst thisVal, int argc, JSValueConst *argv);
-
-JSValue jsFunctionProxy(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 #ifdef QJS_DEBUG_RUNTIME_ADDRESS
 void randomize_address_space(void);
 #endif
@@ -91,58 +61,36 @@ QJSRuntime *New_QJS(
     size_t memory_limit,
     size_t max_stack_size,
     size_t gc_threshold);
-void QJS_UpdateStackTop(QJSRuntime *qjs);
 JSModuleDef *QJS_ModuleLoader(JSContext *ctx, const char *module_name, void *opaque,
                               JSValueConst attributes);
 JSValue QJS_Load(JSContext *ctx, QJSEvalOptions opts);
 JSValue QJS_Eval(JSContext *ctx, QJSEvalOptions opts);
-unsigned char *QJS_Compile(JSContext *c, QJSEvalOptions opts, size_t *outSize);
-uint64_t *QJS_Compile2(JSContext *ctx, QJSEvalOptions opts);
-QJSEvalOptions *QJS_CreateEvalOption(void *buf, uint8_t *bytecode_buf, size_t bytecode_len, char *filename, int eval_flags);
+uint64_t QJS_Compile(JSContext *ctx, QJSEvalOptions opts);
 
-uint64_t *QJS_ToCString(JSContext *ctx, JSValueConst val);
-int64_t QJS_ToInt64(JSContext *ctx, JSValue val);
-int32_t QJS_ToInt32(JSContext *ctx, JSValue val);
-uint32_t QJS_ToUint32(JSContext *ctx, JSValue val);
-double QJS_ToFloat64(JSContext *ctx, JSValue val);
-double QJS_ToEpochTime(JSContext *ctx, JSValue val);
-bool QJS_IsUndefined(JSValue val);
-bool QJS_IsException(JSValue val);
-bool QJS_IsError(JSContext *ctx, JSValue val);
-bool QJS_IsPromise(JSContext *ctx, JSValue v);
-bool QJS_IsFunction(JSContext *ctx, JSValue v);
-bool QJS_IsObject(JSValue v);
-bool QJS_IsNumber(JSValue v);
-bool QJS_IsBigInt(JSValue v);
-bool QJS_IsBool(JSValue v);
-bool QJS_IsNull(JSValue v);
-bool QJS_IsUninitialized(JSValue val);
-bool QJS_IsString(JSValue val);
-bool QJS_IsSymbol(JSValue val);
-bool QJS_IsArray(JSValue v);
-bool QJS_IsConstructor(JSContext *ctx, JSValue v);
-bool QJS_IsInstanceOf(JSContext *ctx, JSValue v, JSValue obj);
-JSValue QJS_NewString(JSContext *ctx, const char *str);
-JSValue QJS_CreateFunctionProxy(JSContext *ctx, uint64_t handle_id, uint64_t ctx_id, uint64_t is_async);
-JSValue QJS_NewInt64(JSContext *ctx, int64_t val);
-JSValue QJS_NewUint32(JSContext *ctx, uint32_t val);
-JSValue QJS_NewInt32(JSContext *ctx, int32_t val);
-JSValue QJS_NewBigInt64(JSContext *ctx, int64_t val);
-JSValue QJS_NewBigUint64(JSContext *ctx, uint64_t val);
-JSValue QJS_NewFloat64(JSContext *ctx, uint64_t bits);
-uint64_t *QJS_AtomToCString(JSContext *ctx, JSAtom atom);
-
-uint64_t *QJS_GetOwnPropertyNames(JSContext *ctx, JSValue v);
+uint64_t QJS_GetArrayBuffer(JSContext *ctx, JSValueConst obj);
+void QJS_FreeAtoms(JSContext *ctx, const uint32_t *atoms, uint32_t len);
+uint64_t QJS_ToStringBuf(JSContext *ctx, JSValueConst val, char *buf, uint32_t cap);
+uint64_t QJS_AtomToStringBuf(JSContext *ctx, JSAtom atom, char *buf, uint32_t cap);
+uint64_t QJS_JSONStringifyBuf(JSContext *ctx, JSValueConst val, char *buf, uint32_t cap);
+uint64_t QJS_GetOwnPropertyAtoms(JSContext *ctx, JSValueConst obj, int flags, uint32_t *buf, uint32_t cap);
+JSValue QJS_GetPropertyLen(JSContext *ctx, JSValueConst obj, const char *name, size_t len);
+int QJS_SetPropertyLen(JSContext *ctx, JSValueConst obj, const char *name, size_t len, JSValue val, int dup);
+int QJS_HasPropertyLen(JSContext *ctx, JSValueConst obj, const char *name, size_t len);
+int QJS_DeletePropertyLen(JSContext *ctx, JSValueConst obj, const char *name, size_t len);
+JSValue QJS_GetPropertyValue(JSContext *ctx, JSValueConst obj, JSValueConst key);
+int QJS_SetPropertyValue(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst val);
+int QJS_SetPropertyUint32(JSContext *ctx, JSValueConst obj, uint32_t idx, JSValue val, int dup);
+int64_t QJS_ToInt64(JSContext *ctx, JSValueConst val);
+int32_t QJS_ToInt32(JSContext *ctx, JSValueConst val);
+uint32_t QJS_ToUint32(JSContext *ctx, JSValueConst val);
+double QJS_ToFloat64(JSContext *ctx, JSValueConst val);
+double QJS_ToEpochTime(JSContext *ctx, JSValueConst val);
 JSValue QJS_ParseJSON(JSContext *ctx, const char *buf);
-JSValue QJS_NewBool(JSContext *ctx, int val);
-uint64_t *QJS_GetArrayBuffer(JSContext *ctx, JSValue obj);
-uint64_t *QJS_JSONStringify(JSContext *ctx, JSValue v);
-int QJS_SetPropertyUint32(JSContext *ctx, JSValue this_obj, uint64_t idx, JSValue val);
-JSValue QJS_GetPropertyUint32(JSContext *ctx, JSValue this_obj, uint32_t idx);
-int QJS_NewAtomUInt32(JSContext *ctx, uint64_t n);
-JSValue QJS_NewArrayBufferCopy(JSContext *ctx, uint64_t addr, uint64_t len);
-JSValue QJS_Call(JSContext *ctx, JSValue func, JSValue this, int argc, uint64_t argv);
-JSValue QJS_NewProxyValue(JSContext *ctx, int64_t proxyId);
-QJSRuntime *QJS_GetRuntime();
+JSValue QJS_NewBigIntDecimal(JSContext *ctx, const char *digits, size_t len);
+JSValue QJS_NewGlobal(JSContext *ctx, const char *name, int argc, JSValueConst *argv);
 
-void initialize();
+JSValue QJS_NewGoFunction(JSContext *ctx, uint32_t id, const char *name, int async);
+JSValue QJS_NewProxyValue(JSContext *ctx, uint32_t id);
+uint32_t QJS_GetProxyID(JSValueConst val);
+int QJS_GetKind(JSContext *ctx, JSValueConst v);
+

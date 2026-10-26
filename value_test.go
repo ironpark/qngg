@@ -162,7 +162,8 @@ func TestValueTypeChecks(t *testing.T) {
 			"undefined": "Undefined", "NaN": "NaN", "Infinity": "Infinity", "10n": "BigInt",
 			"Symbol()": "Symbol", "[1]": "Array", "new Map()": "Map", "new Set()": "Set",
 			"new Date()": "Date", "new Error('x')": "Error", "(() => 1)": "Function",
-			"(class Foo {})": "Constructor Foo", "new ArrayBuffer(1)": "ArrayBuffer", "({})": "unknown",
+			"(class Foo {})": "Constructor Foo", "new ArrayBuffer(1)": "ArrayBuffer", "({})": "Object",
+			"/x/": "RegExp", "new Uint8Array(1)": "TypedArray", "new DataView(new ArrayBuffer(1))": "DataView",
 		}
 		for code, want := range types {
 			assert.Equal(t, want, eval(t, rt, code).Type(), code)

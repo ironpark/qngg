@@ -3,8 +3,9 @@ package qngg
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"reflect"
-	"strings"
+	"sync"
 	"time"
 )
 
@@ -334,15 +335,8 @@ func (tracker *convTracker[T]) processEmbeddedFields(
 	rtype reflect.Type,
 	rval reflect.Value,
 ) error {
-	for i := range rtype.NumField() {
-		field := rtype.Field(i)
-		jsonIgnore := field.Tag.Get("json") == "-"
-
-		if !field.IsExported() || !field.Anonymous || jsonIgnore {
-			continue
-		}
-
-		if err := tracker.processEmbeddedField(c, obj, field, rval.Field(i)); err != nil {
+	for _, field := range structInfoOf(rtype).embedded {
+		if err := tracker.processEmbeddedField(c, obj, field.StructField, rval.Field(field.index)); err != nil {
 			return err
 		}
 	}
@@ -411,24 +405,13 @@ func (tracker *convTracker[T]) processRegularFields(
 	rtype reflect.Type,
 	rval reflect.Value,
 ) error {
-	for i := range rtype.NumField() {
-		field := rtype.Field(i)
-
-		if !field.IsExported() || field.Anonymous {
-			continue
-		}
-
-		fieldName, skip := tracker.getFieldName(field)
-		if skip {
-			continue
-		}
-
-		prop, err := tracker.toJsValue(c, rval.Field(i).Interface())
+	for _, field := range structInfoOf(rtype).fields {
+		prop, err := tracker.toJsValue(c, rval.Field(field.index).Interface())
 		if err != nil {
 			return err
 		}
 
-		if err := setTake(obj, fieldName, prop); err != nil {
+		if err := setTake(obj, field.name, prop); err != nil {
 			return err
 		}
 	}
@@ -436,21 +419,53 @@ func (tracker *convTracker[T]) processRegularFields(
 	return nil
 }
 
-// getFieldName determines the field name considering JSON tags.
-func (tracker *convTracker[T]) getFieldName(field reflect.StructField) (string, bool) {
-	fieldName := field.Name
-	if jsonTag := field.Tag.Get("json"); jsonTag != "" {
-		name, _, _ := strings.Cut(jsonTag, ",")
-		if name == "-" {
-			return "", true
+// structInfo lists the fields of a struct type that convert to properties
+// of a JavaScript object. It is computed once per type.
+type structInfo struct {
+	// exported embedded fields, except those tagged json:"-"
+	embedded []structField
+	// exported regular fields, except those tagged json:"-"
+	fields []structField
+}
+
+type structField struct {
+	reflect.StructField
+
+	index int
+	name  string // property name: the json tag name or the field name
+}
+
+var structInfos sync.Map // reflect.Type -> *structInfo
+
+// structInfoOf returns the structInfo of the struct type t.
+func structInfoOf(t reflect.Type) *structInfo {
+	if info, ok := structInfos.Load(t); ok {
+		return info.(*structInfo) //nolint:forcetypeassert // only *structInfo is stored
+	}
+
+	info := &structInfo{}
+
+	for i := range t.NumField() {
+		field := t.Field(i)
+		if !field.IsExported() {
+			continue
 		}
 
-		if name != "" {
-			fieldName = name
+		name := globalFieldMapper.getJSONFieldName(field)
+
+		switch {
+		case name == "":
+			// json:"-"
+		case field.Anonymous:
+			info.embedded = append(info.embedded, structField{StructField: field, index: i, name: field.Name})
+		default:
+			info.fields = append(info.fields, structField{StructField: field, index: i, name: name})
 		}
 	}
 
-	return fieldName, false
+	actual, _ := structInfos.LoadOrStore(t, info)
+
+	return actual.(*structInfo) //nolint:forcetypeassert // only *structInfo is stored
 }
 
 // addStructMethodsToObject adds exported struct methods as JS functions.
@@ -525,6 +540,17 @@ func (tracker *convTracker[T]) toJsValue(c *Runtime, v any) (*Value, error) {
 
 	if err, ok := v.(error); ok {
 		return c.NewError(err), nil
+	}
+
+	switch n := v.(type) {
+	case *big.Int:
+		if n == nil {
+			return c.NewNull(), nil
+		}
+
+		return c.newBigInt(n)
+	case big.Int:
+		return c.newBigInt(&n)
 	}
 
 	if jsVal := tryConvertBuiltinTypes(c, v); jsVal != nil {

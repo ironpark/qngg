@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
-	"sync/atomic"
 )
 
 // Function is a Go function callable from JavaScript. A returned error is
@@ -54,46 +53,62 @@ func (c *FunctionCall) Arg(i int) *Value {
 	return c.args[i]
 }
 
-// callGoFunction implements the jsFunctionProxy import. The JS wrapper made
-// by QJS_CreateFunctionProxy passes the function ID, an unused context ID,
-// the async flag and, for async functions, a promise with resolve/reject
-// methods, followed by the call's arguments.
+// callFrame holds a FunctionCall and its values, in a single allocation
+// for calls with up to len(vals) arguments.
+type callFrame struct {
+	call FunctionCall
+	this Value
+	vals [4]Value
+	ptrs [4]*Value
+}
+
+// callGoFunction implements the jsFunctionProxy import: it calls the Go
+// function registered as id with this and the argc arguments at argv. For
+// async functions, resolvers points to the resolve and reject functions of
+// the promise returned to JavaScript.
 //
 // An error is only returned when the call cannot complete because the
 // runtime was interrupted, and becomes a trap that unwinds wasm.
-func (r *Runtime) callGoFunction(thisRef uint64, argc, argv uint32) (uint64, error) {
+func (r *Runtime) callGoFunction(thisRef uint64, argc, argv, id, resolvers uint32) (uint64, error) {
 	if err := r.interruptErr(); err != nil {
 		return 0, err
 	}
 
-	if argc < 4 {
-		return 0, errors.New("jsFunctionProxy: missing arguments")
-	}
-
-	data := r.mem.MustRead(argv, uint64(argc)*8)
-	arg := func(i int) uint64 { return binary.LittleEndian.Uint64(data[i*8:]) }
-
-	// The ID and the async flag are int-tagged values.
-	entry, _ := r.registry.Get(uint64(int32(arg(0))))
+	entry, _ := r.registry.Get(id)
 	fn, _ := entry.(Function)
-	async := int32(arg(2)) != 0
 
-	values := make([]Value, argc-3)
-	call := &FunctionCall{rt: r, this: &values[0], args: make([]*Value, argc-4)}
-	values[0] = Value{rt: r, ref: thisRef, borrowed: true}
-
-	for i := range call.args {
-		values[i+1] = Value{rt: r, ref: arg(4 + i), borrowed: true}
-		call.args[i] = &values[i+1]
+	// Like a sloppy-mode function, a Go function called without a this
+	// value gets the global object.
+	if tag := tagOf(thisRef); tag == tagUndefined || tag == tagNull {
+		thisRef = r.global.ref
 	}
 
-	result, err := r.runGoFunction(fn, call)
+	frame := &callFrame{this: Value{rt: r, ref: thisRef, borrowed: true}}
+	frame.call = FunctionCall{rt: r, this: &frame.this}
+
+	vals, ptrs := frame.vals[:0], frame.ptrs[:0]
+	if int(argc) > len(frame.vals) {
+		vals, ptrs = make([]Value, 0, argc), make([]*Value, 0, argc)
+	}
+
+	data := r.view(argv, 8*argc)
+	for i := range argc {
+		vals = append(vals, Value{rt: r, ref: binary.LittleEndian.Uint64(data[8*i:]), borrowed: true})
+	}
+
+	for i := range vals {
+		ptrs = append(ptrs, &vals[i])
+	}
+
+	frame.call.args = ptrs
+
+	result, err := r.runGoFunction(fn, &frame.call)
 	if ierr := r.interruptErr(); ierr != nil {
 		return 0, ierr
 	}
 
-	if async {
-		return jsUndefined, r.settle(r.borrowValue(arg(3)), result, err)
+	if resolvers != 0 {
+		return jsUndefined, r.settle(resolvers, result, err)
 	}
 
 	if err != nil {
@@ -140,19 +155,25 @@ func (r *Runtime) runGoFunction(fn Function, call *FunctionCall) (raw uint64, er
 	return result.take(), nil
 }
 
-// settle resolves or rejects the promise of an async function call.
-func (r *Runtime) settle(promise *Value, result uint64, callErr error) (err error) {
+// settle resolves or rejects the promise of an async function call, by
+// calling one of the resolving functions at resolvers.
+func (r *Runtime) settle(resolvers uint32, result uint64, callErr error) (err error) {
 	defer recoverInterrupt(r, &err)
 
-	method, arg := "resolve", r.newValue(result)
+	data := r.view(resolvers, 16)
+
+	fn, arg := binary.LittleEndian.Uint64(data), r.newValue(result)
 	if callErr != nil {
-		method, arg = "reject", r.NewError(callErr)
+		fn, arg = binary.LittleEndian.Uint64(data[8:]), r.NewError(callErr)
 	}
 	defer arg.Free()
 
-	// If the promise cannot be settled, which only happens if its methods
-	// were tampered with, it never resolves; the call itself succeeded.
-	if v, err := promise.Invoke(context.Background(), method, arg); err == nil {
+	argv := r.pushValues(arg.ref)
+	defer r.drop(argv)
+
+	// Resolving functions only throw when out of memory; the call itself
+	// succeeded either way.
+	if v, err := r.result(r.call(xCall, r.jsCtx, fn, jsUndefined, 1, uint64(argv.ptr))); err == nil {
 		v.Free()
 	}
 
@@ -163,7 +184,7 @@ func (r *Runtime) settle(promise *Value, result uint64, callErr error) (err erro
 func (r *Runtime) throw(err error) uint64 {
 	errVal := r.NewError(err)
 
-	return r.call("JS_Throw", r.jsCtx, errVal.take())
+	return r.call(xThrow, r.jsCtx, errVal.take())
 }
 
 func newProxyErr(r any) error {
@@ -172,42 +193,51 @@ func newProxyErr(r any) error {
 
 // proxyRegistry stores Go values referenced from JavaScript by ID: the Go
 // functions behind JS functions and the values wrapped by ProxyValues.
+// Entries are removed when the JavaScript object is garbage collected.
 type proxyRegistry struct {
-	nextID  atomic.Uint64
-	mu      sync.RWMutex
-	proxies map[uint64]any
+	mu      sync.Mutex
+	lastID  uint32
+	proxies map[uint32]any
 }
 
 func newProxyRegistry() *proxyRegistry {
-	return &proxyRegistry{proxies: make(map[uint64]any)}
+	return &proxyRegistry{proxies: make(map[uint32]any)}
 }
 
 // Register adds v and returns its ID, which is never 0.
-func (r *proxyRegistry) Register(v any) uint64 {
+func (r *proxyRegistry) Register(v any) uint32 {
 	if v == nil {
 		return 0
 	}
 
-	id := r.nextID.Add(1)
-
 	r.mu.Lock()
-	r.proxies[id] = v
-	r.mu.Unlock()
+	defer r.mu.Unlock()
 
-	return id
+	// IDs are only reused after wrapping around, skipping those in use.
+	for {
+		r.lastID++
+		if _, used := r.proxies[r.lastID]; r.lastID != 0 && !used {
+			break
+		}
+	}
+
+	r.proxies[r.lastID] = v
+
+	return r.lastID
 }
 
 // Get returns the value registered as id.
-func (r *proxyRegistry) Get(id uint64) (any, bool) {
-	r.mu.RLock()
+func (r *proxyRegistry) Get(id uint32) (any, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	v, ok := r.proxies[id]
-	r.mu.RUnlock()
 
 	return v, ok
 }
 
 // Unregister removes id and reports whether it was registered.
-func (r *proxyRegistry) Unregister(id uint64) bool {
+func (r *proxyRegistry) Unregister(id uint32) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -219,8 +249,8 @@ func (r *proxyRegistry) Unregister(id uint64) bool {
 
 // Len returns the number of registered values.
 func (r *proxyRegistry) Len() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	return len(r.proxies)
 }
@@ -228,6 +258,7 @@ func (r *proxyRegistry) Len() int {
 // Clear removes all registered values.
 func (r *proxyRegistry) Clear() {
 	r.mu.Lock()
-	r.proxies = make(map[uint64]any)
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+
+	clear(r.proxies)
 }

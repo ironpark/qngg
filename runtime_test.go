@@ -62,9 +62,9 @@ func TestRuntime(t *testing.T) {
 		assert.Equal(t, int32(42), evalInt(t, rt, "42"))
 	})
 
-	t.Run("CallNonExistentExport", func(t *testing.T) {
+	t.Run("LookupNonExistentExport", func(t *testing.T) {
 		rt, _ := setupRuntime(t)
-		assert.Panics(t, func() { rt.call("NonExistentFunction") })
+		assert.Panics(t, func() { rt.lookup("NonExistentFunction") })
 	})
 
 	t.Run("MallocAndFree", func(t *testing.T) {
@@ -72,7 +72,6 @@ func TestRuntime(t *testing.T) {
 		ptr := rt.malloc(1024)
 		assert.NotZero(t, ptr)
 		rt.free(ptr)
-		assert.Zero(t, rt.newBuffer(nil), "empty buffers are not allocated")
 	})
 
 	t.Run("CacheDir", func(t *testing.T) {

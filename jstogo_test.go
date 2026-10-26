@@ -62,11 +62,15 @@ func TestJsBigIntToGo(t *testing.T) {
 		assert.Equal(t, expected, val)
 	})
 
+	t.Run("convert_to_integer", func(t *testing.T) {
+		assert.Equal(t, int64(1234567890), must(jsBigIntToGo[int64](jsBigInt)))
+	})
+
 	t.Run("unsupported_type", func(t *testing.T) {
-		val, err := jsBigIntToGo[int64](jsBigInt)
+		val, err := jsBigIntToGo[string](jsBigInt)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "expected GO type *big.Int/big.Int")
-		assert.Equal(t, int64(0), val)
+		assert.Contains(t, err.Error(), "expected GO type *big.Int, big.Int or an integer")
+		assert.Empty(t, val)
 	})
 }
 
@@ -533,7 +537,7 @@ func TestIsTypedArray(t *testing.T) {
 			jsValue := must(rt.Eval(context.Background(), "test.js", test.jsCode))
 			defer jsValue.Free()
 
-			result := isTypedArray(jsValue)
+			result := jsValue.kind().isTypedArray()
 			assert.Equal(t, test.expected, result, "IsTypedArray result should match expected value")
 		})
 	}
@@ -2720,5 +2724,56 @@ func TestStringToNumericConversion(t *testing.T) {
 				assert.Equal(t, tc.expected, converted)
 			})
 		}
+	})
+}
+
+func TestBigIntConversion(t *testing.T) {
+	rt, _ := setupRuntime(t)
+	bg := context.Background()
+
+	t.Run("ToValue", func(t *testing.T) {
+		huge, _ := new(big.Int).SetString("-123456789012345678901234567890", 10)
+		for _, n := range []*big.Int{big.NewInt(-5), new(big.Int).SetUint64(math.MaxUint64), huge} {
+			v := must(rt.ToValue(n))
+			assert.True(t, v.IsBigInt(), n.String())
+			assert.Equal(t, n, v.BigInt())
+			v.Free()
+		}
+
+		v := must(rt.ToValue(*huge))
+		defer v.Free()
+		assert.Equal(t, huge, v.BigInt())
+
+		noErr(rt.Set("n", struct{ N *big.Int }{huge}))
+		got := must(rt.Eval(bg, "n.js", `typeof n.N + " " + (n.N + 1n)`))
+		defer got.Free()
+		assert.Equal(t, "bigint -123456789012345678901234567889", got.String())
+	})
+
+	t.Run("As", func(t *testing.T) {
+		obj := must(rt.Eval(bg, "b.js", `({small: 7n, big: 2n ** 100n, neg: -1n})`))
+		defer obj.Free()
+
+		m := must(obj.As[map[string]any]())
+		assert.Equal(t, big.NewInt(7), m["small"])
+		assert.Equal(t, new(big.Int).Lsh(big.NewInt(1), 100), m["big"])
+
+		ints := must(obj.As[struct {
+			Small int8   `json:"small"`
+			Neg   int64  `json:"neg"`
+			Big   string `json:"-"`
+		}]())
+		assert.Equal(t, int8(7), ints.Small)
+		assert.Equal(t, int64(-1), ints.Neg)
+
+		_, err := obj.As[struct {
+			Big int64 `json:"big"`
+		}]()
+		require.ErrorContains(t, err, "out of range")
+
+		_, err = obj.As[struct {
+			Neg uint64 `json:"neg"`
+		}]()
+		require.ErrorContains(t, err, "out of range")
 	})
 }

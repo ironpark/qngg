@@ -329,87 +329,24 @@ JSValue QJS_Eval(JSContext *ctx, QJSEvalOptions opts)
 }
 
 /*
- * Compiles code (as a module or global script) to bytecode
- * if return value is NULL, an error occurred,
- * use JS_GetException() to retrieve error details.
+ * Compiles code (as a module or global script) to bytecode, returned as
+ * (ptr << 32 | len). The caller releases the bytecode with js_free. On
+ * failure, UINT64_MAX is returned with the exception left pending.
  */
-unsigned char *QJS_Compile(JSContext *c, QJSEvalOptions opts, size_t *outSize)
+uint64_t QJS_Compile(JSContext *ctx, QJSEvalOptions opts)
 {
     opts.eval_flags = opts.eval_flags ? opts.eval_flags : JS_EVAL_TYPE_GLOBAL;
     opts.eval_flags |= JS_EVAL_FLAG_COMPILE_ONLY;
 
-    JSValue val = QJS_Eval(c, opts);
+    JSValue val = QJS_Eval(ctx, opts);
     if (JS_IsException(val))
-        return NULL;
+        return UINT64_MAX;
 
-    size_t psize = 0; // Bytecode size
-    unsigned char *tmp_buf = JS_WriteObject(c, &psize, val, JS_WRITE_OBJ_BYTECODE);
-    JS_FreeValue(c, val);
-
-    // Validate the output:
-    // ensure a positive bytecode size and a valid buffer pointer.
-    if (tmp_buf == NULL || (int)psize <= 0)
-    {
-        if (tmp_buf != NULL)
-            js_free(c, tmp_buf);
-        return NULL;
-    }
-
-    unsigned char *result = (unsigned char *)malloc(psize);
-    if (result == NULL)
-    {
-        js_free(c, tmp_buf);
-        return NULL;
-    }
-
-    memcpy(result, tmp_buf, psize);
-    js_free(c, tmp_buf);
-    *outSize = psize;
-    return result;
-}
-
-/**
- * Compiles code (as a module or global script) to bytecode and returns a packed uint64_t value
- * containing both the bytecode's memory address (high 32 bits) and length (low 32 bits).
- *
- * Returns NULL on error.
- * NOTE: The caller must free both the returned uint64_t pointer and the bytecode memory it points to.
- */
-uint64_t *QJS_Compile2(JSContext *ctx, QJSEvalOptions opts)
-{
-    size_t bytecode_len = 0;
-    unsigned char *bytecode = QJS_Compile(ctx, opts, &bytecode_len);
+    size_t len = 0;
+    uint8_t *bytecode = JS_WriteObject(ctx, &len, val, JS_WRITE_OBJ_BYTECODE);
+    JS_FreeValue(ctx, val);
     if (!bytecode)
-    {
-        return NULL;
-    }
+        return UINT64_MAX;
 
-    uint64_t *result = malloc(sizeof(uint64_t));
-    if (!result)
-    {
-        free(bytecode);
-        return NULL; // Allocation failure
-    }
-
-    // Store the address of the bytecode in the high 32 bits and the length in the low 32 bits
-    *result = ((uint64_t)(uintptr_t)bytecode << 32) | (uint32_t)bytecode_len;
-    return result;
-}
-
-QJSEvalOptions *QJS_CreateEvalOption(void *buf, uint8_t *bytecode_buf, size_t bytecode_len, char *filename, int eval_flags)
-{
-    QJSEvalOptions *opts = (QJSEvalOptions *)malloc(sizeof(QJSEvalOptions));
-    if (opts == NULL)
-    {
-        // Memory allocation failed - return NULL so caller can handle the error
-        return NULL;
-    }
-
-    opts->buf = buf;
-    opts->bytecode_buf = bytecode_buf;
-    opts->bytecode_len = bytecode_len;
-    opts->filename = filename;
-    opts->eval_flags = eval_flags;
-
-    return opts;
+    return ((uint64_t)(uintptr_t)bytecode << 32) | (uint32_t)len;
 }

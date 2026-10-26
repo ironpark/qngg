@@ -36,62 +36,36 @@ func toGoValue[T any](
 		v, err = processTempValue("ToGoValue", temp, err, sample)
 	}()
 
-	// If JS value is a QJSProxyValue, extract the Go value from the registry
-	if input.isProxyValue() {
-		temp, _ = input.rt.registry.Get(uint64(propInt(input, "proxyId")))
+	kind := input.kind()
+
+	// A proxy value converts back to the Go value it wraps.
+	if kind == kindProxyValue {
+		temp, _ = input.rt.registry.Get(input.proxyID())
 
 		return v, nil
 	}
 
 	var ok bool
-	if temp, ok, err = jsPrimitivesToGo(tracker, input, sample); ok {
+	if temp, ok, err = jsPrimitivesToGo(tracker, input, kind, sample); ok {
 		return v, err
 	}
 
-	if input.IsDate() {
+	switch kind {
+	case kindDate:
 		temp, err = jsTimeToGo(input)
-
-		return v, err
-	}
-
-	if input.isGlobalInstanceOf("RegExp") {
+	case kindRegExp:
 		temp = input.String()
-
-		return v, err
-	}
-
-	if input.IsArrayBuffer() {
+	case kindArrayBuffer:
 		temp, err = jsArrayBufferToGo(input)
-
-		return v, err
-	}
-
-	if isTypedArray(input) {
+	case kindTypedArray, kindDataView:
 		temp, err = jsTypedArrayToGo(input)
-
-		return v, err
-	}
-
-	if input.IsMap() {
-		temp, err = jsObjectToGoWithContext(tracker, input, sample)
-
-		return v, err
-	}
-
-	if input.IsSet() {
+	case kindSet:
 		temp, err = jsSetToGoWithContext(tracker, input, sample)
-
-		return v, err
-	}
-
-	if input.IsArray() {
+	case kindArray:
 		temp, err = jsArrayToGoWithContext(tracker, input, sample)
-
-		return v, err
+	default:
+		temp, err = jsObjectToGoWithContext(tracker, input, sample)
 	}
-
-	// Fallback for all other object types
-	temp, err = jsObjectToGoWithContext(tracker, input, sample)
 
 	return v, err
 }
@@ -157,15 +131,42 @@ func jsBigIntToGo[T any](input *Value, samples ...T) (v T, err error) {
 	}
 
 	switch any(sample).(type) {
-	case *big.Int:
+	case nil, *big.Int:
 		temp = bigInt
 	case big.Int:
 		temp = *bigInt
 	default:
-		return v, newInvalidGoTypeErr("*big.Int/big.Int", sample)
+		temp, err = bigIntToGoInteger(bigInt, reflect.TypeOf(sample))
+		if err != nil {
+			return v, fmt.Errorf("cannot convert BigInt %s: %w", bigInt, err)
+		}
 	}
 
 	return v, err
+}
+
+// bigIntToGoInteger converts n to the integer type t, if it fits.
+func bigIntToGoInteger(n *big.Int, t reflect.Type) (any, error) {
+	out := reflect.New(t).Elem()
+
+	switch t.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if !n.IsInt64() || out.OverflowInt(n.Int64()) {
+			return nil, fmt.Errorf("out of range for %s", t)
+		}
+
+		out.SetInt(n.Int64())
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		if !n.IsUint64() || out.OverflowUint(n.Uint64()) {
+			return nil, fmt.Errorf("out of range for %s", t)
+		}
+
+		out.SetUint(n.Uint64())
+	default:
+		return nil, newInvalidGoTypeErr("*big.Int, big.Int or an integer", out.Interface())
+	}
+
+	return out.Interface(), nil
 }
 
 // jsTimeToGo converts a JS Date object into a time.Time value in UTC.
@@ -672,6 +673,7 @@ func handleJsFunctionResult(
 func jsPrimitivesToGo[T any](
 	tracker *convTracker[uint64],
 	input *Value,
+	kind objectKind,
 	sample T,
 ) (val any, ok bool, err error) {
 	if input.IsString() {
@@ -698,7 +700,7 @@ func jsPrimitivesToGo[T any](
 		return val, true, err
 	}
 
-	if input.IsError() {
+	if kind == kindError {
 		return input.toError(), true, nil
 	}
 
@@ -710,7 +712,7 @@ func jsPrimitivesToGo[T any](
 		return nil, true, errors.New("unsupported type: Symbol")
 	}
 
-	if input.IsFunction() {
+	if kind.isFunction() {
 		result, err := jsFuncToGoWithContext(tracker, input, sample)
 
 		return result, true, err
