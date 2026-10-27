@@ -638,8 +638,8 @@ MIT License - see [LICENSE](LICENSE) file.
 QNGG includes third-party code under its own licenses:
 
 - [QuickJS-NG](https://github.com/quickjs-ng/quickjs), compiled into `qjs.wasm` - MIT ([LICENSE](https://github.com/quickjs-ng/quickjs/blob/master/LICENSE)).
-- [wasmtime-go](https://github.com/bytecodealliance/wasmtime-go), vendored in `internal/wasmtime` - Apache-2.0 ([LICENSE-wasmtime-go](internal/wasmtime/LICENSE-wasmtime-go)).
-- [Wasmtime](https://github.com/bytecodealliance/wasmtime) shared libraries, embedded in `internal/wasmtime/embedded` - Apache-2.0 WITH LLVM-exception ([LICENSE-wasmtime](internal/wasmtime/embedded/LICENSE-wasmtime)).
+- [wasmtime-go](https://github.com/bytecodealliance/wasmtime-go), via the purego port [wasmtime-pure-go](https://github.com/ironpark/wasmtime-pure-go) - Apache-2.0.
+- [Wasmtime](https://github.com/bytecodealliance/wasmtime) shared libraries, embedded by wasmtime-pure-go - Apache-2.0 WITH LLVM-exception.
 
 ## Acknowledgments
 

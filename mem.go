@@ -1,6 +1,6 @@
 package qngg
 
-import "github.com/ironpark/qngg/internal/wasmtime"
+import wasmtime "github.com/ironpark/wasmtime-pure-go"
 
 // wasmMemory gives Go access to the linear memory of the QuickJS module.
 type wasmMemory struct {

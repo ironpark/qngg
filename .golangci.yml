@@ -62,8 +62,6 @@ linters:
     paths:
       - examples$
       - _test\.go
-      # Vendored port of wasmtime-go; keeps upstream and C API naming.
-      - internal/wasmtime
 
 formatters:
   enable:

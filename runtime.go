@@ -8,7 +8,7 @@ import (
 	"io"
 	"runtime/debug"
 
-	"github.com/ironpark/qngg/internal/wasmtime"
+	wasmtime "github.com/ironpark/wasmtime-pure-go"
 )
 
 //go:embed qjs.wasm

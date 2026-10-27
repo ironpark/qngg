@@ -3,7 +3,7 @@ package qngg
 import (
 	"fmt"
 
-	"github.com/ironpark/qngg/internal/wasmtime"
+	wasmtime "github.com/ironpark/wasmtime-pure-go"
 )
 
 // export identifies a function exported by the QuickJS module. Exports are

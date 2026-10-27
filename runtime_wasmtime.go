@@ -10,7 +10,7 @@ import (
 	"weak"
 
 	"github.com/ironpark/qngg/internal/atomicfile"
-	"github.com/ironpark/qngg/internal/wasmtime"
+	wasmtime "github.com/ironpark/wasmtime-pure-go"
 )
 
 // Wasmtime integration: engines, compiled module caching and instantiation.
