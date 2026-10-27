@@ -3,7 +3,7 @@ module github.com/ironpark/qngg
 go 1.27
 
 require (
-	github.com/ironpark/wasmtime-pure-go v0.0.0-20261027135748-b6cb377ba2fa
+	github.com/ironpark/wasmtime-pure-go v0.0.0-20261027140914-a51037ed9202
 	github.com/stretchr/testify v1.12.1
 )
 
