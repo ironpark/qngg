@@ -330,12 +330,12 @@ func runModeModuleTests(t *testing.T, tests []modeModuleTest, isScript bool) {
 			depPaths := moduleFiles[:len(moduleFiles)-1]
 			for _, depPath := range depPaths {
 				depScript := fileContent(depPath)
-				assert.NoError(t, runtime.LoadModule(context.Background(), depPath, depScript))
+				assert.NoError(t, runtime.LoadModule(context.Background(), filepath.ToSlash(depPath), depScript))
 			}
 
 			// Evaluate the main module.
 			mainScript := fileContent(mainPath)
-			val, err := runtime.Eval(context.Background(), mainPath, mainScript, AsModule())
+			val, err := runtime.Eval(context.Background(), filepath.ToSlash(mainPath), mainScript, AsModule())
 			defer val.Free()
 
 			// Check error expectations.

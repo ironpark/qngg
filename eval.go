@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"path/filepath"
 )
 
 // QuickJS eval flags.
@@ -63,9 +64,10 @@ func (r *Runtime) Eval(ctx context.Context, name, src string, opts ...EvalOption
 	return r.eval(ctx, evalInput{name: name, source: &src}, newEvalConfig(opts))
 }
 
-// EvalFile is like Eval for the file at path, relative to Config.CWD.
+// EvalFile is like Eval for the file at path, relative to Config.CWD. Path
+// separators are converted to "/", the separator module names use.
 func (r *Runtime) EvalFile(ctx context.Context, path string, opts ...EvalOption) (*Value, error) {
-	return r.eval(ctx, evalInput{name: path}, newEvalConfig(opts))
+	return r.eval(ctx, evalInput{name: filepath.ToSlash(path)}, newEvalConfig(opts))
 }
 
 // EvalBytecode is like Eval for bytecode from Compile. Pass AsModule for
@@ -86,7 +88,7 @@ func (r *Runtime) Compile(name, src string, opts ...EvalOption) ([]byte, error) 
 
 // CompileFile is like Compile for the file at path, relative to Config.CWD.
 func (r *Runtime) CompileFile(path string, opts ...EvalOption) ([]byte, error) {
-	return r.compile(evalInput{name: path}, newEvalConfig(opts))
+	return r.compile(evalInput{name: filepath.ToSlash(path)}, newEvalConfig(opts))
 }
 
 // LoadModule compiles the module src and registers it as `name`, so that
@@ -98,7 +100,7 @@ func (r *Runtime) LoadModule(ctx context.Context, name, src string) error {
 // LoadModuleFile is like LoadModule for the file at path, relative to
 // Config.CWD, registered under that path.
 func (r *Runtime) LoadModuleFile(ctx context.Context, path string) error {
-	return r.load(ctx, evalInput{name: path})
+	return r.load(ctx, evalInput{name: filepath.ToSlash(path)})
 }
 
 // LoadModuleBytecode is like LoadModule for module bytecode from Compile
