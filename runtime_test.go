@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -86,7 +87,10 @@ func TestRuntime(t *testing.T) {
 	})
 
 	t.Run("InvalidCacheDir", func(t *testing.T) {
-		_, err := New(Config{CacheDir: "/invalid/path/that/does/not/exist", DisableBuildCache: true})
+		// A directory can't be created under a regular file on any platform.
+		file := filepath.Join(t.TempDir(), "file")
+		require.NoError(t, os.WriteFile(file, nil, 0o644))
+		_, err := New(Config{CacheDir: filepath.Join(file, "cache"), DisableBuildCache: true})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to create compilation cache")
 	})
