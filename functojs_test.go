@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"testing"
 	"unsafe"
 
@@ -640,77 +639,4 @@ func TestMethodBinding(t *testing.T) {
 			assert.Contains(t, err.Error(), "name cannot be empty")
 		})
 	})
-}
-
-func TestCreateNonNilSample(t *testing.T) {
-	tests := []struct {
-		name              string
-		input             any
-		expectedType      any
-		shouldBeNotNil    bool
-		testFuncExecution bool
-	}{
-		{
-			name:           "Context type",
-			input:          context.Background(),
-			expectedType:   context.Background(),
-			shouldBeNotNil: true,
-		},
-		{
-			name:           "Pointer type",
-			input:          (*int)(nil),
-			expectedType:   (*int)(nil),
-			shouldBeNotNil: false, // Pointer itself can be nil but sample won't be
-		},
-		{
-			name:           "Array type",
-			input:          [3]string{},
-			expectedType:   [3]string{},
-			shouldBeNotNil: true,
-		},
-		{
-			name:           "Slice type",
-			input:          []string{},
-			expectedType:   []string{},
-			shouldBeNotNil: true,
-		},
-		{
-			name:           "Map type",
-			input:          map[string]int{},
-			expectedType:   map[string]int{},
-			shouldBeNotNil: true,
-		},
-		{
-			name:           "Chan type",
-			input:          (chan int)(nil),
-			expectedType:   (chan int)(nil),
-			shouldBeNotNil: true,
-		},
-		{
-			name:              "Func type",
-			input:             (func(int) int)(nil),
-			expectedType:      (func(int) int)(nil),
-			shouldBeNotNil:    true,
-			testFuncExecution: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sample := createNonNilSample(reflect.TypeOf(tt.input))
-
-			assert.IsType(t, tt.expectedType, sample)
-
-			if tt.shouldBeNotNil {
-				assert.NotNil(t, sample)
-			}
-
-			// Special test for function execution
-			if tt.testFuncExecution {
-				dummyFunc := sample.(func(int) int)
-				result := dummyFunc(42)
-				assert.Equal(t, 0, result) // Should return zero value
-			}
-		})
-	}
 }

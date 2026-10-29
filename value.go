@@ -679,7 +679,7 @@ func (v *Value) As[T any]() (T, error) {
 		return zero, err
 	}
 
-	return toGoValue[T](newConvTracker(), v)
+	return toGo[T](v)
 }
 
 // objectType is Type for objects.

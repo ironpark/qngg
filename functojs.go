@@ -131,9 +131,8 @@ func handlePointerArgument(jsArg *Value, argType reflect.Type) (reflect.Value, e
 	}
 
 	underlyingType := argType.Elem()
-	zeroVal := reflect.New(underlyingType).Elem()
 
-	goVal, err := toGo(jsArg, zeroVal.Interface())
+	goVal, err := toGoValue(newConvTracker(), jsArg, underlyingType)
 	if err != nil {
 		return reflect.Value{}, newJsToGoErr(jsArg, err, "function param pointer to "+jsArg.Type())
 	}
@@ -144,62 +143,11 @@ func handlePointerArgument(jsArg *Value, argType reflect.Type) (reflect.Value, e
 	return ptrVal, nil
 }
 
-// createNonNilSample creates appropriate non-nil samples for types that have nil zero values.
-func createNonNilSample(argType reflect.Type) any {
-	switch argType.Kind() {
-	case reflect.Interface:
-		// return nil to let the conversion
-		// use the default logic which can handle dynamic type inference
-		return nil
-
-	case reflect.Pointer:
-		elemType := argType.Elem()
-		elemZero := reflect.Zero(elemType)
-		ptr := reflect.New(elemType)
-		ptr.Elem().Set(elemZero)
-
-		return ptr.Interface()
-
-	case reflect.Array:
-		return reflect.New(argType).Elem().Interface()
-
-	case reflect.Slice:
-		return reflect.MakeSlice(argType, 0, 0).Interface()
-
-	case reflect.Map:
-		return reflect.MakeMap(argType).Interface()
-
-	case reflect.Chan:
-		return reflect.MakeChan(argType, 1).Interface() // size 1 buffer to avoid blocking
-
-	case reflect.Func:
-		return createDummyFunction(argType)
-
-	default:
-		// For other types (shouldn't happen), return zero value
-		return reflect.Zero(argType).Interface()
-	}
-}
-
-// createDummyFunction creates a dummy function with the specified signature for type inference.
-func createDummyFunction(funcType reflect.Type) any {
-	fn := reflect.MakeFunc(funcType, func(_ []reflect.Value) []reflect.Value {
-		results := make([]reflect.Value, funcType.NumOut())
-		for i := range funcType.NumOut() {
-			results[i] = reflect.Zero(funcType.Out(i))
-		}
-
-		return results
-	})
-
-	return fn.Interface()
-}
-
 // jsArgToGo converts a single JS argument to a Go value with enhanced type handling.
 func jsArgToGo(jsArg *Value, argType reflect.Type) (reflect.Value, error) {
 	// A ProxyValue stands for the Go value it wraps, pointers included.
 	if jsArg.isProxyValue() {
-		goVal, err := toGo[any](jsArg)
+		goVal, err := toGoValue(newConvTracker(), jsArg, nil)
 		if err != nil {
 			return reflect.Value{}, err
 		}
@@ -224,9 +172,7 @@ func jsArgToGo(jsArg *Value, argType reflect.Type) (reflect.Value, error) {
 		return goVal, nil
 	}
 
-	goZeroVal := createNonNilSample(argType)
-
-	goVal, err := toGo(jsArg, goZeroVal)
+	goVal, err := toGoValue(newConvTracker(), jsArg, argType)
 	if err != nil {
 		return reflect.Value{}, newJsToGoErr(jsArg, err, "function param "+jsArg.Type())
 	}

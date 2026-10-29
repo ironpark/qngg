@@ -43,31 +43,31 @@ func TestJsBigIntToGo(t *testing.T) {
 	t.Run("not_a_bigInt", func(t *testing.T) {
 		notBigInt := must(result.Get("notBigInt"))
 		defer notBigInt.Free()
-		val, err := jsBigIntToGo[int64](notBigInt)
+		val, err := bigIntToGo[int64](notBigInt)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "cannot convert JS BigInt")
 		assert.Equal(t, int64(0), val)
 	})
 
 	t.Run("convert_to_big_int_pointer", func(t *testing.T) {
-		val := must(jsBigIntToGo[*big.Int](jsBigInt))
+		val := must(bigIntToGo[*big.Int](jsBigInt))
 		assert.IsType(t, (*big.Int)(nil), val)
 		assert.Equal(t, big.NewInt(int64(1234567890)), val)
 	})
 
 	t.Run("convert_to_big_int_value", func(t *testing.T) {
-		val := must(jsBigIntToGo[big.Int](jsBigInt))
+		val := must(bigIntToGo[big.Int](jsBigInt))
 		assert.IsType(t, big.Int{}, val)
 		expected := *big.NewInt(int64(1234567890))
 		assert.Equal(t, expected, val)
 	})
 
 	t.Run("convert_to_integer", func(t *testing.T) {
-		assert.Equal(t, int64(1234567890), must(jsBigIntToGo[int64](jsBigInt)))
+		assert.Equal(t, int64(1234567890), must(bigIntToGo[int64](jsBigInt)))
 	})
 
 	t.Run("unsupported_type", func(t *testing.T) {
-		val, err := jsBigIntToGo[string](jsBigInt)
+		val, err := bigIntToGo[string](jsBigInt)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "expected GO type *big.Int, big.Int or an integer")
 		assert.Empty(t, val)
@@ -113,7 +113,7 @@ func TestJsNumberToGo(t *testing.T) {
 			t.Run(test.property, func(t *testing.T) {
 				val := must(result.Get(test.property))
 				defer val.Free()
-				_, err := jsNumberToGo[float64](val)
+				_, err := numberToGo[float64](val)
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), test.expectedError)
 			})
@@ -132,10 +132,10 @@ func TestJsNumberToGo(t *testing.T) {
 				name:     "int8",
 				property: "overflowInt8",
 				testValue: func(val *Value) {
-					assert.Contains(t, extractErr(jsNumberToGo[int8](val)).Error(), "overflows int8")
+					assert.Contains(t, extractErr(numberToGo[int8](val)).Error(), "overflows int8")
 				},
 				testPointer: func(val *Value) {
-					assert.Contains(t, extractErr(jsNumberToGo[*int8](val)).Error(), "overflows int8")
+					assert.Contains(t, extractErr(numberToGo[*int8](val)).Error(), "overflows int8")
 				},
 				errorMsg: "overflows int8",
 			},
@@ -143,10 +143,10 @@ func TestJsNumberToGo(t *testing.T) {
 				name:     "uint8",
 				property: "overflowUint8",
 				testValue: func(val *Value) {
-					assert.Contains(t, extractErr(jsNumberToGo[uint8](val)).Error(), "overflows uint8")
+					assert.Contains(t, extractErr(numberToGo[uint8](val)).Error(), "overflows uint8")
 				},
 				testPointer: func(val *Value) {
-					assert.Contains(t, extractErr(jsNumberToGo[*uint8](val)).Error(), "overflows uint8")
+					assert.Contains(t, extractErr(numberToGo[*uint8](val)).Error(), "overflows uint8")
 				},
 				errorMsg: "overflows uint8",
 			},
@@ -154,10 +154,10 @@ func TestJsNumberToGo(t *testing.T) {
 				name:     "int16",
 				property: "overflowInt16",
 				testValue: func(val *Value) {
-					assert.Contains(t, extractErr(jsNumberToGo[int16](val)).Error(), "overflows int16")
+					assert.Contains(t, extractErr(numberToGo[int16](val)).Error(), "overflows int16")
 				},
 				testPointer: func(val *Value) {
-					assert.Contains(t, extractErr(jsNumberToGo[*int16](val)).Error(), "overflows int16")
+					assert.Contains(t, extractErr(numberToGo[*int16](val)).Error(), "overflows int16")
 				},
 				errorMsg: "overflows int16",
 			},
@@ -165,10 +165,10 @@ func TestJsNumberToGo(t *testing.T) {
 				name:     "uint16",
 				property: "overflowUint16",
 				testValue: func(val *Value) {
-					assert.Contains(t, extractErr(jsNumberToGo[uint16](val)).Error(), "overflows uint16")
+					assert.Contains(t, extractErr(numberToGo[uint16](val)).Error(), "overflows uint16")
 				},
 				testPointer: func(val *Value) {
-					assert.Contains(t, extractErr(jsNumberToGo[*uint16](val)).Error(), "overflows uint16")
+					assert.Contains(t, extractErr(numberToGo[*uint16](val)).Error(), "overflows uint16")
 				},
 				errorMsg: "overflows uint16",
 			},
@@ -176,10 +176,10 @@ func TestJsNumberToGo(t *testing.T) {
 				name:     "int32",
 				property: "overflowInt32",
 				testValue: func(val *Value) {
-					assert.Contains(t, extractErr(jsNumberToGo[int32](val)).Error(), "overflows int32")
+					assert.Contains(t, extractErr(numberToGo[int32](val)).Error(), "overflows int32")
 				},
 				testPointer: func(val *Value) {
-					assert.Contains(t, extractErr(jsNumberToGo[*int32](val)).Error(), "overflows int32")
+					assert.Contains(t, extractErr(numberToGo[*int32](val)).Error(), "overflows int32")
 				},
 				errorMsg: "overflows int32",
 			},
@@ -187,10 +187,10 @@ func TestJsNumberToGo(t *testing.T) {
 				name:     "uint32",
 				property: "overflowUint32",
 				testValue: func(val *Value) {
-					assert.Contains(t, extractErr(jsNumberToGo[uint32](val)).Error(), "overflows uint32")
+					assert.Contains(t, extractErr(numberToGo[uint32](val)).Error(), "overflows uint32")
 				},
 				testPointer: func(val *Value) {
-					assert.Contains(t, extractErr(jsNumberToGo[*uint32](val)).Error(), "overflows uint32")
+					assert.Contains(t, extractErr(numberToGo[*uint32](val)).Error(), "overflows uint32")
 				},
 				errorMsg: "overflows uint32",
 			},
@@ -231,46 +231,46 @@ func TestJsNumberToGo(t *testing.T) {
 		}
 
 		numTests := []numTest{
-			{"int8", int8(42), must(jsNumberToGo[int8](normalNum)), 0},
-			{"int8_pointer", int8(42), *must(jsNumberToGo[*int8](normalNum)), 0},
-			{"uint8", uint8(42), must(jsNumberToGo[uint8](normalNum)), 0},
-			{"*uint8", uint8(42), *must(jsNumberToGo[*uint8](normalNum)), 0},
-			{"int16", int16(42), must(jsNumberToGo[int16](normalNum)), 0},
-			{"*int16", int16(42), *must(jsNumberToGo[*int16](normalNum)), 0},
-			{"uint16", uint16(42), must(jsNumberToGo[uint16](normalNum)), 0},
-			{"*uint16", uint16(42), *must(jsNumberToGo[*uint16](normalNum)), 0},
-			{"int32", int32(42), must(jsNumberToGo[int32](normalNum)), 0},
-			{"*int32", int32(42), *must(jsNumberToGo[*int32](normalNum)), 0},
-			{"uint32", uint32(42), must(jsNumberToGo[uint32](normalNum)), 0},
-			{"*uint32", uint32(42), *must(jsNumberToGo[*uint32](normalNum)), 0},
-			{"int", int(42), must(jsNumberToGo[int](normalNum)), 0},
-			{"*int", int(42), *must(jsNumberToGo[*int](normalNum)), 0},
-			{"uint", uint(42), must(jsNumberToGo[uint](normalNum)), 0},
-			{"*uint", uint(42), *must(jsNumberToGo[*uint](normalNum)), 0},
-			{"int64", int64(42), must(jsNumberToGo[int64](normalNum)), 0},
-			{"*int64", int64(42), *must(jsNumberToGo[*int64](normalNum)), 0},
-			{"uint64", uint64(42), must(jsNumberToGo[uint64](normalNum)), 0},
-			{"*uint64", uint64(42), *must(jsNumberToGo[*uint64](normalNum)), 0},
-			{"uintptr", uintptr(42), must(jsNumberToGo[uintptr](normalNum)), 0},
-			{"*uintptr", uintptr(42), *must(jsNumberToGo[*uintptr](normalNum)), 0},
+			{"int8", int8(42), must(numberToGo[int8](normalNum)), 0},
+			{"int8_pointer", int8(42), *must(numberToGo[*int8](normalNum)), 0},
+			{"uint8", uint8(42), must(numberToGo[uint8](normalNum)), 0},
+			{"*uint8", uint8(42), *must(numberToGo[*uint8](normalNum)), 0},
+			{"int16", int16(42), must(numberToGo[int16](normalNum)), 0},
+			{"*int16", int16(42), *must(numberToGo[*int16](normalNum)), 0},
+			{"uint16", uint16(42), must(numberToGo[uint16](normalNum)), 0},
+			{"*uint16", uint16(42), *must(numberToGo[*uint16](normalNum)), 0},
+			{"int32", int32(42), must(numberToGo[int32](normalNum)), 0},
+			{"*int32", int32(42), *must(numberToGo[*int32](normalNum)), 0},
+			{"uint32", uint32(42), must(numberToGo[uint32](normalNum)), 0},
+			{"*uint32", uint32(42), *must(numberToGo[*uint32](normalNum)), 0},
+			{"int", int(42), must(numberToGo[int](normalNum)), 0},
+			{"*int", int(42), *must(numberToGo[*int](normalNum)), 0},
+			{"uint", uint(42), must(numberToGo[uint](normalNum)), 0},
+			{"*uint", uint(42), *must(numberToGo[*uint](normalNum)), 0},
+			{"int64", int64(42), must(numberToGo[int64](normalNum)), 0},
+			{"*int64", int64(42), *must(numberToGo[*int64](normalNum)), 0},
+			{"uint64", uint64(42), must(numberToGo[uint64](normalNum)), 0},
+			{"*uint64", uint64(42), *must(numberToGo[*uint64](normalNum)), 0},
+			{"uintptr", uintptr(42), must(numberToGo[uintptr](normalNum)), 0},
+			{"*uintptr", uintptr(42), *must(numberToGo[*uintptr](normalNum)), 0},
 
-			{"intAsFloat32", float32(42), must(jsNumberToGo[float32](normalNum)), 0},
-			{"*intAsFloat32", float32(42), *must(jsNumberToGo[*float32](normalNum)), 0},
-			{"intAsFloat64", float64(42), must(jsNumberToGo[float64](normalNum)), 0},
-			{"*intAsFloat64", float64(42), *must(jsNumberToGo[*float64](normalNum)), 0},
+			{"intAsFloat32", float32(42), must(numberToGo[float32](normalNum)), 0},
+			{"*intAsFloat32", float32(42), *must(numberToGo[*float32](normalNum)), 0},
+			{"intAsFloat64", float64(42), must(numberToGo[float64](normalNum)), 0},
+			{"*intAsFloat64", float64(42), *must(numberToGo[*float64](normalNum)), 0},
 
-			{"bigInt", 0, big.NewInt(9007199254740991).Cmp(must(jsNumberToGo[*big.Int](bigIntVal))), 0},
+			{"bigInt", 0, big.NewInt(9007199254740991).Cmp(must(numberToGo[*big.Int](bigIntVal))), 0},
 
-			{"float32", float32(3.14159), must(jsNumberToGo[float32](floatVal)), 0.00001},
-			{"*float32", float32(3.14159), *must(jsNumberToGo[*float32](floatVal)), 0.00001},
-			{"float64", 3.14159, must(jsNumberToGo[float64](floatVal)), 0.00001},
-			{"*float64", 3.14159, *must(jsNumberToGo[*float64](floatVal)), 0.00001},
+			{"float32", float32(3.14159), must(numberToGo[float32](floatVal)), 0.00001},
+			{"*float32", float32(3.14159), *must(numberToGo[*float32](floatVal)), 0.00001},
+			{"float64", 3.14159, must(numberToGo[float64](floatVal)), 0.00001},
+			{"*float64", 3.14159, *must(numberToGo[*float64](floatVal)), 0.00001},
 
-			{"complex64", complex64(complex(float32(42), 0)), must(jsNumberToGo[complex64](normalNum)), 0},
-			{"*complex64", complex64(complex(float32(42), 0)), *must(jsNumberToGo[*complex64](normalNum)), 0},
-			{"complex128", complex(float64(42), 0), must(jsNumberToGo[complex128](normalNum)), 0},
-			{"*complex128", complex(float64(42), 0), *must(jsNumberToGo[*complex128](normalNum)), 0},
-			{"CustomNumber", CustomNumber(42), must(jsNumberToGo[CustomNumber](normalNum)), 0},
+			{"complex64", complex64(complex(float32(42), 0)), must(numberToGo[complex64](normalNum)), 0},
+			{"*complex64", complex64(complex(float32(42), 0)), *must(numberToGo[*complex64](normalNum)), 0},
+			{"complex128", complex(float64(42), 0), must(numberToGo[complex128](normalNum)), 0},
+			{"*complex128", complex(float64(42), 0), *must(numberToGo[*complex128](normalNum)), 0},
+			{"CustomNumber", CustomNumber(42), must(numberToGo[CustomNumber](normalNum)), 0},
 		}
 
 		for _, test := range numTests {

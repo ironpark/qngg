@@ -6,23 +6,20 @@ import (
 )
 
 // jsArrayToGoConverter handles array conversions with better error handling and performance.
-type jsArrayToGoConverter[T any] struct {
+type jsArrayToGoConverter struct {
 	tracker    *convTracker
 	input      *Value
-	targetType reflect.Type
-	sample     T
+	targetType reflect.Type // nil for any
 }
 
-func (ac *jsArrayToGoConverter[T]) Convert() (T, error) {
-	var zero T
-
+func (ac *jsArrayToGoConverter) Convert() (any, error) {
 	jsArray := ac.input
 	if !jsArray.IsArray() {
-		return zero, newJsToGoErr(ac.input, newInvalidJsInputErr("array", jsArray), "Array")
+		return nil, newJsToGoErr(ac.input, newInvalidJsInputErr("array", jsArray), "Array")
 	}
 
 	jsLen := jsArray.Len()
-	if ac.targetType == nil || ac.targetType.Kind() == reflect.Interface {
+	if ac.targetType == nil {
 		return ac.convertToInterface(jsArray, jsLen)
 	}
 
@@ -36,21 +33,21 @@ func (ac *jsArrayToGoConverter[T]) Convert() (T, error) {
 	}
 }
 
-func (ac *jsArrayToGoConverter[T]) convertToInterface(jsArray *Value, jsLen int64) (T, error) {
+func (ac *jsArrayToGoConverter) convertToInterface(jsArray *Value, jsLen int64) (any, error) {
 	result := make([]any, 0, jsLen)
 
 	for i := range jsLen {
 		jsElem, err := jsArray.Index(uint32(i))
 		if err != nil {
-			return ac.sample, newJsToGoErr(jsArray, err, fmt.Sprintf("array/set element at index %d", int(i)))
+			return nil, newJsToGoErr(jsArray, err, fmt.Sprintf("array/set element at index %d", int(i)))
 		}
 
-		goElem, convErr := toGoValue[any](ac.tracker, jsElem)
+		goElem, convErr := toGoValue(ac.tracker, jsElem, nil)
 
 		jsElem.Free()
 
 		if convErr != nil {
-			return ac.sample, newJsToGoErr(
+			return nil, newJsToGoErr(
 				jsArray,
 				convErr,
 				fmt.Sprintf("array/set element at index %d", int(i)),
@@ -60,28 +57,25 @@ func (ac *jsArrayToGoConverter[T]) convertToInterface(jsArray *Value, jsLen int6
 		result = append(result, goElem)
 	}
 
-	resultT, _ := any(result).(T)
-
-	return resultT, nil
+	return result, nil
 }
 
-func (ac *jsArrayToGoConverter[T]) convertToSlice(jsArray *Value, jsLen int64) (T, error) {
+func (ac *jsArrayToGoConverter) convertToSlice(jsArray *Value, jsLen int64) (any, error) {
 	elemType := ac.targetType.Elem()
 	sliceValue := reflect.MakeSlice(ac.targetType, 0, int(jsLen))
 
 	for i := range jsLen {
 		jsElem, err := jsArray.Index(uint32(i))
 		if err != nil {
-			return ac.sample, newJsToGoErr(jsArray, err, fmt.Sprintf("array/set element at index %d", int(i)))
+			return nil, newJsToGoErr(jsArray, err, fmt.Sprintf("array/set element at index %d", int(i)))
 		}
 
-		elemSample := reflect.New(elemType).Elem().Interface()
-		goElem, convErr := toGoValue(ac.tracker, jsElem, elemSample)
+		goElem, convErr := toGoValue(ac.tracker, jsElem, elemType)
 
 		jsElem.Free()
 
 		if convErr != nil {
-			return ac.sample, newJsToGoErr(
+			return nil, newJsToGoErr(
 				jsArray,
 				convErr,
 				fmt.Sprintf("array/set element at index %d", int(i)),
@@ -92,33 +86,30 @@ func (ac *jsArrayToGoConverter[T]) convertToSlice(jsArray *Value, jsLen int64) (
 		sliceValue = reflect.Append(sliceValue, elemValue)
 	}
 
-	sliceT, _ := reflect.TypeAssert[T](sliceValue)
-
-	return sliceT, nil
+	return sliceValue.Interface(), nil
 }
 
-func (ac *jsArrayToGoConverter[T]) convertToArray(jsArray *Value, jsLen int64) (T, error) {
+func (ac *jsArrayToGoConverter) convertToArray(jsArray *Value, jsLen int64) (any, error) {
 	elemType := ac.targetType.Elem()
 	goArrayLen := ac.targetType.Len()
 	goArrayValue := reflect.New(ac.targetType).Elem()
 
 	if jsLen > int64(goArrayLen) {
-		return ac.sample, fmt.Errorf("JS array/set length (%d) exceeds Go array length (%d)", jsLen, goArrayLen)
+		return nil, fmt.Errorf("JS array/set length (%d) exceeds Go array length (%d)", jsLen, goArrayLen)
 	}
 
 	for i := range jsLen {
 		jsElem, err := jsArray.Index(uint32(i))
 		if err != nil {
-			return ac.sample, newJsToGoErr(jsArray, err, fmt.Sprintf("array/set element at index %d", int(i)))
+			return nil, newJsToGoErr(jsArray, err, fmt.Sprintf("array/set element at index %d", int(i)))
 		}
 
-		elemSample := reflect.New(elemType).Elem().Interface()
-		goElem, convErr := toGoValue(ac.tracker, jsElem, elemSample)
+		goElem, convErr := toGoValue(ac.tracker, jsElem, elemType)
 
 		jsElem.Free()
 
 		if convErr != nil {
-			return ac.sample, newJsToGoErr(
+			return nil, newJsToGoErr(
 				jsArray,
 				convErr,
 				fmt.Sprintf("array/set element at index %d", int(i)),
@@ -129,12 +120,10 @@ func (ac *jsArrayToGoConverter[T]) convertToArray(jsArray *Value, jsLen int64) (
 		goArrayValue.Index(int(i)).Set(elemValue)
 	}
 
-	arrayT, _ := reflect.TypeAssert[T](goArrayValue)
-
-	return arrayT, nil
+	return goArrayValue.Interface(), nil
 }
 
-func (ac *jsArrayToGoConverter[T]) convertElementValue(goElem any, elemType reflect.Type) reflect.Value {
+func (ac *jsArrayToGoConverter) convertElementValue(goElem any, elemType reflect.Type) reflect.Value {
 	if goElem == nil {
 		return reflect.Zero(elemType)
 	}
@@ -142,18 +131,16 @@ func (ac *jsArrayToGoConverter[T]) convertElementValue(goElem any, elemType refl
 	return reflect.ValueOf(goElem)
 }
 
-func (ac *jsArrayToGoConverter[T]) convertViaJSON(jsArray *Value) (T, error) {
+func (ac *jsArrayToGoConverter) convertViaJSON(jsArray *Value) (any, error) {
 	jsonString, err := jsArray.jsonStringify()
 	if err != nil {
-		return ac.sample, newJsStringifyErr("array", err)
+		return nil, newJsStringifyErr("array", err)
 	}
 
 	temp := reflect.New(ac.targetType).Interface()
 	if err = unmarshalJSON(jsonString, temp); err != nil {
-		return ac.sample, fmt.Errorf("can not unmarshal json: %w, input=%s", err, jsonString)
+		return nil, fmt.Errorf("can not unmarshal json: %w, input=%s", err, jsonString)
 	}
 
-	arrayT, _ := reflect.TypeAssert[T](reflect.ValueOf(temp).Elem())
-
-	return arrayT, nil
+	return reflect.ValueOf(temp).Elem().Interface(), nil
 }

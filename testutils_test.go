@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -66,6 +67,18 @@ func must[T any](val T, err error) T {
 func extractErr[T any](_ T, err error) error {
 	return err
 }
+
+// asTarget runs a converter for T's target type and returns its result as T.
+func asTarget[T any](convert func(*Value, reflect.Type) (any, error), v *Value) (T, error) {
+	result, err := convert(v, targetOf[T]())
+	t, _ := result.(T)
+
+	return t, err
+}
+
+func numberToGo[T any](v *Value) (T, error) { return asTarget[T](jsNumberToGo, v) }
+
+func bigIntToGo[T any](v *Value) (T, error) { return asTarget[T](jsBigIntToGo, v) }
 
 func fileContent(file string) string {
 	content := must(os.ReadFile(file))

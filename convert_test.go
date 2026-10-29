@@ -99,7 +99,7 @@ func TestJsArrayToGoConverterErrorWrapping(t *testing.T) {
 	assert.NoError(t, err)
 	defer jsValue.Free()
 
-	_, err = jsArrayToGo[[]int](newConvTracker(), jsValue)
+	_, err = jsArrayToGo(newConvTracker(), jsValue, reflect.TypeFor[[]int]())
 
 	assert.Error(t, err)
 
@@ -298,7 +298,7 @@ func TestCreateGoBindFuncType(t *testing.T) {
 	t.Run("valid_functions", func(t *testing.T) {
 		t.Run("nil_function_is_valid", func(t *testing.T) {
 			var nilFunc func()
-			fnType, err := createGoBindFuncType(nilFunc)
+			fnType, err := createGoBindFuncType(reflect.TypeOf(nilFunc))
 			assert.NoError(t, err)
 			assert.NotNil(t, fnType)
 			assert.Equal(t, reflect.Func, fnType.Kind())
@@ -306,7 +306,7 @@ func TestCreateGoBindFuncType(t *testing.T) {
 
 		t.Run("no_return_values", func(t *testing.T) {
 			fn := func() {}
-			fnType, err := createGoBindFuncType(fn)
+			fnType, err := createGoBindFuncType(reflect.TypeOf(fn))
 			assert.NoError(t, err)
 			assert.NotNil(t, fnType)
 			assert.Equal(t, reflect.Func, fnType.Kind())
@@ -314,7 +314,7 @@ func TestCreateGoBindFuncType(t *testing.T) {
 
 		t.Run("single_return_value", func(t *testing.T) {
 			fn := func() string { return "" }
-			fnType, err := createGoBindFuncType(fn)
+			fnType, err := createGoBindFuncType(reflect.TypeOf(fn))
 			assert.NoError(t, err)
 			assert.NotNil(t, fnType)
 			assert.Equal(t, reflect.Func, fnType.Kind())
@@ -322,7 +322,7 @@ func TestCreateGoBindFuncType(t *testing.T) {
 
 		t.Run("two_return_values_with_error", func(t *testing.T) {
 			fn := func() (string, error) { return "", nil }
-			fnType, err := createGoBindFuncType(fn)
+			fnType, err := createGoBindFuncType(reflect.TypeOf(fn))
 			assert.NoError(t, err)
 			assert.NotNil(t, fnType)
 			assert.Equal(t, reflect.Func, fnType.Kind())
@@ -330,7 +330,7 @@ func TestCreateGoBindFuncType(t *testing.T) {
 
 		t.Run("single_error_return", func(t *testing.T) {
 			fn := func() error { return nil }
-			fnType, err := createGoBindFuncType(fn)
+			fnType, err := createGoBindFuncType(reflect.TypeOf(fn))
 			assert.NoError(t, err)
 			assert.NotNil(t, fnType)
 			assert.Equal(t, reflect.Func, fnType.Kind())
@@ -339,14 +339,14 @@ func TestCreateGoBindFuncType(t *testing.T) {
 
 	t.Run("invalid_samples", func(t *testing.T) {
 		t.Run("non_function", func(t *testing.T) {
-			_, err := createGoBindFuncType("not a function")
+			_, err := createGoBindFuncType(reflect.TypeOf("not a function"))
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "expected GO type")
 			assert.Contains(t, err.Error(), "function")
 		})
 
 		t.Run("integer", func(t *testing.T) {
-			_, err := createGoBindFuncType(42)
+			_, err := createGoBindFuncType(reflect.TypeOf(42))
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "expected GO type")
 			assert.Contains(t, err.Error(), "function")
@@ -355,14 +355,14 @@ func TestCreateGoBindFuncType(t *testing.T) {
 
 	t.Run("unsafe_pointer_return", func(t *testing.T) {
 		fn := func() unsafe.Pointer { return nil }
-		_, err := createGoBindFuncType(fn)
+		_, err := createGoBindFuncType(reflect.TypeOf(fn))
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "func return")
 	})
 
 	t.Run("unsafe_pointer_param", func(t *testing.T) {
 		fn := func(unsafe.Pointer) {}
-		_, err := createGoBindFuncType(fn)
+		_, err := createGoBindFuncType(reflect.TypeOf(fn))
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "parameter 0 error")
 		assert.Contains(t, err.Error(), "func param")

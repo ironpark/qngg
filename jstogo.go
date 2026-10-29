@@ -11,133 +11,130 @@ import (
 
 // toGo converts a JS value to T. A sample of T's dynamic type may be given
 // when T is an interface.
-func toGo[T any](input *Value, samples ...T) (v T, err error) {
-	return toGoValue(newConvTracker(), input, samples...)
+func toGo[T any](input *Value, samples ...T) (T, error) {
+	result, err := toGoValue(newConvTracker(), input, targetOf(samples...))
+	v, _ := result.(T)
+
+	return v, err
 }
 
-func toGoValue[T any](
-	tracker *convTracker,
-	input *Value,
-	samples ...T,
-) (v T, err error) {
-	temp, sample := createTemp(samples...)
-	switch any(sample).(type) {
-	case *Value:
-		tvv, _ := any(input).(T)
+var (
+	valueType    = reflect.TypeFor[Value]()
+	valuePtrType = reflect.TypeFor[*Value]()
+)
 
-		return tvv, nil
-	case Value:
-		tv, _ := any(*input).(T)
-
-		return tv, nil
+// toGoValue converts a JS value to the Go type target, or to whatever Go
+// value fits it best when target is nil or an interface.
+func toGoValue(tracker *convTracker, input *Value, target reflect.Type) (result any, err error) {
+	switch {
+	case target == nil:
+	case target == valuePtrType:
+		return input, nil
+	case target == valueType:
+		return *input, nil
+	case target.Kind() == reflect.Interface:
+		target = nil
 	}
 
 	defer func() {
-		v, err = processTempValue("ToGoValue", temp, err, sample)
+		result, err = convertResult("ToGoValue", result, err, target)
 	}()
 
 	kind := input.kind()
 
 	// A proxy value converts back to the Go value it wraps.
 	if kind == kindProxyValue {
-		temp, _ = input.rt.registry.Get(input.proxyID())
+		result, _ = input.rt.registry.Get(input.proxyID())
 
-		return v, nil
+		return result, nil
 	}
 
 	var ok bool
-	if temp, ok, err = jsPrimitivesToGo(input, kind, sample); ok {
-		return v, err
+	if result, ok, err = jsPrimitivesToGo(input, kind, target); ok {
+		return result, err
 	}
 
 	switch kind {
 	case kindDate:
-		temp, err = jsTimeToGo(input)
+		result, err = jsTimeToGo(input)
 	case kindRegExp:
-		temp = input.String()
+		result = input.String()
 	case kindArrayBuffer:
-		temp, err = jsArrayBufferToGo(input)
+		result, err = jsArrayBufferToGo(input)
 	case kindTypedArray, kindDataView:
-		temp, err = jsTypedArrayToGo(input)
+		result, err = jsTypedArrayToGo(input)
 	case kindSet:
-		temp, err = jsSetToGo(tracker, input, sample)
+		result, err = jsSetToGo(tracker, input, target)
 	case kindArray:
-		temp, err = jsArrayToGo(tracker, input, sample)
+		result, err = jsArrayToGo(tracker, input, target)
 	default:
-		temp, err = jsObjectToGo(tracker, input, sample)
+		result, err = jsObjectToGo(tracker, input, target)
 	}
 
-	return v, err
+	return result, err
 }
 
 // jsNumberToGo converts JavaScript numbers to Go numeric types.
-func jsNumberToGo[T any](input *Value, samples ...T) (v T, err error) {
-	temp, sample := createTemp(samples...)
-
+func jsNumberToGo(input *Value, target reflect.Type) (result any, err error) {
 	defer func() {
-		v, err = processTempValue("JsNumberToGo", temp, err, sample)
+		result, err = convertResult("JsNumberToGo", result, err, target)
 	}()
 
 	if input.IsBigInt() {
-		temp, err = jsBigIntToGo(input, sample)
-
-		return v, err
+		return jsBigIntToGo(input, target)
 	}
 
 	if err := canConvertToGoNumber(input); err != nil {
-		return v, err
+		return nil, err
 	}
 
 	floatVal := input.Float64()
 
-	targetType := reflect.TypeOf(sample)
-	if targetType == nil || targetType.Kind() == reflect.Interface {
+	if target == nil {
 		// Prefer int64 for whole numbers
 		if isFloatWholeNumber(floatVal) {
-			temp = int64(floatVal)
-		} else {
-			temp = floatVal
+			return int64(floatVal), nil
 		}
 
-		return v, err
+		return floatVal, nil
 	}
 
-	if isNumericType(targetType) {
-		converter := newJsNumericToGoConverter(targetType)
-		temp, err = converter.Convert(floatVal)
-
-		return v, err
+	if isNumericType(target) {
+		return newJsNumericToGoConverter(target).Convert(floatVal)
 	}
 
-	return v, newInvalidGoTypeErr("numeric type", sample)
+	return nil, newInvalidGoTypeErr("numeric type", zeroOf(target))
 }
 
-// jsBigIntToGo converts a JS BigInt into the Go *big.Int/big.Int.
-func jsBigIntToGo[T any](input *Value, samples ...T) (v T, err error) {
-	temp, sample := createTemp(samples...)
+var (
+	bigIntType    = reflect.TypeFor[big.Int]()
+	bigIntPtrType = reflect.TypeFor[*big.Int]()
+)
 
+// jsBigIntToGo converts a JS BigInt into the Go *big.Int/big.Int.
+func jsBigIntToGo(input *Value, target reflect.Type) (result any, err error) {
 	defer func() {
-		v, err = processTempValue("JsBigIntToGo", temp, err, sample)
+		result, err = convertResult("JsBigIntToGo", result, err, target)
 	}()
 
 	bigInt := input.BigInt()
 	if bigInt == nil {
-		return v, newJsToGoErr(input, nil, "BigInt")
+		return nil, newJsToGoErr(input, nil, "BigInt")
 	}
 
-	switch any(sample).(type) {
-	case nil, *big.Int:
-		temp = bigInt
-	case big.Int:
-		temp = *bigInt
-	default:
-		temp, err = bigIntToGoInteger(bigInt, reflect.TypeOf(sample))
-		if err != nil {
-			return v, fmt.Errorf("cannot convert BigInt %s: %w", bigInt, err)
-		}
+	switch target {
+	case nil, bigIntPtrType:
+		return bigInt, nil
+	case bigIntType:
+		return *bigInt, nil
 	}
 
-	return v, err
+	result, err = bigIntToGoInteger(bigInt, target)
+	if err != nil {
+		return nil, fmt.Errorf("cannot convert BigInt %s: %w", bigInt, err)
+	}
+
+	return result, nil
 }
 
 // bigIntToGoInteger converts n to the integer type t, if it fits.
@@ -214,37 +211,22 @@ func jsTypedArrayToGo(input *Value) ([]byte, error) {
 	return fullBytes[offset : offset+length], nil
 }
 
-func jsSetToGo[T any](
-	tracker *convTracker,
-	input *Value,
-	samples ...T,
-) (v T, err error) {
+func jsSetToGo(tracker *convTracker, input *Value, target reflect.Type) (any, error) {
 	if !input.IsSet() {
-		return v, newJsToGoErr(input, nil, "Set")
+		return nil, newJsToGoErr(input, nil, "Set")
 	}
 
 	arrayVal, err := input.rt.arrayFrom(input)
 	if err != nil {
-		return v, err
+		return nil, err
 	}
 	defer arrayVal.Free()
 
-	return jsArrayToGo(tracker, arrayVal, samples...)
+	return jsArrayToGo(tracker, arrayVal, target)
 }
 
-func jsArrayToGo[T any](
-	tracker *convTracker,
-	input *Value,
-	samples ...T,
-) (T, error) {
-	_, sample := createTemp(samples...)
-
-	return (&jsArrayToGoConverter[T]{
-		tracker:    tracker,
-		input:      input,
-		sample:     sample,
-		targetType: reflect.TypeOf(sample),
-	}).Convert()
+func jsArrayToGo(tracker *convTracker, input *Value, target reflect.Type) (any, error) {
+	return (&jsArrayToGoConverter{tracker: tracker, input: input, targetType: target}).Convert()
 }
 
 func mapEntryToGo(
@@ -252,16 +234,13 @@ func mapEntryToGo(
 	jsKey, jsValue *Value,
 	goKeyType, goValueType reflect.Type,
 ) (k, v reflect.Value, err error) {
-	keySample := reflect.New(goKeyType).Elem().Interface()
-
-	goKeyFromJs, keyErr := toGoValue(tracker, jsKey, keySample)
+	goKeyFromJs, keyErr := toGoValue(tracker, jsKey, goKeyType)
 	if keyErr != nil {
 		return k, v, newJsToGoErr(jsKey, keyErr, "map key")
 	}
 
 	k = reflect.ValueOf(goKeyFromJs).Convert(goKeyType)
-	valueSample := reflect.New(goValueType).Elem().Interface()
-	goValFromJs, valErr := toGoValue(tracker, jsValue, valueSample)
+	goValFromJs, valErr := toGoValue(tracker, jsValue, goValueType)
 
 	switch {
 	case valErr != nil:
@@ -275,29 +254,28 @@ func mapEntryToGo(
 	return k, v, nil
 }
 
-func jsObjectOrMapToGoMap[T any](
-	tracker *convTracker,
-	input *Value,
-	samples ...T,
-) (v T, err error) {
+func jsObjectOrMapToGoMap(tracker *convTracker, input *Value, target reflect.Type) (result any, err error) {
 	if !input.IsObject() {
-		return v, newInvalidJsInputErr("object", input)
+		return nil, newInvalidJsInputErr("object", input)
 	}
 
-	temp, sample, targetType := createGoObjectTarget(samples...)
-
 	defer func() {
-		v, err = processTempValue("JsObjectOrMapToGoMap", temp, err, sample)
+		result, err = convertResult("JsObjectOrMapToGoMap", result, err, target)
 	}()
 
 	if tracker.track(input.raw()) {
-		return v, newJsToGoErr(input, nil, "circular reference")
+		return nil, newJsToGoErr(input, nil, "circular reference")
 	}
 	defer tracker.untrack(input.raw())
 
-	resultMap := reflect.MakeMap(targetType)
-	targetKeyType := targetType.Key()
-	targetValueType := targetType.Elem()
+	mapType := target
+	if mapType == nil {
+		mapType = reflect.TypeFor[map[string]any]()
+	}
+
+	resultMap := reflect.MakeMap(mapType)
+	targetKeyType := mapType.Key()
+	targetValueType := mapType.Elem()
 
 	err = input.entries(func(key, value *Value) error {
 		targetKey, targetValue, err := mapEntryToGo(tracker, key, value, targetKeyType, targetValueType)
@@ -310,60 +288,43 @@ func jsObjectOrMapToGoMap[T any](
 		return nil
 	})
 	if err != nil {
-		return v, err
+		return nil, err
 	}
 
-	temp = resultMap.Interface()
-
-	return v, err
+	return resultMap.Interface(), nil
 }
 
-func jsObjectOrMapToGoStruct[T any](
-	tracker *convTracker,
-	input *Value,
-	samples ...T,
-) (v T, err error) {
+// jsObjectOrMapToGoStruct converts a JS object to target, a struct type
+// or a pointer to one.
+func jsObjectOrMapToGoStruct(tracker *convTracker, input *Value, target reflect.Type) (result any, err error) {
 	if !input.IsObject() {
-		return v, newInvalidJsInputErr("object", input)
+		return nil, newInvalidJsInputErr("object", input)
 	}
 
-	temp, sample, targetType := createGoObjectTarget(samples...)
-
 	defer func() {
-		v, err = processTempValue("JsObjectOrMapToGoStruct", temp, err, sample)
+		result, err = convertResult("JsObjectOrMapToGoStruct", result, err, target)
 	}()
 
 	if tracker.track(input.raw()) {
-		return v, newJsToGoErr(input, nil, "circular reference")
+		return nil, newJsToGoErr(input, nil, "circular reference")
 	}
 	defer tracker.untrack(input.raw())
 
-	structValue, isStructPtr := setupStructValue(targetType, &temp)
-	fields := structFieldsOf(structValue.Type())
-
-	if err := processObjectFields(tracker, input, structValue, fields); err != nil {
-		return v, err
+	structType := target
+	if structType.Kind() == reflect.Pointer {
+		structType = structType.Elem()
 	}
 
-	if !isStructPtr {
-		temp = structValue.Interface()
+	structPtr := reflect.New(structType)
+	if err := processObjectFields(tracker, input, structPtr.Elem(), structFieldsOf(structType)); err != nil {
+		return nil, err
 	}
 
-	return v, err
-}
-
-// setupStructValue initializes the struct value for processing.
-func setupStructValue(targetType reflect.Type, temp *any) (reflect.Value, bool) {
-	isStructPtr := targetType.Kind() == reflect.Pointer
-	if isStructPtr {
-		*temp = reflect.New(targetType.Elem()).Interface()
-
-		return reflect.ValueOf(*temp).Elem(), true
+	if target.Kind() == reflect.Pointer {
+		return structPtr.Interface(), nil
 	}
 
-	*temp = reflect.New(targetType).Interface()
-
-	return reflect.ValueOf(*temp).Elem(), false
+	return structPtr.Elem().Interface(), nil
 }
 
 // processObjectFields processes each field in the JavaScript object.
@@ -424,7 +385,7 @@ func setFieldValue(tracker *convTracker, fieldValue reflect.Value, jsValue *Valu
 		return nil
 	}
 
-	converted, err := toGoValue(tracker, jsValue, reflect.New(field.Type).Elem().Interface())
+	converted, err := toGoValue(tracker, jsValue, field.Type)
 	if err != nil {
 		return newJsToGoErr(
 			jsValue, err,
@@ -437,71 +398,47 @@ func setFieldValue(tracker *convTracker, fieldValue reflect.Value, jsValue *Valu
 	return nil
 }
 
-func jsObjectToGo[T any](
-	tracker *convTracker,
-	input *Value,
-	samples ...T,
-) (v T, err error) {
+func jsObjectToGo(tracker *convTracker, input *Value, target reflect.Type) (any, error) {
 	if !input.IsObject() {
-		return v, newInvalidJsInputErr("object", input)
+		return nil, newInvalidJsInputErr("object", input)
 	}
 
-	_, sample := createTemp(samples...)
-
-	targetType := reflect.TypeOf(sample)
-	if targetType == nil {
-		targetType = reflect.TypeFor[map[string]any]()
-	}
-
-	if targetType.Kind() == reflect.Map {
-		return jsObjectOrMapToGoMap(tracker, input, sample)
-	}
-
-	if isGoStruct(targetType) {
-		return jsObjectOrMapToGoStruct(tracker, input, sample)
-	}
-
-	if input.IsArray() {
-		return jsArrayToGo(tracker, input, sample)
+	switch {
+	case target == nil || target.Kind() == reflect.Map:
+		return jsObjectOrMapToGoMap(tracker, input, target)
+	case isGoStruct(target):
+		return jsObjectOrMapToGoStruct(tracker, input, target)
+	case input.IsArray():
+		return jsArrayToGo(tracker, input, target)
 	}
 
 	// Fallback for other types
-	tempPtr := reflect.New(targetType).Interface()
+	tempPtr := reflect.New(target)
 
 	jsonString, err := input.jsonStringify()
 	if err != nil {
-		return v, newJsStringifyErr("object", err)
+		return nil, newJsStringifyErr("object", err)
 	}
 
-	if err = unmarshalJSON(jsonString, tempPtr); err != nil {
+	if err = unmarshalJSON(jsonString, tempPtr.Interface()); err != nil {
 		err = fmt.Errorf("can not unmarshal json: %w, input=%s", err, jsonString)
-
-		return processTempValue("JsObjectToGo", nil, err, sample)
 	}
 
-	// Dereference the pointer to get the actual value
-	temp := reflect.ValueOf(tempPtr).Elem().Interface()
-
-	return processTempValue("JsObjectToGo", temp, err, sample)
+	return convertResult("JsObjectToGo", tempPtr.Elem().Interface(), err, target)
 }
 
-func jsFuncToGo[T any](
-	input *Value,
-	samples ...T,
-) (v T, err error) {
+func jsFuncToGo(input *Value, target reflect.Type) (result any, err error) {
 	if !input.IsFunction() {
-		return v, newInvalidJsInputErr("function", input)
+		return nil, newInvalidJsInputErr("function", input)
 	}
 
-	temp, sample := createTemp(samples...)
-
 	defer func() {
-		v, err = processTempValue("JsFuncToGo", temp, err, sample)
+		result, err = convertResult("JsFuncToGo", result, err, target)
 	}()
 
-	fnType, err := createGoBindFuncType(sample)
+	fnType, err := createGoBindFuncType(target)
 	if err != nil {
-		return v, err
+		return nil, err
 	}
 
 	// The Go function may outlive input, so it keeps its own reference,
@@ -514,10 +451,7 @@ func jsFuncToGo[T any](
 		return createJsFunctionHandler(jsFn, newConvTracker(), fnType, args)
 	}
 
-	fn := reflect.MakeFunc(fnType, goFunc)
-	temp = fn.Interface()
-
-	return v, err
+	return reflect.MakeFunc(fnType, goFunc).Interface(), nil
 }
 
 // createJsFunctionHandler handles the execution of JavaScript functions from Go.
@@ -584,7 +518,7 @@ func handleJsFunctionResult(
 		return results
 	}
 
-	goResult, err := toGoValue[any](tracker, jsResult)
+	goResult, err := toGoValue(tracker, jsResult, nil)
 	if err != nil {
 		results[len(results)-1] = reflect.ValueOf(
 			fmt.Errorf("failed to convert JS function result '%s' to Go: %w", jsResult.Type(), err),
@@ -614,62 +548,35 @@ func handleJsFunctionResult(
 }
 
 // jsPrimitivesToGo converts JavaScript primitive types to Go types.
-func jsPrimitivesToGo[T any](
-	input *Value,
-	kind objectKind,
-	sample T,
-) (val any, ok bool, err error) {
-	if input.IsString() {
-		result, err := jsStringToGo(input, sample)
-
-		return result, true, err
+func jsPrimitivesToGo(input *Value, kind objectKind, target reflect.Type) (val any, ok bool, err error) {
+	switch {
+	case input.IsString():
+		val, err = jsStringToGo(input, target)
+	case input.IsBigInt():
+		val, err = jsBigIntToGo(input, target)
+	case input.IsNumber():
+		val, err = jsNumberToGo(input, target)
+	case input.IsBool():
+		val = input.Bool()
+	case kind == kindError:
+		val = input.toError()
+	case input.IsNull() || input.IsUndefined():
+	case input.IsSymbol():
+		err = errors.New("unsupported type: Symbol")
+	case kind.isFunction():
+		val, err = jsFuncToGo(input, target)
+	default:
+		return nil, false, nil // No primitive type matched
 	}
 
-	if input.IsBigInt() {
-		result, err := jsBigIntToGo(input, sample)
-
-		return result, true, err
-	}
-
-	if input.IsNumber() {
-		result, err := jsNumberToGo(input, sample)
-
-		return result, true, err
-	}
-
-	if input.IsBool() {
-		val, err := processTempValue("JsBigIntToGo", input.Bool(), nil, true)
-
-		return val, true, err
-	}
-
-	if kind == kindError {
-		return input.toError(), true, nil
-	}
-
-	if input.IsNull() || input.IsUndefined() {
-		return nil, true, nil
-	}
-
-	if input.IsSymbol() {
-		return nil, true, errors.New("unsupported type: Symbol")
-	}
-
-	if kind.isFunction() {
-		result, err := jsFuncToGo(input, sample)
-
-		return result, true, err
-	}
-
-	return nil, false, nil // No primitive type matched
+	return val, true, err
 }
 
 // jsStringToGo handles string to various type conversions.
-func jsStringToGo[T any](input *Value, sample T) (any, error) {
+func jsStringToGo(input *Value, targetType reflect.Type) (any, error) {
 	stringVal := input.String()
-	targetType := reflect.TypeOf(sample)
 
-	if targetType != nil && targetType.Kind() != reflect.Interface {
+	if targetType != nil {
 		if isNumericType(targetType) {
 			return stringToNumeric(stringVal, targetType)
 		}

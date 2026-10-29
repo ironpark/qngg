@@ -38,74 +38,46 @@ func (tracker *convTracker) untrack(key uint64) {
 	delete(tracker.processing, key)
 }
 
-// processTempValue validates if temp is a valid result for the given T type.
-func processTempValue[T any](prefix string, temp any, err error, samples ...T) (v T, _ error) {
+// targetOf returns the type a JS value converts to for T: the dynamic type
+// of sample if given, else T, or nil when that is an interface, meaning any
+// Go value fits.
+func targetOf[T any](samples ...T) reflect.Type {
+	var sample T
+	if len(samples) > 0 {
+		sample = samples[0]
+	}
+
+	return reflect.TypeOf(sample)
+}
+
+// zeroOf returns the zero value of t, or nil when t is nil, for errors that
+// name the type.
+func zeroOf(t reflect.Type) any {
+	if t == nil {
+		return nil
+	}
+
+	return reflect.Zero(t).Interface()
+}
+
+// convertResult checks that temp, converted to target, is a valid result,
+// converting it when it has a different but convertible type. An error is
+// wrapped with prefix.
+func convertResult(prefix string, temp any, err error, target reflect.Type) (any, error) {
 	if err != nil {
-		return v, fmt.Errorf("[%s] %w", prefix, err)
+		return nil, fmt.Errorf("[%s] %w", prefix, err)
 	}
 
-	// Handle interface{} target types by accepting any converted value
-	_, sample := createTemp(samples...)
-
-	sampleRType := reflect.TypeOf(sample)
-	if sampleRType == nil || sampleRType.Kind() == reflect.Interface {
-		if temp == nil {
-			return v, nil
-		}
-
-		tempT, _ := temp.(T)
-
-		return tempT, nil
+	if target == nil || reflect.TypeOf(temp) == target {
+		return temp, nil
 	}
 
-	tempRType := reflect.TypeOf(temp)
-	if tempRType != sampleRType {
-		tempRValue := reflect.ValueOf(temp)
-		if tempRValue.IsValid() && tempRValue.Type().ConvertibleTo(sampleRType) {
-			temp = tempRValue.Convert(sampleRType).Interface()
-			tempT, _ := temp.(T)
-
-			return tempT, nil
-		}
-
-		return v, newInvalidGoTypeErr(goTypeName(sample), temp)
+	tempValue := reflect.ValueOf(temp)
+	if tempValue.IsValid() && tempValue.Type().ConvertibleTo(target) {
+		return tempValue.Convert(target).Interface(), nil
 	}
 
-	valueT, _ := temp.(T)
-
-	return valueT, nil
-}
-
-func createGoObjectTarget[T any](samples ...T) (
-	temp any,
-	sample T,
-	target reflect.Type,
-) {
-	if len(samples) > 0 {
-		sample = samples[0]
-	}
-
-	target = reflect.TypeOf(sample)
-	if target == nil {
-		target = reflect.TypeFor[map[string]any]()
-	}
-
-	temp = reflect.New(target).Interface()
-
-	return temp, sample, target
-}
-
-func createTemp[T any](samples ...T) (any, T) {
-	var (
-		tempValue any
-		sample    T
-	)
-
-	if len(samples) > 0 {
-		sample = samples[0]
-	}
-
-	return tempValue, sample
+	return nil, newInvalidGoTypeErr(goTypeName(target), temp)
 }
 
 func isGoStruct(goType reflect.Type) bool {
@@ -156,13 +128,14 @@ func checkGoFunc(fnType reflect.Type) error {
 	return nil
 }
 
-func createGoBindFuncType[T any](sample T) (fnType reflect.Type, err error) {
-	sampleVal := reflect.ValueOf(sample)
-	if sampleVal.IsValid() && sampleVal.Kind() == reflect.Func {
-		fnType = sampleVal.Type()
+// createGoBindFuncType returns target if it is a function type that can be
+// converted.
+func createGoBindFuncType(target reflect.Type) (fnType reflect.Type, err error) {
+	if target != nil && target.Kind() == reflect.Func {
+		fnType = target
 	}
 
-	if err = verifyGoFunc(fnType, sample); err != nil {
+	if err = verifyGoFunc(fnType, zeroOf(target)); err != nil {
 		return fnType, err
 	}
 
