@@ -135,8 +135,12 @@ if err := user.Set("tags", tags); err != nil {
 	return err
 }
 
-keys, err := user.Keys()       // [name tags]
-out, err := json.Marshal(user) // {"name":"Alice","tags":["admin","editor"]}
+if err := user.Set("age", 30); err != nil { // Go values are converted
+	return err
+}
+
+keys, err := user.Keys()       // [name tags age]
+out, err := json.Marshal(user) // {"name":"Alice","tags":["admin","editor"],"age":30}
 ```
 
 `Value.Type()` names a value's type (`"String"`, `"Array"`, `"Map"`,
@@ -535,7 +539,7 @@ rt.NewString(s), rt.NewObject(), rt.NewProxyValue(v), ...
 rt.Global()                                    // The global object (owned by the runtime)
 
 // Value
-v.Get(name), v.Set(name, val), v.Index(i), v.SetIndex(i, val)
+v.Get(name), v.Set(name, val), v.Index(i), v.SetIndex(i, val) // val: *Value or Go value
 v.Has(name), v.Delete(name), v.Keys(), v.Len()
 v.Call(ctx, this, args...), v.Invoke(ctx, method, args...), v.New(ctx, args...)
 v.Await(ctx)                                   // Wait for a promise

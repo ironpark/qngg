@@ -285,6 +285,44 @@ func TestValueProperties(t *testing.T) {
 		assert.True(t, missing.IsUndefined())
 	})
 
+	t.Run("SetConvertsGoValues", func(t *testing.T) {
+		obj := rt.NewObject()
+		defer obj.Free()
+
+		require.NoError(t, obj.Set("n", 42))
+		require.NoError(t, obj.Set("list", []string{"a", "b"}))
+		require.NoError(t, obj.Set("none", nil))
+		require.NoError(t, obj.SetKey(eval(t, rt, "Symbol.toStringTag"), "Tagged"))
+
+		arr := rt.NewArray()
+		defer arr.Free()
+		require.NoError(t, arr.SetIndex(0, true))
+
+		assert.JSONEq(t, `{"n":42,"list":["a","b"],"none":null}`, string(must(obj.MarshalJSON())))
+		assert.Equal(t, `[true]`, string(must(arr.MarshalJSON())))
+
+		tag := must(eval(t, rt, "Object.prototype.toString").Call(bg, obj))
+		defer tag.Free()
+		assert.Equal(t, "[object Tagged]", tag.String())
+
+		type node struct{ Next *node }
+		cyclic := &node{}
+		cyclic.Next = cyclic
+		assert.ErrorContains(t, obj.Set("bad", cyclic), "recursive pointer", "unconvertible values fail")
+	})
+
+	t.Run("SetKeepsValueOwnership", func(t *testing.T) {
+		obj := rt.NewObject()
+		defer obj.Free()
+
+		v := rt.NewString("kept")
+		defer v.Free()
+		require.NoError(t, obj.Set("a", v))
+		require.NoError(t, obj.SetIndex(0, v))
+		require.NoError(t, obj.SetKey(eval(t, rt, "Symbol('s')"), v))
+		assert.Equal(t, "kept", v.String(), "the caller still owns a *Value it passes")
+	})
+
 	t.Run("GetterAndSetterExceptions", func(t *testing.T) {
 		obj := eval(t, rt, `({ get bad() { throw new TypeError('getter') }, set bad(v) { throw new RangeError('setter') } })`)
 

@@ -444,36 +444,64 @@ func (v *Value) Index(i uint32) (_ *Value, err error) {
 	return v.rt.result(v.rt.call(xGetPropertyUint32, v.rt.jsCtx, v.ref, uint64(i)))
 }
 
-// Set sets the property `name` to val. Setters may run, and their
-// exceptions are returned.
-func (v *Value) Set(name string, val *Value) error {
-	if err := checkAll(v, val); err != nil {
+// Set sets the property `name` to val, converted with ToValue unless it is
+// a *Value. Setters may run, and their exceptions are returned.
+func (v *Value) Set(name string, val any) error {
+	if err := v.check(); err != nil {
 		return err
 	}
 
-	return v.setProp(name, val.ref, true)
+	jsVal, owned, err := v.rt.argValue(val)
+	if err != nil {
+		return err
+	}
+
+	if owned {
+		return v.setProp(name, jsVal.take(), false)
+	}
+
+	return v.setProp(name, jsVal.ref, true)
 }
 
-// SetKey sets the property whose key is the given value to val.
-func (v *Value) SetKey(key, val *Value) (err error) {
-	if err := checkAll(v, key, val); err != nil {
+// SetKey sets the property whose key is the given value to val, converted
+// like in Set.
+func (v *Value) SetKey(key *Value, val any) (err error) {
+	if err := checkAll(v, key); err != nil {
 		return err
+	}
+
+	jsVal, owned, err := v.rt.argValue(val)
+	if err != nil {
+		return err
+	}
+
+	if owned {
+		defer jsVal.Free()
 	}
 
 	defer recoverInterrupt(v.rt, &err)
 
-	_, err = v.rt.status(v.rt.call(xSetPropertyValue, v.rt.jsCtx, v.ref, key.ref, val.ref))
+	_, err = v.rt.status(v.rt.call(xSetPropertyValue, v.rt.jsCtx, v.ref, key.ref, jsVal.ref))
 
 	return err
 }
 
-// SetIndex sets the element at index i to val.
-func (v *Value) SetIndex(i uint32, val *Value) error {
-	if err := checkAll(v, val); err != nil {
+// SetIndex sets the element at index i to val, converted like in Set.
+func (v *Value) SetIndex(i uint32, val any) error {
+	if err := v.check(); err != nil {
 		return err
 	}
 
-	return v.setIndex(i, val.ref, true)
+	jsVal, owned, err := v.rt.argValue(val)
+	if err != nil {
+		return err
+	}
+
+	if owned {
+		return v.setIndex(i, jsVal.take(), false)
+	}
+
+	return v.setIndex(i, jsVal.ref, true)
 }
 
 // Has reports whether the value has the property `name`, own or inherited.
@@ -696,6 +724,18 @@ func (v *Value) objectType() string {
 	return "Object"
 }
 
+// argValue returns arg as a JS value: arg itself if it is a *Value, or else
+// arg converted with ToValue, which the caller owns and must free or take.
+func (r *Runtime) argValue(arg any) (_ *Value, owned bool, err error) {
+	if v, ok := arg.(*Value); ok {
+		return v, false, v.check()
+	}
+
+	v, err := r.ToValue(arg)
+
+	return v, err == nil, err
+}
+
 // callWith converts args, copies them into a temporary array and returns
 // the result of the C call made by fn with it.
 func (r *Runtime) callWith(args []any, fn func(argc, argv uint64) uint64) (*Value, error) {
@@ -712,16 +752,13 @@ func (r *Runtime) callWith(args []any, fn func(argc, argv uint64) uint64) (*Valu
 	}()
 
 	for i, arg := range args {
-		jsArg, ok := arg.(*Value)
-		if !ok {
-			var err error
-			if jsArg, err = r.ToValue(arg); err != nil {
-				return nil, fmt.Errorf("argument %d: %w", i, err)
-			}
-
-			owned = append(owned, jsArg)
-		} else if err := jsArg.check(); err != nil {
+		jsArg, isOwned, err := r.argValue(arg)
+		if err != nil {
 			return nil, fmt.Errorf("argument %d: %w", i, err)
+		}
+
+		if isOwned {
+			owned = append(owned, jsArg)
 		}
 
 		raws = append(raws, jsArg.ref)

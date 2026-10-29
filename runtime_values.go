@@ -20,12 +20,7 @@ func (r *Runtime) Get(name string) (*Value, error) {
 
 // Set converts v with ToValue and assigns it to the global variable `name`.
 func (r *Runtime) Set(name string, v any) error {
-	jsVal, err := r.ToValue(v)
-	if err != nil {
-		return err
-	}
-
-	return setTake(r.global, name, jsVal)
+	return r.global.Set(name, v)
 }
 
 // SetFunc assigns a Go function to the global variable `name`.
@@ -235,7 +230,9 @@ func (r *Runtime) newBuiltinError(name, message string) *Value {
 	return errVal
 }
 
-// NewFunction returns a JavaScript function that calls fn.
+// NewFunction returns a JavaScript function that calls fn. To expose a
+// typed Go function, with its arguments and results converted, pass it to
+// Set or ToValue instead; a Function is for direct access to the values.
 func (r *Runtime) NewFunction(fn Function) *Value {
 	return r.newFunction("", fn, false)
 }
