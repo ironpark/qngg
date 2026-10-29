@@ -81,7 +81,8 @@ func (r *Runtime) EvalBytecode(ctx context.Context, bytecode []byte, opts ...Eva
 }
 
 // Compile compiles src, like Eval would, into bytecode for EvalBytecode or
-// LoadModuleBytecode, without running it.
+// LoadModuleBytecode, without running it. Since no JavaScript runs, it takes
+// no context and cannot be interrupted.
 func (r *Runtime) Compile(name, src string, opts ...EvalOption) ([]byte, error) {
 	return r.compile(evalInput{name: name, source: &src}, newEvalConfig(opts))
 }

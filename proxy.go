@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
-	"sync"
 )
 
 // Function is a Go function callable from JavaScript. A returned error is
@@ -193,9 +192,9 @@ func newProxyErr(r any) error {
 
 // proxyRegistry stores Go values referenced from JavaScript by ID: the Go
 // functions behind JS functions and the values wrapped by ProxyValues.
-// Entries are removed when the JavaScript object is garbage collected.
+// Entries are removed when the JavaScript object is garbage collected. Like
+// the runtime, it is only used from one goroutine at a time.
 type proxyRegistry struct {
-	mu      sync.Mutex
 	lastID  uint32
 	proxies map[uint32]any
 }
@@ -209,9 +208,6 @@ func (r *proxyRegistry) Register(v any) uint32 {
 	if v == nil {
 		return 0
 	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	// IDs are only reused after wrapping around, skipping those in use.
 	for {
@@ -228,9 +224,6 @@ func (r *proxyRegistry) Register(v any) uint32 {
 
 // Get returns the value registered as id.
 func (r *proxyRegistry) Get(id uint32) (any, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	v, ok := r.proxies[id]
 
 	return v, ok
@@ -238,9 +231,6 @@ func (r *proxyRegistry) Get(id uint32) (any, bool) {
 
 // Unregister removes id and reports whether it was registered.
 func (r *proxyRegistry) Unregister(id uint32) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	_, ok := r.proxies[id]
 	delete(r.proxies, id)
 
@@ -249,16 +239,10 @@ func (r *proxyRegistry) Unregister(id uint32) bool {
 
 // Len returns the number of registered values.
 func (r *proxyRegistry) Len() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	return len(r.proxies)
 }
 
 // Clear removes all registered values.
 func (r *proxyRegistry) Clear() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	clear(r.proxies)
 }

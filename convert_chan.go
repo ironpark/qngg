@@ -2,7 +2,9 @@ package qngg
 
 import "reflect"
 
-// channelToJSObjectValue converts a Go channel to a JavaScript object with async methods.
+// channelToJSObjectValue converts a Go channel to a JavaScript object whose
+// send and receive methods never block: they fail when the channel is not
+// ready, since JavaScript cannot wait for another goroutine.
 func channelToJSObjectValue(
 	rt *Runtime,
 	rtype reflect.Type,
