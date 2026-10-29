@@ -59,9 +59,9 @@ func newConvTracker() *convTracker {
 	return &convTracker{}
 }
 
-// Track registers an object for circular reference detection.
+// track registers an object for circular reference detection.
 // Returns true if the object is already being processed (circular reference detected).
-func (tracker *convTracker) Track(key uint64) bool {
+func (tracker *convTracker) track(key uint64) bool {
 	if tracker.processing[key] {
 		return true
 	}
@@ -76,8 +76,8 @@ func (tracker *convTracker) Track(key uint64) bool {
 	return false
 }
 
-// UnTrack removes an object from circular reference tracking.
-func (tracker *convTracker) UnTrack(key uint64) {
+// untrack removes an object from circular reference tracking.
+func (tracker *convTracker) untrack(key uint64) {
 	delete(tracker.processing, key)
 }
 
@@ -89,7 +89,7 @@ type circularTracker struct {
 
 // trackPtr sets up circular reference tracking for a Go pointer.
 func (ct *circularTracker) trackPtr(tracker *convTracker, ptr uintptr) error {
-	if tracker.Track(uint64(ptr)) {
+	if tracker.track(uint64(ptr)) {
 		return newGoToJsErr("", nil, "recursive pointer")
 	}
 
@@ -101,7 +101,7 @@ func (ct *circularTracker) trackPtr(tracker *convTracker, ptr uintptr) error {
 // trackValue sets up circular reference tracking for a JS value.
 func (ct *circularTracker) trackValue(tracker *convTracker, value *Value) error {
 	key := value.raw()
-	if tracker.Track(key) {
+	if tracker.track(key) {
 		return newJsToGoErr(value, nil, "circular reference")
 	}
 
@@ -113,7 +113,7 @@ func (ct *circularTracker) trackValue(tracker *convTracker, value *Value) error 
 // cleanup removes the object from circular reference tracking.
 func (ct *circularTracker) cleanup() {
 	if ct.tracker != nil {
-		ct.tracker.UnTrack(ct.key)
+		ct.tracker.untrack(ct.key)
 	}
 }
 
@@ -664,15 +664,15 @@ func is32BitPlatform() bool {
 
 // channelToJSObjectValue converts a Go channel to a JavaScript object with async methods.
 func channelToJSObjectValue(
-	c *Runtime,
+	rt *Runtime,
 	rtype reflect.Type,
 	rval reflect.Value,
 ) (*Value, error) {
 	if rval.IsNil() {
-		return c.NewNull(), nil
+		return rt.NewNull(), nil
 	}
 
-	return withJSObject(c, func(obj *Value) error {
+	return withJSObject(rt, func(obj *Value) error {
 		// Check channel direction
 		chanDir := rtype.ChanDir()
 		canSend := chanDir == reflect.BothDir || chanDir == reflect.SendDir
@@ -684,10 +684,10 @@ func channelToJSObjectValue(
 		}
 
 		for name, value := range map[string]*Value{
-			"type":        c.NewString("channel"),
-			"elementType": c.NewString(goTypeName(rtype.Elem())),
-			"canSend":     c.NewBool(canSend),
-			"canReceive":  c.NewBool(canRecv),
+			"type":        rt.NewString("channel"),
+			"elementType": rt.NewString(goTypeName(rtype.Elem())),
+			"canSend":     rt.NewBool(canSend),
+			"canReceive":  rt.NewBool(canRecv),
 		} {
 			if err := setTake(obj, name, value); err != nil {
 				return err
@@ -704,7 +704,7 @@ func channelToJSObjectValue(
 
 		for name, method := range objMethods {
 			// Skip error check since we know the function signatures are correct
-			jsMethod, _ := funcToJS(c, method)
+			jsMethod, _ := funcToJS(rt, method)
 			if err := setTake(obj, name, jsMethod); err != nil {
 				return err
 			}

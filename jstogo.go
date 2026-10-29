@@ -60,11 +60,11 @@ func toGoValue[T any](
 	case kindTypedArray, kindDataView:
 		temp, err = jsTypedArrayToGo(input)
 	case kindSet:
-		temp, err = jsSetToGoWithContext(tracker, input, sample)
+		temp, err = jsSetToGo(tracker, input, sample)
 	case kindArray:
-		temp, err = jsArrayToGoWithContext(tracker, input, sample)
+		temp, err = jsArrayToGo(tracker, input, sample)
 	default:
-		temp, err = jsObjectToGoWithContext(tracker, input, sample)
+		temp, err = jsObjectToGo(tracker, input, sample)
 	}
 
 	return v, err
@@ -214,7 +214,7 @@ func jsTypedArrayToGo(input *Value) ([]byte, error) {
 	return fullBytes[offset : offset+length], nil
 }
 
-func jsSetToGoWithContext[T any](
+func jsSetToGo[T any](
 	tracker *convTracker,
 	input *Value,
 	samples ...T,
@@ -229,10 +229,10 @@ func jsSetToGoWithContext[T any](
 	}
 	defer arrayVal.Free()
 
-	return jsArrayToGoWithContext(tracker, arrayVal, samples...)
+	return jsArrayToGo(tracker, arrayVal, samples...)
 }
 
-func jsArrayToGoWithContext[T any](
+func jsArrayToGo[T any](
 	tracker *convTracker,
 	input *Value,
 	samples ...T,
@@ -247,21 +247,21 @@ func jsArrayToGoWithContext[T any](
 	}).Convert()
 }
 
-func mapEntryToGoWithContext(
-	ctx *convTracker,
+func mapEntryToGo(
+	tracker *convTracker,
 	jsKey, jsValue *Value,
 	goKeyType, goValueType reflect.Type,
 ) (k, v reflect.Value, err error) {
 	keySample := reflect.New(goKeyType).Elem().Interface()
 
-	goKeyFromJs, keyErr := toGoValue(ctx, jsKey, keySample)
+	goKeyFromJs, keyErr := toGoValue(tracker, jsKey, keySample)
 	if keyErr != nil {
 		return k, v, newJsToGoErr(jsKey, keyErr, "map key")
 	}
 
 	k = reflect.ValueOf(goKeyFromJs).Convert(goKeyType)
 	valueSample := reflect.New(goValueType).Elem().Interface()
-	goValFromJs, valErr := toGoValue(ctx, jsValue, valueSample)
+	goValFromJs, valErr := toGoValue(tracker, jsValue, valueSample)
 
 	switch {
 	case valErr != nil:
@@ -275,7 +275,7 @@ func mapEntryToGoWithContext(
 	return k, v, nil
 }
 
-func jsObjectOrMapToGoMapWithContext[T any](
+func jsObjectOrMapToGoMap[T any](
 	tracker *convTracker,
 	input *Value,
 	samples ...T,
@@ -302,7 +302,7 @@ func jsObjectOrMapToGoMapWithContext[T any](
 	targetValueType := targetType.Elem()
 
 	err = input.entries(func(key, value *Value) error {
-		targetKey, targetValue, err := mapEntryToGoWithContext(tracker, key, value, targetKeyType, targetValueType)
+		targetKey, targetValue, err := mapEntryToGo(tracker, key, value, targetKeyType, targetValueType)
 		if err != nil {
 			return err
 		}
@@ -320,7 +320,7 @@ func jsObjectOrMapToGoMapWithContext[T any](
 	return v, err
 }
 
-func jsObjectOrMapToGoStructWithContext[T any](
+func jsObjectOrMapToGoStruct[T any](
 	tracker *convTracker,
 	input *Value,
 	samples ...T,
@@ -465,7 +465,7 @@ func setFieldWithDirectConversion(
 	return nil
 }
 
-func jsObjectToGoWithContext[T any](
+func jsObjectToGo[T any](
 	tracker *convTracker,
 	input *Value,
 	samples ...T,
@@ -482,15 +482,15 @@ func jsObjectToGoWithContext[T any](
 	}
 
 	if targetType.Kind() == reflect.Map {
-		return jsObjectOrMapToGoMapWithContext(tracker, input, sample)
+		return jsObjectOrMapToGoMap(tracker, input, sample)
 	}
 
 	if isGoStruct(targetType) {
-		return jsObjectOrMapToGoStructWithContext(tracker, input, sample)
+		return jsObjectOrMapToGoStruct(tracker, input, sample)
 	}
 
 	if input.IsArray() {
-		return jsArrayToGoWithContext(tracker, input, sample)
+		return jsArrayToGo(tracker, input, sample)
 	}
 
 	// Fallback for other types
@@ -519,7 +519,7 @@ type jsFuncRef struct {
 	fn *Value
 }
 
-func jsFuncToGoWithContext[T any](
+func jsFuncToGo[T any](
 	tracker *convTracker,
 	input *Value,
 	samples ...T,
@@ -691,7 +691,7 @@ func jsPrimitivesToGo[T any](
 	}
 
 	if kind.isFunction() {
-		result, err := jsFuncToGoWithContext(tracker, input, sample)
+		result, err := jsFuncToGo(tracker, input, sample)
 
 		return result, true, err
 	}

@@ -99,7 +99,7 @@ func TestJsArrayToGoConverterErrorWrapping(t *testing.T) {
 	assert.NoError(t, err)
 	defer jsValue.Free()
 
-	_, err = jsArrayToGoWithContext[[]int](newConvTracker(), jsValue)
+	_, err = jsArrayToGo[[]int](newConvTracker(), jsValue)
 
 	assert.Error(t, err)
 

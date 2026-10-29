@@ -9,9 +9,9 @@ import (
 var contextType = reflect.TypeFor[context.Context]()
 
 // funcToJS converts a Go function to a JavaScript function.
-func funcToJS(c *Runtime, v any) (_ *Value, err error) {
+func funcToJS(rt *Runtime, v any) (_ *Value, err error) {
 	if v == nil {
-		return c.NewNull(), nil
+		return rt.NewNull(), nil
 	}
 
 	defer func() {
@@ -25,7 +25,7 @@ func funcToJS(c *Runtime, v any) (_ *Value, err error) {
 
 	if rtype.Kind() == reflect.Pointer {
 		if rval.IsNil() {
-			return c.NewNull(), nil
+			return rt.NewNull(), nil
 		}
 
 		rval = rval.Elem()
@@ -37,7 +37,7 @@ func funcToJS(c *Runtime, v any) (_ *Value, err error) {
 	}
 
 	if rval.IsNil() {
-		return c.NewNull(), nil
+		return rt.NewNull(), nil
 	}
 
 	fnType := rval.Type()
@@ -57,7 +57,7 @@ func funcToJS(c *Runtime, v any) (_ *Value, err error) {
 		argsType, takesContext = reflect.FuncOf(in, nil, fnType.IsVariadic()), true
 	}
 
-	return c.NewFunction(func(call *FunctionCall) (*Value, error) {
+	return rt.NewFunction(func(call *FunctionCall) (*Value, error) {
 		goArgs, err := jsFuncArgsToGo(call.Args(), argsType)
 		if err != nil {
 			return nil, err
@@ -74,7 +74,7 @@ func funcToJS(c *Runtime, v any) (_ *Value, err error) {
 			results = rval.Call(goArgs)
 		}
 
-		return goFuncResultToJs(c, results)
+		return goFuncResultToJs(rt, results)
 	}), nil
 }
 
@@ -256,7 +256,7 @@ func createVariadicSlice(jsArgs []*Value, sliceType reflect.Type, fixedArgsCount
 // goFuncResultToJs processes Go function call results and converts them to JS values.
 // If last return value is a non-nil error, it's thrown in JS context.
 // The remaining return values are converted to JS value or JS array if there are multiple.
-func goFuncResultToJs(c *Runtime, results []reflect.Value) (*Value, error) {
+func goFuncResultToJs(rt *Runtime, results []reflect.Value) (*Value, error) {
 	if len(results) == 0 {
 		return nil, nil
 	}
@@ -283,7 +283,7 @@ func goFuncResultToJs(c *Runtime, results []reflect.Value) (*Value, error) {
 
 		// Single remaining value -> return that value
 		if len(remaining) == 1 {
-			return c.ToValue(remaining[0].Interface())
+			return rt.ToValue(remaining[0].Interface())
 		}
 
 		// Multiple remaining values -> return as JS array
@@ -292,12 +292,12 @@ func goFuncResultToJs(c *Runtime, results []reflect.Value) (*Value, error) {
 			jsValues[i] = result.Interface()
 		}
 
-		return c.ToValue(jsValues)
+		return rt.ToValue(jsValues)
 	}
 
 	// Single return value -> return that value
 	if len(results) == 1 {
-		return c.ToValue(results[0].Interface())
+		return rt.ToValue(results[0].Interface())
 	}
 
 	// Multiple return values -> return as JS array
@@ -306,7 +306,7 @@ func goFuncResultToJs(c *Runtime, results []reflect.Value) (*Value, error) {
 		jsValues[i] = result.Interface()
 	}
 
-	return c.ToValue(jsValues)
+	return rt.ToValue(jsValues)
 }
 
 // jsBasicToGo converts a string, boolean or finite number to a Go type of
