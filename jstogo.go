@@ -343,9 +343,9 @@ func jsObjectOrMapToGoStructWithContext[T any](
 	}
 
 	structValue, isStructPtr := setupStructValue(targetType, &temp)
-	fieldMap := getFieldMap(structValue.Type())
+	fields := structFieldsOf(structValue.Type())
 
-	if err := processObjectFields(tracker, input, structValue, fieldMap); err != nil {
+	if err := processObjectFields(tracker, input, structValue, fields); err != nil {
 		return v, err
 	}
 
@@ -375,24 +375,24 @@ func processObjectFields(
 	tracker *convTracker,
 	obj *Value,
 	structValue reflect.Value,
-	fieldMap map[string]fieldPath,
+	fields *structFields,
 ) error {
 	return obj.entries(func(key, value *Value) error {
 		if value.IsNull() || value.IsUndefined() {
 			return nil
 		}
 
-		fieldInfo, ok := fieldMap[key.String()]
+		field, ok := fields.byName[key.String()]
 		if !ok {
 			return nil
 		}
 
-		fieldValue := getFieldValue(structValue, fieldInfo.indices)
+		fieldValue := getFieldValue(structValue, field.index)
 		if !fieldValue.IsValid() {
 			return nil
 		}
 
-		return setFieldValue(tracker, fieldValue, value, fieldInfo)
+		return setFieldValue(tracker, fieldValue, value, field)
 	})
 }
 
@@ -418,25 +418,25 @@ func getFieldValue(structValue reflect.Value, indices []int) reflect.Value {
 }
 
 // setFieldValue sets the value of a struct field, handling JSON unmarshaling.
-func setFieldValue(tracker *convTracker, fieldValue reflect.Value, jsValue *Value, fieldInfo fieldPath) error {
-	fieldType := fieldInfo.field.Type
+func setFieldValue(tracker *convTracker, fieldValue reflect.Value, jsValue *Value, field *structField) error {
+	fieldType := field.Type
 
 	if implementsJSONUnmarshaler(fieldType) {
-		return setFieldWithJSONUnmarshaler(fieldValue, jsValue, fieldInfo)
+		return setFieldWithJSONUnmarshaler(fieldValue, jsValue, field)
 	}
 
-	return setFieldWithDirectConversion(tracker, fieldValue, jsValue, fieldInfo, fieldType)
+	return setFieldWithDirectConversion(tracker, fieldValue, jsValue, field, fieldType)
 }
 
 // setFieldWithJSONUnmarshaler handles fields with custom JSON unmarshaling.
-func setFieldWithJSONUnmarshaler(fieldValue reflect.Value, jsValue *Value, fieldInfo fieldPath) error {
+func setFieldWithJSONUnmarshaler(fieldValue reflect.Value, jsValue *Value, field *structField) error {
 	jsonStr, err := jsValue.jsonStringify()
 	if err != nil {
-		return newJsStringifyErr("object/map field "+fieldInfo.field.Name, err)
+		return newJsStringifyErr("object/map field "+field.Name, err)
 	}
 
 	if err := unmarshalJSON(jsonStr, fieldValue.Addr().Interface()); err != nil {
-		return fmt.Errorf("cannot unmarshal json: %w, %s=%s", err, fieldInfo.field.Name, jsonStr)
+		return fmt.Errorf("cannot unmarshal json: %w, %s=%s", err, field.Name, jsonStr)
 	}
 
 	return nil
@@ -447,7 +447,7 @@ func setFieldWithDirectConversion(
 	tracker *convTracker,
 	fieldValue reflect.Value,
 	jsValue *Value,
-	fieldInfo fieldPath,
+	field *structField,
 	fieldType reflect.Type,
 ) error {
 	fieldSample := reflect.New(fieldType).Elem().Interface()
@@ -456,7 +456,7 @@ func setFieldWithDirectConversion(
 	if err != nil {
 		return newJsToGoErr(
 			jsValue, err,
-			fmt.Sprintf("object/map field '%s':", fieldInfo.field.Name),
+			fmt.Sprintf("object/map field '%s':", field.Name),
 		)
 	}
 

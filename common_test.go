@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -12,73 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// Test struct types for FieldMapper concurrency testing
-type ConcurrencyTestStruct struct {
-	Name   string
-	Value  int
-	Active bool
-}
-
-type ComplexConcurrencyStruct struct {
-	ID          int            `json:"id"`
-	Data        map[string]any `json:"data"`
-	Timestamp   time.Time      `json:"timestamp"`
-	PrivateData string         `json:"-"`
-	Nested      struct {
-		Field1 string `json:"field1"`
-		Field2 int    `json:"field2"`
-	} `json:"nested"`
-}
-
-type EmbeddedConcurrencyStruct struct {
-	ConcurrencyTestStruct
-	ExtraField string
-}
-
-// TestFieldMapperDoubleCheckLocking tests the double-check locking pattern.
-func TestFieldMapperDoubleCheckLocking(t *testing.T) {
-	const numAttempts = 100
-	for range numAttempts {
-		fm := newFieldMapper()
-		structType := reflect.TypeFor[ConcurrencyTestStruct]()
-
-		const numGoroutines = 200 // Very high contention
-		var wg sync.WaitGroup
-		var startBarrier sync.WaitGroup
-		var results sync.Map
-
-		startBarrier.Add(1)
-		wg.Add(numGoroutines)
-
-		for i := range numGoroutines {
-			go func(id int) {
-				defer wg.Done()
-
-				// All goroutines wait at the barrier
-				startBarrier.Wait()
-				// Immediate call to GetFieldMap to maximize race condition
-				fieldMap := fm.GetFieldMap(structType)
-				// Store result for verification
-				results.Store(id, len(fieldMap))
-			}(i)
-		}
-
-		// Release all goroutines at exactly the same time
-		startBarrier.Done()
-		wg.Wait()
-
-		// Verify all results are consistent
-		var count int
-		results.Range(func(key, value any) bool {
-			count++
-			assert.Equal(t, 3, value.(int), "All goroutines should get same field count")
-			return true
-		})
-
-		assert.Equal(t, numGoroutines, count, "Should have results from all goroutines")
-	}
-}
 
 func TestJsNumericToGoConverterErrorHandling(t *testing.T) {
 	testCases := []struct {

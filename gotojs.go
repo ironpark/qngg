@@ -5,7 +5,6 @@ import (
 	"math"
 	"math/big"
 	"reflect"
-	"sync"
 	"time"
 )
 
@@ -289,102 +288,21 @@ func withJSObject(c *Runtime, fn func(*Value) error) (*Value, error) {
 	return obj, nil
 }
 
-// addStructFieldsToObject converts struct fields to JS object properties.
-// Processes embedded fields first, then regular fields to allow overriding.
+// addStructFieldsToObject sets properties of obj from the fields of the
+// struct rval. Fields promoted through a nil embedded pointer are skipped.
 func (tracker *convTracker) addStructFieldsToObject(
 	c *Runtime,
 	obj *Value,
 	rtype reflect.Type,
 	rval reflect.Value,
 ) error {
-	// Process embedded fields first to enable field overriding
-	if err := tracker.processEmbeddedFields(c, obj, rtype, rval); err != nil {
-		return err
-	}
-
-	// Process regular fields (can override embedded fields)
-	return tracker.processRegularFields(c, obj, rtype, rval)
-}
-
-// processEmbeddedFields handles anonymous/embedded fields in structs.
-func (tracker *convTracker) processEmbeddedFields(
-	c *Runtime,
-	obj *Value,
-	rtype reflect.Type,
-	rval reflect.Value,
-) error {
-	for _, field := range structInfoOf(rtype).embedded {
-		if err := tracker.processEmbeddedField(c, obj, field.StructField, rval.Field(field.index)); err != nil {
-			return err
+	for _, field := range structFieldsOf(rtype).list {
+		fieldValue, err := rval.FieldByIndexErr(field.index)
+		if err != nil {
+			continue
 		}
-	}
 
-	return nil
-}
-
-// processEmbeddedField handles a single embedded field.
-func (tracker *convTracker) processEmbeddedField(
-	c *Runtime,
-	obj *Value,
-	field reflect.StructField,
-	fieldValue reflect.Value,
-) error {
-	switch fieldValue.Kind() {
-	case reflect.Struct:
-		return tracker.addStructFieldsToObject(c, obj, field.Type, fieldValue)
-	case reflect.Pointer:
-		return tracker.processEmbeddedPointer(c, obj, field.Name, field.Type, fieldValue)
-	default:
-		return tracker.addEmbeddedPrimitive(c, obj, field.Name, fieldValue)
-	}
-}
-
-// processEmbeddedPointer handles embedded pointer fields.
-func (tracker *convTracker) processEmbeddedPointer(
-	c *Runtime,
-	obj *Value,
-	fieldName string,
-	fieldType reflect.Type,
-	fieldValue reflect.Value,
-) error {
-	elem := fieldValue.Elem()
-	if elem.Kind() == reflect.Struct {
-		// Embedded pointer to struct: recursively process struct fields
-		return tracker.addStructFieldsToObject(c, obj, fieldType.Elem(), elem)
-	}
-
-	// Embedded pointer to primitive: add the dereferenced value as field
-	return tracker.addEmbeddedPrimitive(c, obj, fieldName, elem)
-}
-
-// addEmbeddedPrimitive adds an embedded primitive type as a field.
-func (tracker *convTracker) addEmbeddedPrimitive(
-	c *Runtime,
-	obj *Value,
-	fieldName string,
-	fieldValue reflect.Value,
-) error {
-	if !fieldValue.IsValid() {
-		return nil
-	}
-
-	prop, err := tracker.toJsValue(c, fieldValue.Interface())
-	if err != nil {
-		return err
-	}
-
-	return setTake(obj, fieldName, prop)
-}
-
-// processRegularFields handles non-anonymous fields in structs.
-func (tracker *convTracker) processRegularFields(
-	c *Runtime,
-	obj *Value,
-	rtype reflect.Type,
-	rval reflect.Value,
-) error {
-	for _, field := range structInfoOf(rtype).fields {
-		prop, err := tracker.toJsValue(c, rval.Field(field.index).Interface())
+		prop, err := tracker.toJsValue(c, fieldValue.Interface())
 		if err != nil {
 			return err
 		}
@@ -395,55 +313,6 @@ func (tracker *convTracker) processRegularFields(
 	}
 
 	return nil
-}
-
-// structInfo lists the fields of a struct type that convert to properties
-// of a JavaScript object. It is computed once per type.
-type structInfo struct {
-	// exported embedded fields, except those tagged json:"-"
-	embedded []structField
-	// exported regular fields, except those tagged json:"-"
-	fields []structField
-}
-
-type structField struct {
-	reflect.StructField
-
-	index int
-	name  string // property name: the json tag name or the field name
-}
-
-var structInfos sync.Map // reflect.Type -> *structInfo
-
-// structInfoOf returns the structInfo of the struct type t.
-func structInfoOf(t reflect.Type) *structInfo {
-	if info, ok := structInfos.Load(t); ok {
-		return info.(*structInfo) //nolint:forcetypeassert // only *structInfo is stored
-	}
-
-	info := &structInfo{}
-
-	for i := range t.NumField() {
-		field := t.Field(i)
-		if !field.IsExported() {
-			continue
-		}
-
-		name := globalFieldMapper.getJSONFieldName(field)
-
-		switch {
-		case name == "":
-			// json:"-"
-		case field.Anonymous:
-			info.embedded = append(info.embedded, structField{StructField: field, index: i, name: field.Name})
-		default:
-			info.fields = append(info.fields, structField{StructField: field, index: i, name: name})
-		}
-	}
-
-	actual, _ := structInfos.LoadOrStore(t, info)
-
-	return actual.(*structInfo) //nolint:forcetypeassert // only *structInfo is stored
 }
 
 // addStructMethodsToObject adds exported struct methods as JS functions.
