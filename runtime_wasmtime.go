@@ -3,6 +3,7 @@ package qngg
 import (
 	"bytes"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"os"
 	"path/filepath"
@@ -282,4 +283,12 @@ func (r *Runtime) release() {
 
 	r.instance = nil
 	r.funcs = [numExports]*wasmFunc{}
+}
+
+// hashBytes computes a simple hash of the byte slice.
+func hashBytes(data []byte) uint64 {
+	h := fnv.New64a()
+	h.Write(data)
+
+	return h.Sum64()
 }

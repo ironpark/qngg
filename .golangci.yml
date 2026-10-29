@@ -58,7 +58,7 @@ linters:
       - linters:
           - gocognit
           - gocyclo
-        path: common.go
+        path: convert_number.go
     paths:
       - examples$
       - _test\.go

@@ -135,3 +135,19 @@ func newJsStringifyErr(kind string, err error) error {
 func newInvokeErr(input *Value, err error) error {
 	return fmt.Errorf("cannot call getTime on JS value '%s', err=%w", input.String(), err)
 }
+
+func anyToError(err any) error {
+	if err == nil {
+		return nil
+	}
+
+	if e, ok := err.(error); ok {
+		return e
+	}
+
+	if str, ok := err.(string); ok {
+		return fmt.Errorf("recovered from panic: %s", str)
+	}
+
+	return fmt.Errorf("recovered from panic: %v", err)
+}
