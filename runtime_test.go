@@ -131,7 +131,7 @@ func TestPool(t *testing.T) {
 		defer pool.Close()
 
 		for range 3 {
-			require.NoError(t, pool.Do(bg, func(rt *Runtime) error {
+			require.NoError(t, pool.Do(bg, func(_ context.Context, rt *Runtime) error {
 				assert.Equal(t, int32(1), evalInt(t, rt, "initialized ? 1 : 0"))
 				return nil
 			}))
@@ -143,8 +143,8 @@ func TestPool(t *testing.T) {
 		pool := must(NewPool(1, Config{}, nil))
 		defer pool.Close()
 
-		noErr(pool.Do(bg, func(rt *Runtime) error { return rt.Set("testValue", 42) }))
-		noErr(pool.Do(bg, func(rt *Runtime) error {
+		noErr(pool.Do(bg, func(_ context.Context, rt *Runtime) error { return rt.Set("testValue", 42) }))
+		noErr(pool.Do(bg, func(_ context.Context, rt *Runtime) error {
 			assert.Equal(t, int32(42), evalInt(t, rt, "testValue"))
 			return nil
 		}))
@@ -155,7 +155,20 @@ func TestPool(t *testing.T) {
 		defer pool.Close()
 
 		want := errors.New("boom")
-		assert.ErrorIs(t, pool.Do(bg, func(*Runtime) error { return want }), want)
+		assert.ErrorIs(t, pool.Do(bg, func(context.Context, *Runtime) error { return want }), want)
+	})
+
+	t.Run("PassesContext", func(t *testing.T) {
+		pool := must(NewPool(1, Config{}, nil))
+		defer pool.Close()
+
+		type key struct{}
+		ctx := context.WithValue(bg, key{}, "v")
+		noErr(pool.Do(ctx, func(got context.Context, _ *Runtime) error {
+			assert.Equal(t, "v", got.Value(key{}))
+
+			return nil
+		}))
 	})
 
 	t.Run("SetupError", func(t *testing.T) {
@@ -163,7 +176,7 @@ func TestPool(t *testing.T) {
 		pool := must(NewPool(1, Config{}, func(*Runtime) error { return want }))
 		defer pool.Close()
 
-		err := pool.Do(bg, func(*Runtime) error {
+		err := pool.Do(bg, func(context.Context, *Runtime) error {
 			t.Fatal("fn must not run")
 			return nil
 		})
@@ -172,7 +185,7 @@ func TestPool(t *testing.T) {
 
 	t.Run("InvalidWasm", func(t *testing.T) {
 		pool := must(NewPool(1, Config{quickJSWasm: []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}}, nil))
-		assert.Error(t, pool.Do(bg, func(*Runtime) error { return nil }))
+		assert.Error(t, pool.Do(bg, func(context.Context, *Runtime) error { return nil }))
 	})
 
 	t.Run("DiscardsInterruptedRuntimes", func(t *testing.T) {
@@ -180,7 +193,7 @@ func TestPool(t *testing.T) {
 		defer pool.Close()
 
 		var first *Runtime
-		err := pool.Do(bg, func(rt *Runtime) error {
+		err := pool.Do(bg, func(_ context.Context, rt *Runtime) error {
 			first = rt
 			ctx, cancel := context.WithTimeout(bg, timeoutForTest)
 			defer cancel()
@@ -189,7 +202,7 @@ func TestPool(t *testing.T) {
 		})
 		require.ErrorIs(t, err, ErrInterrupted)
 
-		noErr(pool.Do(bg, func(rt *Runtime) error {
+		noErr(pool.Do(bg, func(_ context.Context, rt *Runtime) error {
 			assert.NotSame(t, first, rt)
 			assert.Equal(t, int32(2), evalInt(t, rt, "1 + 1"))
 			return nil
@@ -202,12 +215,12 @@ func TestPool(t *testing.T) {
 
 		var first *Runtime
 		assert.Panics(t, func() {
-			_ = pool.Do(bg, func(rt *Runtime) error {
+			_ = pool.Do(bg, func(_ context.Context, rt *Runtime) error {
 				first = rt
 				panic("boom")
 			})
 		})
-		noErr(pool.Do(bg, func(rt *Runtime) error {
+		noErr(pool.Do(bg, func(_ context.Context, rt *Runtime) error {
 			assert.NotSame(t, first, rt)
 			return nil
 		}))
@@ -216,7 +229,7 @@ func TestPool(t *testing.T) {
 	t.Run("Closed", func(t *testing.T) {
 		pool := must(NewPool(1, Config{}, nil))
 		require.NoError(t, pool.Close())
-		assert.Error(t, pool.Do(bg, func(*Runtime) error { return nil }))
+		assert.Error(t, pool.Do(bg, func(context.Context, *Runtime) error { return nil }))
 	})
 
 	t.Run("Concurrent", func(t *testing.T) {
@@ -233,7 +246,7 @@ func TestPool(t *testing.T) {
 		var wg sync.WaitGroup
 		for i := range 20 {
 			wg.Go(func() {
-				err := pool.Do(bg, func(rt *Runtime) error {
+				err := pool.Do(bg, func(_ context.Context, rt *Runtime) error {
 					exports := must(rt.Get("exports"))
 					defer exports.Free()
 

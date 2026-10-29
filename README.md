@@ -461,7 +461,7 @@ http.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
 	defer cancel()
 
-	err := pool.Do(ctx, func(rt *qngg.Runtime) error {
+	err := pool.Do(ctx, func(ctx context.Context, rt *qngg.Runtime) error {
 		greet, err := rt.Get("greet")
 		if err != nil {
 			return err
@@ -551,7 +551,7 @@ v.Free()                                       // Release the value
 
 // Pool
 pool, err := qngg.NewPool(size, config, setup)
-pool.Do(ctx, func(rt *qngg.Runtime) error { ... })
+pool.Do(ctx, func(ctx context.Context, rt *qngg.Runtime) error { ... })
 pool.Close()
 ```
 

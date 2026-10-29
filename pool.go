@@ -31,11 +31,13 @@ func NewPool(size int, config Config, setup func(*Runtime) error) (*Pool, error)
 	return &Pool{config: config, setup: setup, size: size}, nil
 }
 
-// Do runs fn with a runtime that no other goroutine uses until fn returns.
-// Values created in fn must not be used after it returns. The runtime is
-// returned to the pool unless fn panics or the runtime was interrupted or
-// closed, in which case it is discarded.
-func (p *Pool) Do(ctx context.Context, fn func(*Runtime) error) (err error) {
+// Do runs fn with ctx and a runtime that no other goroutine uses until fn
+// returns. Values created in fn must not be used after it returns. The
+// runtime is returned to the pool unless fn panics or the runtime was
+// interrupted or closed, in which case it is discarded. Globals fn defines
+// stay in the runtime for later calls of Do: only what setup defines is
+// guaranteed to be there.
+func (p *Pool) Do(ctx context.Context, fn func(ctx context.Context, rt *Runtime) error) (err error) {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("context done before the call: %w", context.Cause(ctx))
 	}
@@ -48,7 +50,7 @@ func (p *Pool) Do(ctx context.Context, fn func(*Runtime) error) (err error) {
 	reuse := false
 	defer func() { p.put(rt, reuse) }()
 
-	err = fn(rt)
+	err = fn(ctx, rt)
 	reuse = true
 
 	return err

@@ -93,7 +93,7 @@ These changes break the build, so the compiler points them out:
 | `func(this *qjs.This) (*qjs.Value, error)` | `func(call *qngg.FunctionCall) (*qngg.Value, error)` |
 | `SetAsyncFunc(name, func(this *qjs.This) { this.Promise().Resolve(v) })` | `SetAsyncFunc(name, fn)`: the promise settles with `fn`'s result or error |
 | `rt.ThrowTypeError(...)` | `return nil, &qngg.Error{Name: "TypeError", Message: ...}` |
-| `pool.Get()` / `pool.Put(rt)` | `pool.Do(ctx, func(rt *qngg.Runtime) error { ... })` |
+| `pool.Get()` / `pool.Put(rt)` | `pool.Do(ctx, func(ctx context.Context, rt *qngg.Runtime) error { ... })` |
 | `Array`, `Map`, `Set` wrappers | plain `*Value`s: `Index`, `Invoke(ctx, "get", k)`, `Keys`, ... |
 
 ## Behavior changes
