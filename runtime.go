@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"runtime/debug"
+	"sync"
 
 	wasmtime "github.com/ironpark/wasmtime-pure-go"
 )
@@ -75,6 +77,7 @@ type Runtime struct {
 	jsCtx     uint64 // JSContext*
 	global    *Value
 	registry  *proxyRegistry
+	released  *releaseQueue
 	closed    bool
 }
 
@@ -113,6 +116,7 @@ func New(config Config) (runtime *Runtime, err error) {
 		engine:    engine,
 		interrupt: &interrupter{},
 		registry:  newProxyRegistry(),
+		released:  &releaseQueue{},
 	}
 
 	if err := runtime.instantiate(module); err != nil {
@@ -240,6 +244,8 @@ func (r *Runtime) enter(ctx context.Context) error {
 	}
 
 	if r.callDepth == 0 {
+		r.freeReleased()
+
 		r.interrupt.ctx = ctx
 		if !r.config.DisableInterruption {
 			r.interrupt.watch(ctx, r.engine)
@@ -380,6 +386,44 @@ func (r *Runtime) dupValue(raw uint64) uint64 {
 	}
 
 	return r.call(xCloneValue, r.jsCtx, raw)
+}
+
+// releaseQueue collects references to JS values whose Go owners were
+// garbage collected. Cleanups run on another goroutine, where the runtime
+// cannot be used, so the runtime frees them on its next call instead. It
+// does not reference the runtime, which can then be collected too.
+type releaseQueue struct {
+	mu   sync.Mutex
+	refs []uint64
+}
+
+func (q *releaseQueue) add(raw uint64) {
+	q.mu.Lock()
+	q.refs = append(q.refs, raw)
+	q.mu.Unlock()
+}
+
+func (q *releaseQueue) take() []uint64 {
+	q.mu.Lock()
+	refs := q.refs
+	q.refs = nil
+	q.mu.Unlock()
+
+	return refs
+}
+
+// releaseWhenCollected frees v, which the runtime must own, once owner is
+// garbage collected. v must not be freed otherwise, and owner must not be
+// reachable from v.
+func (r *Runtime) releaseWhenCollected(owner *jsFuncRef, v *Value) {
+	runtime.AddCleanup(owner, r.released.add, v.raw())
+}
+
+// freeReleased frees the values queued by releaseWhenCollected.
+func (r *Runtime) freeReleased() {
+	for _, raw := range r.released.take() {
+		r.freeValue(raw)
+	}
 }
 
 // newValue wraps a JS value the caller owns.

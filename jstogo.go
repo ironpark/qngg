@@ -539,6 +539,12 @@ func jsObjectToGoWithContext[T any](
 	return processTempValue("JsObjectToGo", temp, err, sample)
 }
 
+// jsFuncRef holds the JavaScript function behind a Go function converted
+// from it. The Go function references it, so it is collected with it.
+type jsFuncRef struct {
+	fn *Value
+}
+
 func jsFuncToGo[T any](input *Value, samples ...T) (v T, err error) {
 	return jsFuncToGoWithContext(newConvTracker[uint64](), input, samples...)
 }
@@ -564,10 +570,12 @@ func jsFuncToGoWithContext[T any](
 	}
 
 	// The Go function may outlive input, so it keeps its own reference,
-	// released when the runtime is closed.
-	jsFn := input.Clone()
+	// released once the Go function is garbage collected.
+	jsFn := &jsFuncRef{fn: input.Clone()}
+	input.rt.releaseWhenCollected(jsFn, jsFn.fn)
+
 	goFunc := func(args []reflect.Value) (results []reflect.Value) {
-		return createJsFunctionHandler(jsFn, tracker, fnType, args)
+		return createJsFunctionHandler(jsFn.fn, tracker, fnType, args)
 	}
 
 	fn := reflect.MakeFunc(fnType, goFunc)
