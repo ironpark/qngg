@@ -11,7 +11,7 @@ import (
 
 // GoStructToJs converts a Go struct to a JavaScript object.
 // Includes both fields and methods as object properties.
-func (tracker *convTracker[T]) GoStructToJs(
+func (tracker *convTracker) GoStructToJs(
 	c *Runtime,
 	rtype reflect.Type,
 	rval reflect.Value,
@@ -44,18 +44,18 @@ func (tracker *convTracker[T]) GoStructToJs(
 }
 
 // GoSliceToJs converts a Go slice to a JavaScript array.
-func (tracker *convTracker[T]) GoSliceToJs(c *Runtime, rval reflect.Value) (*Value, error) {
+func (tracker *convTracker) GoSliceToJs(c *Runtime, rval reflect.Value) (*Value, error) {
 	return tracker.arrayLikeToJS(c, rval, "slice")
 }
 
 // GoArrayToJs converts a Go array to a JavaScript array without unnecessary copying.
-func (tracker *convTracker[T]) GoArrayToJs(c *Runtime, rval reflect.Value) (*Value, error) {
+func (tracker *convTracker) GoArrayToJs(c *Runtime, rval reflect.Value) (*Value, error) {
 	return tracker.arrayLikeToJS(c, rval, "array")
 }
 
 // GoMapToJs converts a Go map to a JavaScript object.
 // Non-string keys are converted to string representation.
-func (tracker *convTracker[T]) GoMapToJs(
+func (tracker *convTracker) GoMapToJs(
 	c *Runtime,
 	rval reflect.Value,
 ) (*Value, error) {
@@ -135,25 +135,6 @@ func goComplexToJs[T complex64 | complex128](c *Runtime, z T) *Value {
 	return obj
 }
 
-// goStructToJs converts Go structs to JavaScript objects.
-func goStructToJs(
-	c *Runtime,
-	rtype reflect.Type,
-	rval reflect.Value,
-) (*Value, error) {
-	return newConvTracker[uint64]().GoStructToJs(c, rtype, rval)
-}
-
-// goSliceToJs converts Go slices to JavaScript arrays.
-func goSliceToJs(c *Runtime, rval reflect.Value) (*Value, error) {
-	return newConvTracker[uint64]().GoSliceToJs(c, rval)
-}
-
-// goMapToJs converts Go maps to JavaScript objects.
-func goMapToJs(c *Runtime, rval reflect.Value) (*Value, error) {
-	return newConvTracker[uint64]().GoMapToJs(c, rval)
-}
-
 // tryConvertBuiltinTypes handles built-in Go types that don't require reflection.
 func tryConvertBuiltinTypes(c *Runtime, v any) *Value {
 	switch val := v.(type) {
@@ -224,11 +205,11 @@ func tryConvertNumeric(c *Runtime, v any) *Value {
 }
 
 // convertReflectValue handles types that require reflection.
-func (tracker *convTracker[T]) convertReflectValue(c *Runtime, v any) (*Value, error) {
+func (tracker *convTracker) convertReflectValue(c *Runtime, v any) (*Value, error) {
 	rtype := reflect.TypeOf(v)
 	rval := reflect.ValueOf(v)
 
-	var ct circularTracker[T]
+	var ct circularTracker
 	defer ct.cleanup()
 
 	if rtype.Kind() == reflect.Pointer {
@@ -237,10 +218,7 @@ func (tracker *convTracker[T]) convertReflectValue(c *Runtime, v any) (*Value, e
 		}
 
 		// Track pointer address for circular reference detection.
-		var addr any = (rval.Pointer())
-
-		addrT, _ := addr.(T)
-		if err := ct.trackPtr(tracker, addrT); err != nil {
+		if err := ct.trackPtr(tracker, rval.Pointer()); err != nil {
 			return nil, newGoToJsErr(goTypeName(reflect.TypeOf(v)), err, "recursive pointer")
 		}
 
@@ -313,7 +291,7 @@ func withJSObject(c *Runtime, fn func(*Value) error) (*Value, error) {
 
 // addStructFieldsToObject converts struct fields to JS object properties.
 // Processes embedded fields first, then regular fields to allow overriding.
-func (tracker *convTracker[T]) addStructFieldsToObject(
+func (tracker *convTracker) addStructFieldsToObject(
 	c *Runtime,
 	obj *Value,
 	rtype reflect.Type,
@@ -329,7 +307,7 @@ func (tracker *convTracker[T]) addStructFieldsToObject(
 }
 
 // processEmbeddedFields handles anonymous/embedded fields in structs.
-func (tracker *convTracker[T]) processEmbeddedFields(
+func (tracker *convTracker) processEmbeddedFields(
 	c *Runtime,
 	obj *Value,
 	rtype reflect.Type,
@@ -345,7 +323,7 @@ func (tracker *convTracker[T]) processEmbeddedFields(
 }
 
 // processEmbeddedField handles a single embedded field.
-func (tracker *convTracker[T]) processEmbeddedField(
+func (tracker *convTracker) processEmbeddedField(
 	c *Runtime,
 	obj *Value,
 	field reflect.StructField,
@@ -362,7 +340,7 @@ func (tracker *convTracker[T]) processEmbeddedField(
 }
 
 // processEmbeddedPointer handles embedded pointer fields.
-func (tracker *convTracker[T]) processEmbeddedPointer(
+func (tracker *convTracker) processEmbeddedPointer(
 	c *Runtime,
 	obj *Value,
 	fieldName string,
@@ -380,7 +358,7 @@ func (tracker *convTracker[T]) processEmbeddedPointer(
 }
 
 // addEmbeddedPrimitive adds an embedded primitive type as a field.
-func (tracker *convTracker[T]) addEmbeddedPrimitive(
+func (tracker *convTracker) addEmbeddedPrimitive(
 	c *Runtime,
 	obj *Value,
 	fieldName string,
@@ -399,7 +377,7 @@ func (tracker *convTracker[T]) addEmbeddedPrimitive(
 }
 
 // processRegularFields handles non-anonymous fields in structs.
-func (tracker *convTracker[T]) processRegularFields(
+func (tracker *convTracker) processRegularFields(
 	c *Runtime,
 	obj *Value,
 	rtype reflect.Type,
@@ -469,7 +447,7 @@ func structInfoOf(t reflect.Type) *structInfo {
 }
 
 // addStructMethodsToObject adds exported struct methods as JS functions.
-func (tracker *convTracker[T]) addStructMethodsToObject(
+func (tracker *convTracker) addStructMethodsToObject(
 	c *Runtime,
 	obj *Value,
 	rtype reflect.Type,
@@ -497,7 +475,7 @@ func (tracker *convTracker[T]) addStructMethodsToObject(
 }
 
 // arrayLikeToJS is a helper that converts arrays and slices to JS arrays.
-func (tracker *convTracker[T]) arrayLikeToJS(
+func (tracker *convTracker) arrayLikeToJS(
 	c *Runtime,
 	rval reflect.Value,
 	typeName string,
@@ -525,7 +503,7 @@ func (tracker *convTracker[T]) arrayLikeToJS(
 }
 
 // toJsValue converts any Go value to a QuickJS Value using the conversion context.
-func (tracker *convTracker[T]) toJsValue(c *Runtime, v any) (*Value, error) {
+func (tracker *convTracker) toJsValue(c *Runtime, v any) (*Value, error) {
 	if v == nil {
 		return c.NewNull(), nil
 	}

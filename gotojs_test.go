@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -949,41 +948,6 @@ func TestJSValueConversion(t *testing.T) {
 				assert.Equal(t, "extra", extraFieldProp.String())
 			})
 		})
-	})
-
-	// Test the standalone backward compatibility functions
-	t.Run("StructToJSObjectValue", func(t *testing.T) {
-		s := SimpleStruct{Name: "test", Age: 25}
-		rtype := reflect.TypeOf(s)
-		rval := reflect.ValueOf(s)
-
-		result, err := goStructToJs(ctx, rtype, rval)
-		require.NoError(t, err)
-		defer result.Free()
-
-		assert.True(t, result.IsObject(), "StructToJSObjectValue should return object")
-	})
-
-	t.Run("SliceToArrayValue", func(t *testing.T) {
-		slice := []int{1, 2, 3}
-		rval := reflect.ValueOf(slice)
-
-		result, err := goSliceToJs(ctx, rval)
-		require.NoError(t, err)
-		defer result.Free()
-
-		assert.True(t, result.IsArray(), "SliceToArrayValue should return array")
-	})
-
-	t.Run("MapToObjectValue", func(t *testing.T) {
-		m := map[string]int{"key": 42}
-		rval := reflect.ValueOf(m)
-
-		result, err := goMapToJs(ctx, rval)
-		require.NoError(t, err)
-		defer result.Free()
-
-		assert.True(t, result.IsObject(), "MapToObjectValue should return object")
 	})
 
 	t.Run("StructFieldAndMethodProcessing", func(t *testing.T) {

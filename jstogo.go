@@ -12,11 +12,11 @@ import (
 // toGo converts a JS value to T. A sample of T's dynamic type may be given
 // when T is an interface.
 func toGo[T any](input *Value, samples ...T) (v T, err error) {
-	return toGoValue(newConvTracker[uint64](), input, samples...)
+	return toGoValue(newConvTracker(), input, samples...)
 }
 
 func toGoValue[T any](
-	tracker *convTracker[uint64],
+	tracker *convTracker,
 	input *Value,
 	samples ...T,
 ) (v T, err error) {
@@ -110,11 +110,6 @@ func jsNumberToGo[T any](input *Value, samples ...T) (v T, err error) {
 	}
 
 	return v, newInvalidGoTypeErr("numeric type", sample)
-}
-
-// jsArrayToGo handles conversion of JavaScript Array objects to Go types.
-func jsArrayToGo[T any](input *Value, samples ...T) (T, error) {
-	return newJsArrayToGoConverter(input, samples...).Convert()
 }
 
 // jsBigIntToGo converts a JS BigInt into the Go *big.Int/big.Int.
@@ -219,13 +214,8 @@ func jsTypedArrayToGo(input *Value) ([]byte, error) {
 	return fullBytes[offset : offset+length], nil
 }
 
-// jsSetToGo converts JavaScript Set to Go types.
-func jsSetToGo[T any](input *Value, samples ...T) (v T, err error) {
-	return jsSetToGoWithContext(newConvTracker[uint64](), input, samples...)
-}
-
 func jsSetToGoWithContext[T any](
-	tracker *convTracker[uint64],
+	tracker *convTracker,
 	input *Value,
 	samples ...T,
 ) (v T, err error) {
@@ -243,7 +233,7 @@ func jsSetToGoWithContext[T any](
 }
 
 func jsArrayToGoWithContext[T any](
-	tracker *convTracker[uint64],
+	tracker *convTracker,
 	input *Value,
 	samples ...T,
 ) (T, error) {
@@ -258,7 +248,7 @@ func jsArrayToGoWithContext[T any](
 }
 
 func mapEntryToGoWithContext(
-	ctx *convTracker[uint64],
+	ctx *convTracker,
 	jsKey, jsValue *Value,
 	goKeyType, goValueType reflect.Type,
 ) (k, v reflect.Value, err error) {
@@ -285,12 +275,8 @@ func mapEntryToGoWithContext(
 	return k, v, nil
 }
 
-func jsObjectOrMapToGoMap[T any](input *Value, samples ...T) (v T, err error) {
-	return jsObjectOrMapToGoMapWithContext(newConvTracker[uint64](), input, samples...)
-}
-
 func jsObjectOrMapToGoMapWithContext[T any](
-	tracker *convTracker[uint64],
+	tracker *convTracker,
 	input *Value,
 	samples ...T,
 ) (v T, err error) {
@@ -304,7 +290,7 @@ func jsObjectOrMapToGoMapWithContext[T any](
 		v, err = processTempValue("JsObjectOrMapToGoMap", temp, err, sample)
 	}()
 
-	var ct circularTracker[uint64]
+	var ct circularTracker
 	defer ct.cleanup()
 
 	if err := ct.trackValue(tracker, input); err != nil {
@@ -334,15 +320,8 @@ func jsObjectOrMapToGoMapWithContext[T any](
 	return v, err
 }
 
-func jsObjectOrMapToGoStruct[T any](
-	input *Value,
-	samples ...T,
-) (v T, err error) {
-	return jsObjectOrMapToGoStructWithContext(newConvTracker[uint64](), input, samples...)
-}
-
 func jsObjectOrMapToGoStructWithContext[T any](
-	tracker *convTracker[uint64],
+	tracker *convTracker,
 	input *Value,
 	samples ...T,
 ) (v T, err error) {
@@ -356,7 +335,7 @@ func jsObjectOrMapToGoStructWithContext[T any](
 		v, err = processTempValue("JsObjectOrMapToGoStruct", temp, err, sample)
 	}()
 
-	var ct circularTracker[uint64]
+	var ct circularTracker
 	defer ct.cleanup()
 
 	if err := ct.trackValue(tracker, input); err != nil {
@@ -393,7 +372,7 @@ func setupStructValue(targetType reflect.Type, temp *any) (reflect.Value, bool) 
 
 // processObjectFields processes each field in the JavaScript object.
 func processObjectFields(
-	tracker *convTracker[uint64],
+	tracker *convTracker,
 	obj *Value,
 	structValue reflect.Value,
 	fieldMap map[string]fieldPath,
@@ -439,7 +418,7 @@ func getFieldValue(structValue reflect.Value, indices []int) reflect.Value {
 }
 
 // setFieldValue sets the value of a struct field, handling JSON unmarshaling.
-func setFieldValue(tracker *convTracker[uint64], fieldValue reflect.Value, jsValue *Value, fieldInfo fieldPath) error {
+func setFieldValue(tracker *convTracker, fieldValue reflect.Value, jsValue *Value, fieldInfo fieldPath) error {
 	fieldType := fieldInfo.field.Type
 
 	if implementsJSONUnmarshaler(fieldType) {
@@ -465,7 +444,7 @@ func setFieldWithJSONUnmarshaler(fieldValue reflect.Value, jsValue *Value, field
 
 // setFieldWithDirectConversion handles direct value conversion.
 func setFieldWithDirectConversion(
-	tracker *convTracker[uint64],
+	tracker *convTracker,
 	fieldValue reflect.Value,
 	jsValue *Value,
 	fieldInfo fieldPath,
@@ -486,13 +465,8 @@ func setFieldWithDirectConversion(
 	return nil
 }
 
-// jsObjectToGo handles conversion of JavaScript objects to Go types.
-func jsObjectToGo[T any](input *Value, samples ...T) (v T, err error) {
-	return jsObjectToGoWithContext(newConvTracker[uint64](), input, samples...)
-}
-
 func jsObjectToGoWithContext[T any](
-	tracker *convTracker[uint64],
+	tracker *convTracker,
 	input *Value,
 	samples ...T,
 ) (v T, err error) {
@@ -545,12 +519,8 @@ type jsFuncRef struct {
 	fn *Value
 }
 
-func jsFuncToGo[T any](input *Value, samples ...T) (v T, err error) {
-	return jsFuncToGoWithContext(newConvTracker[uint64](), input, samples...)
-}
-
 func jsFuncToGoWithContext[T any](
-	tracker *convTracker[uint64],
+	tracker *convTracker,
 	input *Value,
 	samples ...T,
 ) (v T, err error) {
@@ -587,7 +557,7 @@ func jsFuncToGoWithContext[T any](
 // createJsFunctionHandler handles the execution of JavaScript functions from Go.
 func createJsFunctionHandler(
 	input *Value,
-	tracker *convTracker[uint64],
+	tracker *convTracker,
 	fnType reflect.Type,
 	args []reflect.Value,
 ) (results []reflect.Value) {
@@ -633,7 +603,7 @@ func flattenArgs(fnType reflect.Type, args []reflect.Value) []any {
 // handleJsFunctionResult processes the result of a JavaScript function call.
 func handleJsFunctionResult(
 	jsResult *Value,
-	tracker *convTracker[uint64],
+	tracker *convTracker,
 	fnType reflect.Type,
 	results []reflect.Value,
 ) []reflect.Value {
@@ -679,7 +649,7 @@ func handleJsFunctionResult(
 
 // jsPrimitivesToGo converts JavaScript primitive types to Go types.
 func jsPrimitivesToGo[T any](
-	tracker *convTracker[uint64],
+	tracker *convTracker,
 	input *Value,
 	kind objectKind,
 	sample T,

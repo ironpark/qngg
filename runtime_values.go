@@ -44,7 +44,7 @@ func (r *Runtime) SetAsyncFunc(name string, fn Function) error {
 // BigInt), errors, slices, arrays, maps, structs (exported fields, using
 // json tags, and methods), functions and channels. A *Value is cloned.
 func (r *Runtime) ToValue(v any) (*Value, error) {
-	jsVal, err := newConvTracker[uintptr]().toJsValue(r, v)
+	jsVal, err := newConvTracker().toJsValue(r, v)
 	if err != nil {
 		return nil, fmt.Errorf("[ToValue] %w", err)
 	}

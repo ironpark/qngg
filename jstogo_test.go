@@ -822,7 +822,7 @@ func TestJsArrayToGo(t *testing.T) {
 			jsCode:    `42`,
 			sample:    []int{},
 			expectErr: true,
-			errMsg:    "cannot convert JS Array",
+			errMsg:    "expected GO type numeric type, got []int",
 		},
 	}
 
@@ -834,7 +834,7 @@ func TestJsArrayToGo(t *testing.T) {
 			jsValue := must(rt.Eval(context.Background(), "test.js", test.jsCode))
 			defer jsValue.Free()
 
-			result, err := jsArrayToGo(jsValue, test.sample)
+			result, err := toGo(jsValue, test.sample)
 			if test.expectErr {
 				assert.Error(t, err)
 				if test.errMsg != "" {
@@ -925,7 +925,7 @@ func TestJsSetToGo(t *testing.T) {
 			jsCode:    `"not a set"`,
 			sample:    []any{},
 			expectErr: true,
-			errMsg:    `cannot convert JS Set "not a set" to Go`,
+			errMsg:    "expected GO type []interface {}, got string",
 		},
 		{
 			name:          "sets_with_duplicate_elements",
@@ -999,7 +999,7 @@ func TestJsSetToGo(t *testing.T) {
 			jsValue := must(rt.Eval(context.Background(), "test.js", test.jsCode))
 			defer jsValue.Free()
 
-			result, err := jsSetToGo(jsValue, test.sample)
+			result, err := toGo(jsValue, test.sample)
 
 			if test.expect != nil {
 				test.expect(t, result, err)
@@ -1087,7 +1087,7 @@ func TestJsObjectOrMapToGoMap(t *testing.T) {
 			jsCode:    `"not an object"`,
 			sample:    map[string]any{},
 			expectErr: true,
-			errMsg:    "expected JS object",
+			errMsg:    "expected GO type",
 		},
 		{
 			name:          "map_with_int_keys",
@@ -1201,7 +1201,7 @@ func TestJsObjectOrMapToGoMap(t *testing.T) {
 			jsValue := must(rt.Eval(context.Background(), "test.js", test.jsCode))
 			defer jsValue.Free()
 
-			result, err := jsObjectOrMapToGoMap(jsValue, test.sample)
+			result, err := toGo(jsValue, test.sample)
 			if test.expect != nil {
 				test.expect(t, result, err)
 				return
@@ -1429,7 +1429,7 @@ func TestJsObjectOrMapToGoStruct(t *testing.T) {
 			jsCode:    `"not an object"`,
 			sample:    struct{}{},
 			expectErr: true,
-			errMsg:    "expected JS object",
+			errMsg:    "expected GO type",
 		},
 		{
 			name:      "incompatible_type_assignment",
@@ -1576,7 +1576,7 @@ func TestJsObjectOrMapToGoStruct(t *testing.T) {
 			jsValue := must(rt.Eval(context.Background(), "test.js", test.jsCode))
 			defer jsValue.Free()
 
-			result, err := jsObjectOrMapToGoStruct(jsValue, test.sample)
+			result, err := toGo(jsValue, test.sample)
 			if test.expect != nil {
 				test.expect(t, result, err)
 				return
@@ -1619,7 +1619,7 @@ func TestJsObjectOrMapToGoStruct(t *testing.T) {
 		}
 
 		var testStruct TestStruct
-		_, err := jsObjectOrMapToGoStruct(result, testStruct)
+		_, err := toGo(result, testStruct)
 
 		// Verify we get the JSONStringify error from the selected branch
 		t.Logf("JsObjectOrMapToGoStruct result error: %v", err)
@@ -1646,7 +1646,7 @@ func TestJsObjectOrMapToGoStruct(t *testing.T) {
 		}
 
 		var testStruct TestStruct
-		result2, err := jsObjectOrMapToGoStruct(result, testStruct)
+		result2, err := toGo(result, testStruct)
 		require.NoError(t, err)
 
 		// Verify both fields were properly unmarshaled
@@ -1688,7 +1688,7 @@ func TestJsObjectOrMapToGo(t *testing.T) {
 			jsCode:    `"not an object"`,
 			sample:    map[string]any{},
 			expectErr: true,
-			errMsg:    "expected JS object",
+			errMsg:    "expected GO type",
 		},
 	}
 
@@ -1700,7 +1700,7 @@ func TestJsObjectOrMapToGo(t *testing.T) {
 			jsValue := must(rt.Eval(context.Background(), "test.js", test.jsCode))
 			defer jsValue.Free()
 
-			result, err := jsObjectToGo(jsValue, test.sample)
+			result, err := toGo(jsValue, test.sample)
 			if test.expectErr {
 				assert.Error(t, err)
 				if test.errMsg != "" {
@@ -1728,7 +1728,7 @@ func TestJsObjectOrMapToGo(t *testing.T) {
 		}
 
 		var target []Person
-		result, err := jsObjectToGo(jsArray, target)
+		result, err := toGo(jsArray, target)
 		assert.NoError(t, err)
 
 		expected := []Person{
@@ -1742,21 +1742,14 @@ func TestJsObjectOrMapToGo(t *testing.T) {
 		rt := must(New(Config{}))
 		defer rt.Close()
 
-		// successfully convert a JS object to a Go slice of int
-		jsValue := must(rt.Eval(context.Background(), "test.js", `(new Date)`))
-		defer jsValue.Free()
-		result, err := jsObjectToGo[string](jsValue)
-		require.NoError(t, err)
-		assert.NotNil(t, result)
-
 		// fail to convert a JS object to a Go value due to json stringify error
-		jsValue = must(rt.Eval(context.Background(), "test.js", `(() => {
+		jsValue := must(rt.Eval(context.Background(), "test.js", `(() => {
 			let obj = { name: "test" };
 			obj.circular = obj; // Create circular reference
 			return obj;
 		})()`))
 		defer jsValue.Free()
-		_, err = jsObjectToGo[int](jsValue)
+		_, err := toGo[int](jsValue)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to stringify JS value")
 	})
@@ -1867,7 +1860,7 @@ func TestJsFuncToGo(t *testing.T) {
 			jsCode:    `"not a function"`,
 			sample:    func() (any, error) { return nil, nil },
 			expectErr: true,
-			errMsg:    "expected JS function",
+			errMsg:    "expected GO type func() (interface {}, error), got string",
 		},
 		{
 			name:            "function_throws_exception",
@@ -2033,7 +2026,7 @@ func TestJsFuncToGo(t *testing.T) {
 			jsValue := must(rt.Eval(context.Background(), "test.js", test.jsCode))
 			defer jsValue.Free()
 
-			goFunc, err := jsFuncToGo(jsValue, test.sample)
+			goFunc, err := toGo(jsValue, test.sample)
 			if test.expectErr {
 				assert.Error(t, err)
 				if test.errMsg != "" {
@@ -2134,7 +2127,7 @@ func TestJsFuncToGo(t *testing.T) {
 			defer jsFuncValue.Free()
 
 			var goFunc func(int, int, any) (any, error)
-			goFunc = must(jsFuncToGo(jsFuncValue, goFunc))
+			goFunc = must(toGo(jsFuncValue, goFunc))
 
 			unsafePtr := unsafe.Pointer(&[]byte{1, 2, 3}[0])
 			result, err := goFunc(1, 2, unsafePtr)
@@ -2154,7 +2147,7 @@ func TestJsFuncToGo(t *testing.T) {
 			defer jsFuncValue.Free()
 
 			var goFunc func(int, any, ...any) (any, error)
-			goFunc = must(jsFuncToGo(jsFuncValue, goFunc))
+			goFunc = must(toGo(jsFuncValue, goFunc))
 
 			unsafePtr := unsafe.Pointer(&[]byte{1, 2, 3}[0])
 			result, err := goFunc(1, unsafePtr, "extra1", "extra2")
@@ -2173,7 +2166,7 @@ func TestJsFuncToGo(t *testing.T) {
 			defer jsFuncValue.Free()
 
 			var goFunc func(int, ...any) (any, error)
-			goFunc = must(jsFuncToGo(jsFuncValue, goFunc))
+			goFunc = must(toGo(jsFuncValue, goFunc))
 
 			unsafePtr := unsafe.Pointer(&[]byte{1, 2, 3}[0])
 			result, err := goFunc(1, "valid", unsafePtr, "another")
@@ -2188,7 +2181,7 @@ func TestJsFuncToGo(t *testing.T) {
 			defer jsFuncNV.Free()
 
 			var goFuncNV func(int, int, int) (any, error)
-			goFuncNV = must(jsFuncToGo(jsFuncNV, goFuncNV))
+			goFuncNV = must(toGo(jsFuncNV, goFuncNV))
 			result := must(goFuncNV(1, 2, 3))
 			assert.Equal(t, int64(6), result)
 
@@ -2197,7 +2190,7 @@ func TestJsFuncToGo(t *testing.T) {
 			defer jsFuncV.Free()
 
 			var goFuncV func(int, ...any) (any, error)
-			goFuncV = must(jsFuncToGo(jsFuncV, goFuncV))
+			goFuncV = must(toGo(jsFuncV, goFuncV))
 
 			result = must(goFuncV(10, "a", "b", "c"))
 			assert.Equal(t, int64(13), result)
@@ -2213,7 +2206,7 @@ func TestJsFuncToGo(t *testing.T) {
 			defer jsFuncValue.Free()
 
 			var goFunc func() (string, error)
-			goFunc = must(jsFuncToGo(jsFuncValue, goFunc))
+			goFunc = must(toGo(jsFuncValue, goFunc))
 
 			result, err := goFunc()
 			assert.Error(t, err)
@@ -2231,7 +2224,7 @@ func TestJsFuncToGo(t *testing.T) {
 			defer jsFuncValue.Free()
 
 			var goFunc func() (string, error)
-			goFunc = must(jsFuncToGo(jsFuncValue, goFunc))
+			goFunc = must(toGo(jsFuncValue, goFunc))
 
 			result, err := goFunc()
 			assert.Error(t, err)
@@ -2589,7 +2582,7 @@ func TestCircularReferenceDetection(t *testing.T) {
 					Self map[string]any `json:"self"`
 				}
 				var testStruct TestStruct
-				_, err := jsObjectOrMapToGoStruct(result, testStruct)
+				_, err := toGo(result, testStruct)
 				return err
 			},
 			desc: "Tests struct conversion circular reference detection",
@@ -2598,7 +2591,7 @@ func TestCircularReferenceDetection(t *testing.T) {
 			name: "circular_reference_in_map_conversion",
 			testFunc: func(result *Value) error {
 				var testMap map[string]any
-				_, err := jsObjectOrMapToGoMap(result, testMap)
+				_, err := toGo(result, testMap)
 				return err
 			},
 			desc: "Tests map conversion circular reference detection",

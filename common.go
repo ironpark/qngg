@@ -171,78 +171,71 @@ func getFieldMap(structType reflect.Type) map[string]fieldPath {
 	return globalFieldMapper.GetFieldMap(structType)
 }
 
-// convTracker tracks objects during Go-JS conversion to detect circular references.
-type convTracker[T uintptr | uint64] struct {
-	processing map[T]bool
+// convTracker tracks the objects being converted, Go pointers or JS
+// values, to detect circular references.
+type convTracker struct {
+	processing map[uint64]bool
 }
 
-// newConvTracker creates a new conversion context for tracking circular references.
-func newConvTracker[T uintptr | uint64]() *convTracker[T] {
-	return &convTracker[T]{}
+func newConvTracker() *convTracker {
+	return &convTracker{}
 }
 
 // Track registers an object for circular reference detection.
 // Returns true if the object is already being processed (circular reference detected).
-func (tracker *convTracker[T]) Track(ptr T) bool {
-	if tracker.processing[ptr] {
+func (tracker *convTracker) Track(key uint64) bool {
+	if tracker.processing[key] {
 		return true
 	}
 
 	// Most conversions never track anything, so the map is created lazily.
 	if tracker.processing == nil {
-		tracker.processing = make(map[T]bool)
+		tracker.processing = make(map[uint64]bool)
 	}
 
-	tracker.processing[ptr] = true
+	tracker.processing[key] = true
 
 	return false
 }
 
 // UnTrack removes an object from circular reference tracking.
-func (tracker *convTracker[T]) UnTrack(ptr T) {
-	delete(tracker.processing, ptr)
+func (tracker *convTracker) UnTrack(key uint64) {
+	delete(tracker.processing, key)
 }
 
 // circularTracker manages the lifecycle of circular reference tracking for a single object.
-type circularTracker[T uintptr | uint64] struct {
-	ctx             *convTracker[T]
-	ptr             T
-	needsUnregister bool
+type circularTracker struct {
+	tracker *convTracker
+	key     uint64
 }
 
-// trackPtr sets up circular reference tracking for a pointer.
-func (ct *circularTracker[T]) trackPtr(ctx *convTracker[T], ptr T) error {
-	if ctx.Track(ptr) {
+// trackPtr sets up circular reference tracking for a Go pointer.
+func (ct *circularTracker) trackPtr(tracker *convTracker, ptr uintptr) error {
+	if tracker.Track(uint64(ptr)) {
 		return newGoToJsErr("", nil, "recursive pointer")
 	}
 
-	ct.ctx = ctx
-	ct.ptr = ptr
-	ct.needsUnregister = true
+	ct.tracker, ct.key = tracker, uint64(ptr)
 
 	return nil
 }
 
-// // trackValue sets up circular reference tracking for a JS value.
-func (ct *circularTracker[T]) trackValue(ctx *convTracker[T], value *Value) error {
-	var ptr any = value.raw()
-
-	typeT, _ := ptr.(T)
-	if ctx.Track(typeT) {
+// trackValue sets up circular reference tracking for a JS value.
+func (ct *circularTracker) trackValue(tracker *convTracker, value *Value) error {
+	key := value.raw()
+	if tracker.Track(key) {
 		return newJsToGoErr(value, nil, "circular reference")
 	}
 
-	ct.ctx = ctx
-	ct.ptr = typeT
-	ct.needsUnregister = true
+	ct.tracker, ct.key = tracker, key
 
 	return nil
 }
 
 // cleanup removes the object from circular reference tracking.
-func (ct *circularTracker[T]) cleanup() {
-	if ct.needsUnregister && ct.ctx != nil {
-		ct.ctx.UnTrack(ct.ptr)
+func (ct *circularTracker) cleanup() {
+	if ct.tracker != nil {
+		ct.tracker.UnTrack(ct.key)
 	}
 }
 
@@ -286,24 +279,10 @@ func (nc *jsNumericToGoConverter) Convert(floatVal float64) (any, error) {
 
 // jsArrayToGoConverter handles array conversions with better error handling and performance.
 type jsArrayToGoConverter[T any] struct {
-	tracker    *convTracker[uint64]
+	tracker    *convTracker
 	input      *Value
 	targetType reflect.Type
 	sample     T
-}
-
-func newJsArrayToGoConverter[T any](input *Value, samples ...T) *jsArrayToGoConverter[T] {
-	var sample T
-	if len(samples) > 0 {
-		sample = samples[0]
-	}
-
-	return &jsArrayToGoConverter[T]{
-		tracker:    newConvTracker[uint64](),
-		input:      input,
-		targetType: reflect.TypeOf(sample),
-		sample:     sample,
-	}
 }
 
 func (ac *jsArrayToGoConverter[T]) Convert() (T, error) {

@@ -167,8 +167,7 @@ func TestJsArrayToGoConverterErrorWrapping(t *testing.T) {
 	assert.NoError(t, err)
 	defer jsValue.Free()
 
-	converter := newJsArrayToGoConverter[[]int](jsValue)
-	_, err = converter.Convert()
+	_, err = jsArrayToGoWithContext[[]int](newConvTracker(), jsValue)
 
 	assert.Error(t, err)
 
@@ -198,8 +197,7 @@ func TestJsArrayToGoConverterJSONStringifyError(t *testing.T) {
 	}
 
 	// This should trigger the JSONStringify error path in convertViaJSON
-	converter := newJsArrayToGoConverter[TestStruct](jsValue)
-	_, err = converter.Convert()
+	_, err = toGo[TestStruct](jsValue)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "js array:")
