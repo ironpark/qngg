@@ -46,7 +46,7 @@ func toGoValue[T any](
 	}
 
 	var ok bool
-	if temp, ok, err = jsPrimitivesToGo(tracker, input, kind, sample); ok {
+	if temp, ok, err = jsPrimitivesToGo(input, kind, sample); ok {
 		return v, err
 	}
 
@@ -290,12 +290,10 @@ func jsObjectOrMapToGoMap[T any](
 		v, err = processTempValue("JsObjectOrMapToGoMap", temp, err, sample)
 	}()
 
-	var ct circularTracker
-	defer ct.cleanup()
-
-	if err := ct.trackValue(tracker, input); err != nil {
-		return v, err
+	if tracker.track(input.raw()) {
+		return v, newJsToGoErr(input, nil, "circular reference")
 	}
+	defer tracker.untrack(input.raw())
 
 	resultMap := reflect.MakeMap(targetType)
 	targetKeyType := targetType.Key()
@@ -335,12 +333,10 @@ func jsObjectOrMapToGoStruct[T any](
 		v, err = processTempValue("JsObjectOrMapToGoStruct", temp, err, sample)
 	}()
 
-	var ct circularTracker
-	defer ct.cleanup()
-
-	if err := ct.trackValue(tracker, input); err != nil {
-		return v, err
+	if tracker.track(input.raw()) {
+		return v, newJsToGoErr(input, nil, "circular reference")
 	}
+	defer tracker.untrack(input.raw())
 
 	structValue, isStructPtr := setupStructValue(targetType, &temp)
 	fields := structFieldsOf(structValue.Type())
@@ -382,77 +378,53 @@ func processObjectFields(
 			return nil
 		}
 
-		field, ok := fields.byName[key.String()]
+		i, ok := fields.byName[key.String()]
 		if !ok {
 			return nil
 		}
 
-		fieldValue := getFieldValue(structValue, field.index)
-		if !fieldValue.IsValid() {
-			return nil
-		}
+		field := &fields.list[i]
 
-		return setFieldValue(tracker, fieldValue, value, field)
+		return setFieldValue(tracker, fieldByIndexAlloc(structValue, field.index), value, field)
 	})
 }
 
-// getFieldValue navigates to the target field through embedded structs.
-func getFieldValue(structValue reflect.Value, indices []int) reflect.Value {
+// fieldByIndexAlloc returns the field at the index path from structValue,
+// allocating nil embedded pointers on the way.
+func fieldByIndexAlloc(structValue reflect.Value, index []int) reflect.Value {
 	fieldValue := structValue
-	for i, idx := range indices {
+	for _, i := range index {
 		if fieldValue.Kind() == reflect.Pointer {
-			if fieldValue.IsNil() && fieldValue.CanSet() {
+			if fieldValue.IsNil() {
 				fieldValue.Set(reflect.New(fieldValue.Type().Elem()))
 			}
 
 			fieldValue = fieldValue.Elem()
 		}
 
-		fieldValue = fieldValue.Field(idx)
-		if i < len(indices)-1 && !fieldValue.CanSet() {
-			return reflect.Value{}
-		}
+		fieldValue = fieldValue.Field(i)
 	}
 
 	return fieldValue
 }
 
-// setFieldValue sets the value of a struct field, handling JSON unmarshaling.
+// setFieldValue sets a struct field from a JS value, through JSON if the
+// field implements json.Unmarshaler.
 func setFieldValue(tracker *convTracker, fieldValue reflect.Value, jsValue *Value, field *structField) error {
-	fieldType := field.Type
+	if implementsJSONUnmarshaler(field.Type) {
+		jsonStr, err := jsValue.jsonStringify()
+		if err != nil {
+			return newJsStringifyErr("object/map field "+field.Name, err)
+		}
 
-	if implementsJSONUnmarshaler(fieldType) {
-		return setFieldWithJSONUnmarshaler(fieldValue, jsValue, field)
+		if err := unmarshalJSON(jsonStr, fieldValue.Addr().Interface()); err != nil {
+			return fmt.Errorf("cannot unmarshal json: %w, %s=%s", err, field.Name, jsonStr)
+		}
+
+		return nil
 	}
 
-	return setFieldWithDirectConversion(tracker, fieldValue, jsValue, field, fieldType)
-}
-
-// setFieldWithJSONUnmarshaler handles fields with custom JSON unmarshaling.
-func setFieldWithJSONUnmarshaler(fieldValue reflect.Value, jsValue *Value, field *structField) error {
-	jsonStr, err := jsValue.jsonStringify()
-	if err != nil {
-		return newJsStringifyErr("object/map field "+field.Name, err)
-	}
-
-	if err := unmarshalJSON(jsonStr, fieldValue.Addr().Interface()); err != nil {
-		return fmt.Errorf("cannot unmarshal json: %w, %s=%s", err, field.Name, jsonStr)
-	}
-
-	return nil
-}
-
-// setFieldWithDirectConversion handles direct value conversion.
-func setFieldWithDirectConversion(
-	tracker *convTracker,
-	fieldValue reflect.Value,
-	jsValue *Value,
-	field *structField,
-	fieldType reflect.Type,
-) error {
-	fieldSample := reflect.New(fieldType).Elem().Interface()
-
-	converted, err := toGoValue(tracker, jsValue, fieldSample)
+	converted, err := toGoValue(tracker, jsValue, reflect.New(field.Type).Elem().Interface())
 	if err != nil {
 		return newJsToGoErr(
 			jsValue, err,
@@ -513,14 +485,7 @@ func jsObjectToGo[T any](
 	return processTempValue("JsObjectToGo", temp, err, sample)
 }
 
-// jsFuncRef holds the JavaScript function behind a Go function converted
-// from it. The Go function references it, so it is collected with it.
-type jsFuncRef struct {
-	fn *Value
-}
-
 func jsFuncToGo[T any](
-	tracker *convTracker,
 	input *Value,
 	samples ...T,
 ) (v T, err error) {
@@ -540,12 +505,13 @@ func jsFuncToGo[T any](
 	}
 
 	// The Go function may outlive input, so it keeps its own reference,
-	// released once the Go function is garbage collected.
-	jsFn := &jsFuncRef{fn: input.Clone()}
-	input.rt.releaseWhenCollected(jsFn, jsFn.fn)
+	// released once the Go function is garbage collected. Each call
+	// converts its result with a tracker of its own.
+	jsFn := input.Clone()
+	jsFn.freeWhenCollected()
 
 	goFunc := func(args []reflect.Value) (results []reflect.Value) {
-		return createJsFunctionHandler(jsFn.fn, tracker, fnType, args)
+		return createJsFunctionHandler(jsFn, newConvTracker(), fnType, args)
 	}
 
 	fn := reflect.MakeFunc(fnType, goFunc)
@@ -649,7 +615,6 @@ func handleJsFunctionResult(
 
 // jsPrimitivesToGo converts JavaScript primitive types to Go types.
 func jsPrimitivesToGo[T any](
-	tracker *convTracker,
 	input *Value,
 	kind objectKind,
 	sample T,
@@ -691,7 +656,7 @@ func jsPrimitivesToGo[T any](
 	}
 
 	if kind.isFunction() {
-		result, err := jsFuncToGo(tracker, input, sample)
+		result, err := jsFuncToGo(input, sample)
 
 		return result, true, err
 	}

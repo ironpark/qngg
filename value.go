@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -914,6 +915,13 @@ func (v *Value) check() error {
 	}
 
 	return nil
+}
+
+// freeWhenCollected frees v, which must be owned and must not be freed
+// otherwise, once v is garbage collected. It is for values the library
+// keeps internally, with no owner to call Free.
+func (v *Value) freeWhenCollected() {
+	runtime.AddCleanup(v, v.rt.released.add, v.raw())
 }
 
 // take hands the value's reference over to the caller, who passes it to a

@@ -38,42 +38,6 @@ func (tracker *convTracker) untrack(key uint64) {
 	delete(tracker.processing, key)
 }
 
-// circularTracker manages the lifecycle of circular reference tracking for a single object.
-type circularTracker struct {
-	tracker *convTracker
-	key     uint64
-}
-
-// trackPtr sets up circular reference tracking for a Go pointer.
-func (ct *circularTracker) trackPtr(tracker *convTracker, ptr uintptr) error {
-	if tracker.track(uint64(ptr)) {
-		return newGoToJsErr("", nil, "recursive pointer")
-	}
-
-	ct.tracker, ct.key = tracker, uint64(ptr)
-
-	return nil
-}
-
-// trackValue sets up circular reference tracking for a JS value.
-func (ct *circularTracker) trackValue(tracker *convTracker, value *Value) error {
-	key := value.raw()
-	if tracker.track(key) {
-		return newJsToGoErr(value, nil, "circular reference")
-	}
-
-	ct.tracker, ct.key = tracker, key
-
-	return nil
-}
-
-// cleanup removes the object from circular reference tracking.
-func (ct *circularTracker) cleanup() {
-	if ct.tracker != nil {
-		ct.tracker.untrack(ct.key)
-	}
-}
-
 // processTempValue validates if temp is a valid result for the given T type.
 func processTempValue[T any](prefix string, temp any, err error, samples ...T) (v T, _ error) {
 	if err != nil {

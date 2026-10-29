@@ -12,14 +12,14 @@ type structField struct {
 	reflect.StructField
 
 	name  string // property name: the json tag name or the field name
-	index []int  // path from the outer struct, through embedded structs
+	index []int  // path from the outer struct, through exported embedded structs
 }
 
 // structFields lists the fields of a struct type in declaration order, with
 // the fields of embedded structs in place of them.
 type structFields struct {
 	list   []structField
-	byName map[string]*structField
+	byName map[string]int // index in list
 }
 
 var structFieldCache sync.Map // reflect.Type -> *structFields
@@ -39,7 +39,7 @@ func structFieldsOf(t reflect.Type) *structFields {
 
 	collectFields(t, nil, map[reflect.Type]bool{t: true}, &candidates)
 
-	fields := &structFields{byName: make(map[string]*structField)}
+	fields := &structFields{byName: make(map[string]int)}
 	depth := make(map[string]int)
 
 	for _, f := range candidates {
@@ -51,14 +51,10 @@ func structFieldsOf(t reflect.Type) *structFields {
 	}
 
 	for _, f := range candidates {
-		if depth[f.name] == len(f.index) {
+		if _, taken := fields.byName[f.name]; !taken && depth[f.name] == len(f.index) {
+			fields.byName[f.name] = len(fields.list)
 			fields.list = append(fields.list, f)
-			depth[f.name] = -1 // taken
 		}
-	}
-
-	for i := range fields.list {
-		fields.byName[fields.list[i].name] = &fields.list[i]
 	}
 
 	actual, _ := structFieldCache.LoadOrStore(t, fields)
@@ -72,12 +68,13 @@ func structFieldsOf(t reflect.Type) *structFields {
 func collectFields(t reflect.Type, prefix []int, visited map[reflect.Type]bool, fields *[]structField) {
 	for i := range t.NumField() {
 		field := t.Field(i)
-		index := append(append([]int{}, prefix...), i)
 
 		name := jsonFieldName(field)
 		if name == "" || !field.IsExported() {
 			continue
 		}
+
+		index := append(append([]int{}, prefix...), i)
 
 		if field.Anonymous {
 			ft := field.Type

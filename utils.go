@@ -144,13 +144,7 @@ func isConvertibleToJs(rType reflect.Type, visited map[reflect.Type]bool, detail
 
 		return nil
 	case reflect.Struct:
-		for field := range rType.Fields() {
-			jsonTagName, _, _ := strings.Cut(field.Tag.Get("json"), ",")
-
-			if !field.IsExported() || jsonTagName == "-" {
-				continue
-			}
-
+		for _, field := range structFieldsOf(rType).list {
 			if err := isConvertibleToJs(field.Type, visited, detail); err != nil {
 				return newGoToJsErr(goTypeName(rType)+"."+field.Name, err)
 			}

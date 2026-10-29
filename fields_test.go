@@ -52,6 +52,12 @@ func fieldNames(t reflect.Type) []string {
 	return names
 }
 
+func fieldNamed(t reflect.Type, name string) structField {
+	fields := structFieldsOf(t)
+
+	return fields.list[fields.byName[name]]
+}
+
 func TestStructFieldsOf(t *testing.T) {
 	t.Run("promotion and tags", func(t *testing.T) {
 		// Shared is promoted from FieldsInner, the first at its depth.
@@ -62,7 +68,7 @@ func TestStructFieldsOf(t *testing.T) {
 			fieldNames(reflect.TypeFor[fieldsOuter]()),
 		)
 
-		field := structFieldsOf(reflect.TypeFor[fieldsOuter]()).byName["Shared"]
+		field := fieldNamed(reflect.TypeFor[fieldsOuter](), "Shared")
 		assert.Equal(t, []int{0, 0}, field.index)
 	})
 
@@ -73,7 +79,7 @@ func TestStructFieldsOf(t *testing.T) {
 			Shared int
 		}
 
-		field := structFieldsOf(reflect.TypeFor[outer]()).byName["Shared"]
+		field := fieldNamed(reflect.TypeFor[outer](), "Shared")
 		assert.Equal(t, []int{1}, field.index)
 	})
 

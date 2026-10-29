@@ -49,18 +49,12 @@ func TestConvertedJSFunctionReleasedWhenCollected(t *testing.T) {
 	val.Free()
 	require.Equal(t, 10, calls)
 
-	for range 50 {
+	require.Eventually(t, func() bool {
 		runtime.GC()
-		time.Sleep(10 * time.Millisecond)
 
-		val, err := rt.Eval(context.Background(), "check.js", `refs.filter(r => r.deref() !== undefined).length`)
-		require.NoError(t, err)
-		alive := val.Int32()
-		val.Free()
+		val := must(rt.Eval(context.Background(), "check.js", `refs.filter(r => r.deref() !== undefined).length`))
+		defer val.Free()
 
-		if alive == 0 {
-			return
-		}
-	}
-	t.Fatal("JavaScript functions converted to Go functions were never released")
+		return val.Int32() == 0
+	}, time.Second, 10*time.Millisecond, "JavaScript functions converted to Go functions were never released")
 }

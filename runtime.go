@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"runtime"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 
 	wasmtime "github.com/ironpark/wasmtime-pure-go"
 )
@@ -78,6 +78,7 @@ type Runtime struct {
 	global    *Value
 	registry  *proxyRegistry
 	released  *releaseQueue
+	draining  bool // freeing the released queue
 	closed    bool
 }
 
@@ -244,8 +245,6 @@ func (r *Runtime) enter(ctx context.Context) error {
 	}
 
 	if r.callDepth == 0 {
-		r.freeReleased()
-
 		r.interrupt.ctx = ctx
 		if !r.config.DisableInterruption {
 			r.interrupt.watch(ctx, r.engine)
@@ -296,6 +295,12 @@ func recoverInterrupt(r *Runtime, err *error) {
 func (r *Runtime) invoke(f *wasmFunc, args ...uint64) (uint64, error) {
 	if err := r.interruptErr(); err != nil {
 		return 0, err
+	}
+
+	// Values released from other goroutines are freed before the next
+	// outermost call, the one point every use of the runtime goes through.
+	if r.callDepth == 0 && !r.draining && r.released.pending.Load() {
+		r.freeReleased()
 	}
 
 	// Calls nest when JavaScript calls back into Go, so each nesting level
@@ -393,6 +398,8 @@ func (r *Runtime) dupValue(raw uint64) uint64 {
 // cannot be used, so the runtime frees them on its next call instead. It
 // does not reference the runtime, which can then be collected too.
 type releaseQueue struct {
+	pending atomic.Bool // refs is not empty; checked without locking
+
 	mu   sync.Mutex
 	refs []uint64
 }
@@ -400,6 +407,7 @@ type releaseQueue struct {
 func (q *releaseQueue) add(raw uint64) {
 	q.mu.Lock()
 	q.refs = append(q.refs, raw)
+	q.pending.Store(true)
 	q.mu.Unlock()
 }
 
@@ -407,20 +415,17 @@ func (q *releaseQueue) take() []uint64 {
 	q.mu.Lock()
 	refs := q.refs
 	q.refs = nil
+	q.pending.Store(false)
 	q.mu.Unlock()
 
 	return refs
 }
 
-// releaseWhenCollected frees v, which the runtime must own, once owner is
-// garbage collected. v must not be freed otherwise, and owner must not be
-// reachable from v.
-func (r *Runtime) releaseWhenCollected(owner *jsFuncRef, v *Value) {
-	runtime.AddCleanup(owner, r.released.add, v.raw())
-}
-
-// freeReleased frees the values queued by releaseWhenCollected.
+// freeReleased frees the values queued by Value.freeWhenCollected.
 func (r *Runtime) freeReleased() {
+	r.draining = true
+	defer func() { r.draining = false }()
+
 	for _, raw := range r.released.take() {
 		r.freeValue(raw)
 	}

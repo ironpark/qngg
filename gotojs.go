@@ -208,18 +208,17 @@ func (tracker *convTracker) convertReflectValue(rt *Runtime, v any) (*Value, err
 	rtype := reflect.TypeOf(v)
 	rval := reflect.ValueOf(v)
 
-	var ct circularTracker
-	defer ct.cleanup()
-
 	if rtype.Kind() == reflect.Pointer {
 		if rval.IsNil() {
 			return rt.NewNull(), nil
 		}
 
 		// Track pointer address for circular reference detection.
-		if err := ct.trackPtr(tracker, rval.Pointer()); err != nil {
-			return nil, newGoToJsErr(goTypeName(reflect.TypeOf(v)), err, "recursive pointer")
+		ptr := uint64(rval.Pointer())
+		if tracker.track(ptr) {
+			return nil, newGoToJsErr(goTypeName(rtype), nil, "recursive pointer")
 		}
+		defer tracker.untrack(ptr)
 
 		// If pointer points to a struct,
 		// preserve the pointer type for method resolution.
@@ -297,8 +296,8 @@ func (tracker *convTracker) addStructFieldsToObject(
 	rval reflect.Value,
 ) error {
 	for _, field := range structFieldsOf(rtype).list {
-		fieldValue, err := rval.FieldByIndexErr(field.index)
-		if err != nil {
+		fieldValue, ok := fieldByIndex(rval, field.index)
+		if !ok {
 			continue
 		}
 
@@ -313,6 +312,26 @@ func (tracker *convTracker) addStructFieldsToObject(
 	}
 
 	return nil
+}
+
+// fieldByIndex returns the field at the index path from structValue, or
+// false if the path goes through a nil embedded pointer. Unlike
+// reflect.Value.FieldByIndexErr, it does not allocate an error then.
+func fieldByIndex(structValue reflect.Value, index []int) (reflect.Value, bool) {
+	fieldValue := structValue
+	for _, i := range index {
+		if fieldValue.Kind() == reflect.Pointer {
+			if fieldValue.IsNil() {
+				return reflect.Value{}, false
+			}
+
+			fieldValue = fieldValue.Elem()
+		}
+
+		fieldValue = fieldValue.Field(i)
+	}
+
+	return fieldValue, true
 }
 
 // addStructMethodsToObject adds exported struct methods as JS functions.
