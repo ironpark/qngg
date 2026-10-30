@@ -160,6 +160,12 @@ func (r *Runtime) instantiate(module *wasmtime.Module) error {
 		return fmt.Errorf("failed to instantiate WASI: %w", err)
 	}
 
+	if r.config.FS != nil {
+		if err := r.defineFilesystem(module); err != nil {
+			return fmt.Errorf("failed to setup filesystem: %w", err)
+		}
+	}
+
 	if err := r.defineProxy(); err != nil {
 		return fmt.Errorf("failed to setup host module: %w", err)
 	}
@@ -269,6 +275,11 @@ func (r *Runtime) defineProxy() error {
 func (r *Runtime) release() {
 	if r == nil {
 		return
+	}
+
+	if r.filesystem != nil {
+		r.filesystem.close()
+		r.filesystem = nil
 	}
 
 	if r.store != nil {

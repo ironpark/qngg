@@ -49,6 +49,9 @@ jobs:
         run: go test ./... -count=1
         env:
           CGO_ENABLED: '0'
+      - name: Test afero integration
+        working-directory: tests/afero
+        run: go test -race ./... -count=1
       - name: Upload coverage reports to Codecov
         if: ${{ matrix.platform == 'ubuntu-latest' && matrix.go == '1.27.x' }}
         uses: codecov/codecov-action@v7.1.1

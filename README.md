@@ -324,8 +324,54 @@ result, err := rt.Eval(ctx, "main.js", `
 // result.Float64() == 12.56636
 ```
 
-`EvalFile` and `LoadModuleFile` read files from `Config.CWD`, and relative
-imports resolve against it.
+`EvalFile` and `LoadModuleFile` read files from `Config.CWD` or `Config.FS`.
+Relative imports resolve against the importing module's path.
+
+### Virtual Filesystems
+
+Set `Config.FS` to a `qngg.FS` to back both module loading and the
+`qjs:std`/`qjs:os` file APIs with your own filesystem. To use an
+[afero](https://github.com/spf13/afero) backend (QNGG itself does not depend on
+afero), wrap it with `qngg.AdaptFS`:
+
+```go
+fsys := afero.NewMemMapFs()
+if err := afero.WriteFile(fsys, "/input.txt", []byte("hello"), 0o644); err != nil {
+    return err
+}
+rt, err := qngg.New(qngg.Config{FS: qngg.AdaptFS(fsys), WritableFS: true})
+if err != nil {
+    return err
+}
+defer rt.Close()
+
+result, err := rt.Eval(ctx, "main.js", `
+    const file = std.open("/output.txt", "w");
+    file.puts(std.loadFile("/input.txt").toUpperCase());
+    file.close();
+    std.loadFile("/output.txt");
+`)
+if err != nil {
+    return err
+}
+defer result.Free()
+// result.String() == "HELLO"; /output.txt is also visible to Go through fsys.
+```
+
+`AdaptFS` accepts any `qngg.FSBackend[F]`; backends whose files are already
+`qngg.File` can implement `qngg.FS` directly.
+
+- `FS` is mounted at `/` and is read-only unless `WritableFS` is true. Backend
+  permissions such as `afero.NewReadOnlyFs` still apply. `FS` and `CWD` are
+  mutually exclusive; use `afero.NewBasePathFs` to expose a subtree.
+- Symbolic links are unsupported and rejected when the backend can detect them.
+  OS-backed filesystems must not have path components concurrently replaced
+  with symbolic links; use `CWD` when OS-enforced confinement is required.
+- Regular files are always ready for file readiness handlers. Only modification
+  time is stored, so it is reported for all three WASI timestamps.
+- Closing a runtime closes its open file handles but leaves the filesystem and
+  output writers to the caller. A filesystem shared by a `Pool` must support
+  concurrent access, as `MemMapFs` does.
 
 ### Bytecode Compilation
 
@@ -526,9 +572,9 @@ See [pkg.go.dev](https://pkg.go.dev/github.com/ironpark/qngg) for the full docum
 rt, err := qngg.New(qngg.Config{})             // Create a runtime
 rt.Close()                                     // Free it and all its values
 rt.Eval(ctx, name, src, opts...)               // Run a script (or module with AsModule)
-rt.EvalFile(ctx, path, opts...)                // Run a file from Config.CWD
+rt.EvalFile(ctx, path, opts...)                // Run a file from Config.FS or Config.CWD
 rt.Compile(name, src, opts...)                 // Compile to bytecode
-rt.CompileFile(path, opts...)                  // Compile a file from Config.CWD
+rt.CompileFile(path, opts...)                  // Compile a file from Config.FS or Config.CWD
 rt.EvalBytecode(ctx, bytecode, opts...)        // Run bytecode
 rt.LoadModule(ctx, name, src)                  // Register a module for imports
 rt.Set(name, goValue)                          // Convert and assign a global
@@ -561,6 +607,8 @@ pool.Close()
 type Config struct {
     CWD                 string    // Host directory mounted as "/" (default: no filesystem)
     WritableCWD         bool      // Allow JavaScript to write under CWD (default: read-only)
+    FS                  qngg.FS   // Filesystem mounted as "/"; mutually exclusive with CWD
+    WritableFS          bool      // Allow JavaScript to write to FS (default: read-only)
     Stdout, Stderr      io.Writer // Output of console.log and friends (default: discarded)
     MemoryLimit         int       // QuickJS heap limit in bytes
     MaxStackSize        int       // QuickJS stack limit in bytes
@@ -599,7 +647,7 @@ system temp directory).
 **Security**
 
 - **Sandboxed execution**: QuickJS runs inside WebAssembly linear memory, so JavaScript cannot touch Go memory.
-- **Filesystem**: none by default. With `CWD` set, only that directory is visible, as `/`, and it is read-only unless `WritableCWD` is set. WASI enforces this, so `qjs:std`/`qjs:os` cannot reach anything else.
+- **Filesystem**: none by default. With `CWD` set, only that directory is visible, as `/`, and it is read-only unless `WritableCWD` is set. WASI enforces this boundary. Alternatively, `FS` exposes a custom backend, read-only unless `WritableFS` is set; see the virtual filesystem section for its path and symbolic-link constraints.
 - **Environment and output**: no environment variables are passed, and output is discarded unless `Stdout`/`Stderr` are set.
 - **No network access**: no sockets are exposed to JavaScript.
 - **Go references**: ProxyValues and Go functions are native objects that JavaScript cannot forge, and the Go values behind them are released when JavaScript garbage collects them.
@@ -633,6 +681,7 @@ make build WASM_OPT=$PWD/binaryen-version_133/bin/wasm-opt
 
 # Run tests
 go test ./...
+go -C tests/afero test -race ./... # Optional afero backend integration tests
 ```
 
 ## License

@@ -64,8 +64,8 @@ func (r *Runtime) Eval(ctx context.Context, name, src string, opts ...EvalOption
 	return r.eval(ctx, evalInput{name: name, source: &src}, newEvalConfig(opts))
 }
 
-// EvalFile is like Eval for the file at path, relative to Config.CWD. Path
-// separators are converted to "/", the separator module names use.
+// EvalFile is like Eval for the file at path, in Config.FS or relative to
+// Config.CWD. Path separators are converted to "/", the separator module names use.
 func (r *Runtime) EvalFile(ctx context.Context, path string, opts ...EvalOption) (*Value, error) {
 	return r.eval(ctx, evalInput{name: filepath.ToSlash(path)}, newEvalConfig(opts))
 }
@@ -87,7 +87,8 @@ func (r *Runtime) Compile(name, src string, opts ...EvalOption) ([]byte, error) 
 	return r.compile(evalInput{name: name, source: &src}, newEvalConfig(opts))
 }
 
-// CompileFile is like Compile for the file at path, relative to Config.CWD.
+// CompileFile is like Compile for the file at path, in Config.FS or relative
+// to Config.CWD.
 func (r *Runtime) CompileFile(path string, opts ...EvalOption) ([]byte, error) {
 	return r.compile(evalInput{name: filepath.ToSlash(path)}, newEvalConfig(opts))
 }
@@ -98,8 +99,8 @@ func (r *Runtime) LoadModule(ctx context.Context, name, src string) error {
 	return r.load(ctx, evalInput{name: name, source: &src})
 }
 
-// LoadModuleFile is like LoadModule for the file at path, relative to
-// Config.CWD, registered under that path.
+// LoadModuleFile is like LoadModule for the file at path, in Config.FS or
+// relative to Config.CWD, registered under that path.
 func (r *Runtime) LoadModuleFile(ctx context.Context, path string) error {
 	return r.load(ctx, evalInput{name: filepath.ToSlash(path)})
 }

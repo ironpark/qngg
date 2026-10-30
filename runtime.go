@@ -28,6 +28,17 @@ type Config struct {
 	// WritableCWD lets JavaScript create, modify and delete files under CWD.
 	WritableCWD bool
 
+	// FS exposes a filesystem to JavaScript as "/", including module
+	// loading and qjs:std/qjs:os file APIs. FS and CWD are mutually exclusive.
+	// Nil leaves filesystem access controlled by CWD. Symbolic links are not
+	// supported through FS. The caller owns FS; closing a runtime only closes
+	// file handles opened by that runtime.
+	// Use AdaptFS to wrap a backend such as afero.Fs.
+	FS FS
+	// WritableFS allows JavaScript to modify FS. The default is read-only,
+	// and the backend's own permissions still apply.
+	WritableFS bool
+
 	// Stdout and Stderr receive console.log/console.error and std.out/std.err
 	// output. Nil discards it.
 	Stdout io.Writer
@@ -61,15 +72,16 @@ type Config struct {
 // own WebAssembly instance. A Runtime is not safe for concurrent use; use a
 // Pool to run JavaScript from several goroutines.
 type Runtime struct {
-	config    Config
-	store     *wasmtime.Store
-	linker    *wasmtime.Linker
-	instance  *wasmtime.Instance
-	engine    *wasmtime.Engine
-	funcs     [numExports]*wasmFunc
-	mem       *wasmMemory
-	scratch   scratch
-	interrupt *interrupter
+	config     Config
+	store      *wasmtime.Store
+	linker     *wasmtime.Linker
+	instance   *wasmtime.Instance
+	engine     *wasmtime.Engine
+	funcs      [numExports]*wasmFunc
+	mem        *wasmMemory
+	filesystem *wasiFS
+	scratch    scratch
+	interrupt  *interrupter
 	// argument buffers for invoke, one per level of nested wasm calls
 	callBufs  [][]wasmtime.ValRaw
 	callDepth int
@@ -91,6 +103,10 @@ func New(config Config) (runtime *Runtime, err error) {
 			err = fmt.Errorf("failed to create QJS runtime: %w", rerr)
 		}
 	}()
+
+	if config.FS != nil && config.CWD != "" {
+		return nil, errors.New("FS and CWD are mutually exclusive")
+	}
 
 	if err := wasmtime.LoadError(); err != nil {
 		return nil, fmt.Errorf("failed to load wasmtime: %w", err)

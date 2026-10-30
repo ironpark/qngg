@@ -15,6 +15,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// newTestRoot opens a temporary directory as an os.Root closed with the test.
+func newTestRoot(t *testing.T) *os.Root {
+	t.Helper()
+
+	root, err := os.OpenRoot(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = root.Close() })
+
+	return root
+}
+
 func setupTestContext(_ *testing.T) (*Runtime, *Runtime) {
 	runtime := must(New(Config{}))
 	ctx := runtime
